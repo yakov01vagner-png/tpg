@@ -73,6 +73,25 @@ export function applyCommand(
   }
 }
 
+/**
+ * Можно ли выполнить команду прямо сейчас — и если нет, то почему.
+ *
+ * Специально сделано прогоном самой команды: `applyCommand` — чистая функция,
+ * результат просто выбрасывается. Так интерфейс показывает ровно ту причину
+ * отказа, которую получит при нажатии, и правила не приходится дублировать
+ * второй раз «для кнопок» (а потом ловить расхождения).
+ */
+export function canApply(
+  state: GameState,
+  command: Command,
+  content: Content = CONTENT,
+):
+  | { readonly ok: true }
+  | { readonly ok: false; readonly code: FailureCode; readonly message: string } {
+  const result = applyCommand(state, command, content)
+  return result.ok ? { ok: true } : { ok: false, code: result.code, message: result.message }
+}
+
 // --- команды ---------------------------------------------------------------
 
 function work(state: GameState, jobId: string, content: Content): CommandResult {

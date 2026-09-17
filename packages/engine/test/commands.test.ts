@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Character } from '../src/character'
 import { createCharacter } from '../src/character'
 import type { CommandResult } from '../src/commands'
-import { applyCommand, examChance } from '../src/commands'
+import { applyCommand, canApply, examChance } from '../src/commands'
 import type { GameState } from '../src/state'
 import { createGame } from '../src/state'
 import { WORLD_START, hourOf, hours } from '../src/time'
@@ -229,5 +229,23 @@ describe('чистота движка', () => {
     applyCommand(before, { type: 'work', jobId: 'unloadCarts' })
     applyCommand(before, { type: 'sleep' })
     expect(JSON.stringify(before)).toBe(snapshot)
+  })
+})
+
+describe('предпросмотр доступности', () => {
+  it('говорит ту же причину, что и само действие', () => {
+    const state = game()
+    const preview = canApply(state, { type: 'work', jobId: 'guardCaravan' })
+    const real = applyCommand(state, { type: 'work', jobId: 'guardCaravan' })
+    expect(preview.ok).toBe(false)
+    expect(real.ok).toBe(false)
+    if (!preview.ok && !real.ok) expect(preview.message).toBe(real.message)
+  })
+
+  it('не меняет состояние проверкой', () => {
+    const state = game()
+    const snapshot = JSON.stringify(state)
+    canApply(state, { type: 'work', jobId: 'unloadCarts' })
+    expect(JSON.stringify(state)).toBe(snapshot)
   })
 })
