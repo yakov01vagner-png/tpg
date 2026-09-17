@@ -55,7 +55,7 @@ export const EMPTY_SKILL: SkillProgress = { level: 0, xp: 0 }
 /** Сколько опыта нужно, чтобы уйти с текущего уровня навыка на следующий. */
 export function skillXpToNext(level: number, config: ProgressionConfig = PROGRESSION): number {
   if (level >= config.skillMax) return Number.POSITIVE_INFINITY
-  return Math.round(config.skillXpBase * Math.pow(1 + level / 10, config.skillXpExponent))
+  return Math.round(config.skillXpBase * (1 + level / 10) ** config.skillXpExponent)
 }
 
 /** Множитель скорости от атрибута: слабый атрибут учится медленно, но учится. */
@@ -131,7 +131,7 @@ export function applySkillXp(
 
 /** Сколько опыта персонажу до следующего уровня. */
 export function characterXpToNext(level: number, config: ProgressionConfig = PROGRESSION): number {
-  return Math.round(config.characterXpBase * Math.pow(level, config.characterXpExponent))
+  return Math.round(config.characterXpBase * level ** config.characterXpExponent)
 }
 
 export interface LevelUpResult {

@@ -1,5 +1,5 @@
-import { hours } from '../time'
 import type { SkillId } from '../skills'
+import { hours } from '../time'
 import type { Requirements } from './jobs'
 
 export interface CourseDef {

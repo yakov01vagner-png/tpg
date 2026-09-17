@@ -61,8 +61,7 @@ describe('мягкий потолок', () => {
 
 describe('уровень персонажа', () => {
   it('даёт очко навыка за уровень и очко атрибута каждый третий', () => {
-    const needed =
-      characterXpToNext(1) + characterXpToNext(2) + characterXpToNext(3)
+    const needed = characterXpToNext(1) + characterXpToNext(2) + characterXpToNext(3)
     const result = applyCharacterXp(1, 0, needed)
     expect(result.level).toBe(4)
     expect(result.levelsGained).toBe(3)

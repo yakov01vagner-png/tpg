@@ -51,11 +51,13 @@ function playUntilAdept(seed: number, maxActions = 4000) {
     if (state.character.magicRank === 'adept') return { state, reached: true }
     const result = applyCommand(state, decide(state))
     // Если задуманное не вышло (нет денег, ночь, усталость) — отсыпаемся.
-    state = result.ok ? result.state : ((): GameState => {
-      const fallback = applyCommand(state, { type: 'sleep' })
-      if (!fallback.ok) throw new Error(`тупик: ${fallback.message}`)
-      return fallback.state
-    })()
+    state = result.ok
+      ? result.state
+      : ((): GameState => {
+          const fallback = applyCommand(state, { type: 'sleep' })
+          if (!fallback.ok) throw new Error(`тупик: ${fallback.message}`)
+          return fallback.state
+        })()
   }
   return { state, reached: false }
 }

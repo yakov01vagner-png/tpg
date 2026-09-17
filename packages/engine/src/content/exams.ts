@@ -1,5 +1,5 @@
-import { hours } from '../time'
 import type { MagicRankId } from '../magic'
+import { hours } from '../time'
 import type { Requirements } from './jobs'
 
 /**

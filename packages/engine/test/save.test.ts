@@ -39,7 +39,7 @@ describe('сохранение', () => {
   it('не открывает сейв из более новой версии игры', () => {
     const state = played()
     const future = JSON.parse(serialize(state)) as Record<string, unknown>
-    future['schemaVersion'] = SCHEMA_VERSION + 1
+    future.schemaVersion = SCHEMA_VERSION + 1
     const loaded = deserialize(JSON.stringify(future))
     expect(loaded.ok).toBe(false)
     if (!loaded.ok) expect(loaded.error).toContain('более новой версией')
@@ -48,7 +48,7 @@ describe('сохранение', () => {
   it('честно говорит, что миграции нет', () => {
     const state = played()
     const old = JSON.parse(serialize(state)) as Record<string, unknown>
-    old['schemaVersion'] = 0
+    old.schemaVersion = 0
     const loaded = deserialize(JSON.stringify(old))
     expect(loaded.ok).toBe(false)
     if (!loaded.ok) expect(loaded.error).toContain('миграции')

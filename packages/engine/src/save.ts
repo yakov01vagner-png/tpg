@@ -36,7 +36,7 @@ export function deserialize(json: string): LoadResult {
   }
 
   let record = data as Record<string, unknown>
-  let version = record['schemaVersion']
+  let version = record.schemaVersion
   if (typeof version !== 'number') {
     return { ok: false, error: 'В сохранении не указана версия схемы.' }
   }
@@ -53,7 +53,7 @@ export function deserialize(json: string): LoadResult {
     }
     record = migration(record)
     version += 1
-    record['schemaVersion'] = version
+    record.schemaVersion = version
   }
 
   const problem = validate(record)
@@ -63,13 +63,17 @@ export function deserialize(json: string): LoadResult {
 
 /** Грубая проверка формы: ловит чужой JSON, а не опечатки в балансе. */
 function validate(record: Record<string, unknown>): string | null {
-  if (typeof record['time'] !== 'number') return 'В сохранении нет игрового времени.'
-  const rng = record['rng']
-  if (typeof rng !== 'object' || rng === null || typeof (rng as { state?: unknown }).state !== 'number') {
+  if (typeof record.time !== 'number') return 'В сохранении нет игрового времени.'
+  const rng = record.rng
+  if (
+    typeof rng !== 'object' ||
+    rng === null ||
+    typeof (rng as { state?: unknown }).state !== 'number'
+  ) {
     return 'В сохранении нет состояния генератора случайных чисел.'
   }
-  const character = record['character']
+  const character = record.character
   if (typeof character !== 'object' || character === null) return 'В сохранении нет персонажа.'
-  if (!Array.isArray(record['log'])) return 'В сохранении нет журнала.'
+  if (!Array.isArray(record.log)) return 'В сохранении нет журнала.'
   return null
 }

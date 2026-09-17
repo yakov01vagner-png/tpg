@@ -154,7 +154,10 @@ function takeExam(state: GameState, examId: string, content: Content): CommandRe
   addMoney(draft, -exam.cost)
   addFatigue(draft, exam.fatigue)
 
-  const [passed, rng] = rollChance(draft.rng, examChance(magic, rank.requiredSkill, exam.comfortableMargin))
+  const [passed, rng] = rollChance(
+    draft.rng,
+    examChance(magic, rank.requiredSkill, exam.comfortableMargin),
+  )
   draft.rng = rng
   if (passed) {
     patch(draft, { magicRank: exam.rank })
@@ -171,7 +174,11 @@ function takeExam(state: GameState, examId: string, content: Content): CommandRe
  * Шанс сдать: впритык к порогу — чуть лучше монетки, с запасом — почти наверняка.
  * Полной гарантии нет никогда: ранг дают люди.
  */
-export function examChance(magicSkill: number, required: number, comfortableMargin: number): number {
+export function examChance(
+  magicSkill: number,
+  required: number,
+  comfortableMargin: number,
+): number {
   const ratio = Math.min(1, Math.max(0, (magicSkill - required) / comfortableMargin))
   return 0.4 + 0.55 * ratio
 }
@@ -201,7 +208,8 @@ function sleep(state: GameState): CommandResult {
 
 function spendSkillPoint(state: GameState, skillId: SkillId): CommandResult {
   if (!SKILLS[skillId]) return fail('unknownAction', 'Нет такого навыка.')
-  if (state.character.unspentSkillPoints <= 0) return fail('noPoints', 'Нет свободных очков навыков.')
+  if (state.character.unspentSkillPoints <= 0)
+    return fail('noPoints', 'Нет свободных очков навыков.')
   const current = state.character.skills[skillId]
   if (current.level >= PROGRESSION.skillMax) return fail('maxed', 'Навык уже на пределе шкалы.')
 

@@ -1,5 +1,5 @@
-import { hours } from '../time'
 import type { SkillId } from '../skills'
+import { hours } from '../time'
 
 /** Требования к персонажу: минимальные уровни навыков и обязательные теги. */
 export interface Requirements {
