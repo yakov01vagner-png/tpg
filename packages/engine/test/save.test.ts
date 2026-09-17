@@ -54,3 +54,27 @@ describe('сохранение', () => {
     if (!loaded.ok) expect(loaded.error).toContain('миграции')
   })
 })
+
+describe('миграция сейвов', () => {
+  it('поднимает сейв первой версии, дорисовывая мир', () => {
+    const state = played()
+    const old = JSON.parse(serialize(state)) as Record<string, unknown>
+    // Так выглядел сейв до того, как в игре появился мир.
+    old.schemaVersion = 1
+    old.world = undefined
+    old.locationId = undefined
+    const json = JSON.stringify(old)
+
+    const loaded = deserialize(json)
+    expect(loaded.ok, loaded.ok ? '' : loaded.error).toBe(true)
+    if (!loaded.ok) return
+    expect(loaded.state.schemaVersion).toBe(SCHEMA_VERSION)
+    expect(Object.keys(loaded.state.world.locations).length).toBeGreaterThan(0)
+    expect(loaded.state.world.locations[loaded.state.locationId]).toBeDefined()
+    // Прогресс персонажа миграция не трогает.
+    expect(loaded.state.character.money).toBe(state.character.money)
+    expect(loaded.state.character.skills.hardLabour.level).toBe(
+      state.character.skills.hardLabour.level,
+    )
+  })
+})

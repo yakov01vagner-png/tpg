@@ -1,5 +1,6 @@
 import type { GameState } from './state'
 import { SCHEMA_VERSION } from './state'
+import { defaultStartLocationId, generateWorld } from './world/generate'
 
 /**
  * Сохранение и загрузка.
@@ -10,11 +11,19 @@ import { SCHEMA_VERSION } from './state'
  */
 export type Migration = (data: Record<string, unknown>) => Record<string, unknown>
 
-/**
- * Миграции с версии N на N+1. Ключ — версия, С которой мигрируем.
- * Пока пусто: первая версия схемы.
- */
-export const MIGRATIONS: Readonly<Record<number, Migration>> = {}
+/** Миграции с версии N на N+1. Ключ — версия, С которой мигрируем. */
+export const MIGRATIONS: Readonly<Record<number, Migration>> = {
+  /**
+   * v1 → v2: в состоянии появился мир. Старые сейвы его не знали, поэтому мир
+   * генерируется по зерну из сохранённого ГПСЧ, а герой оказывается в стартовой
+   * деревне. Прогресс персонажа при этом сохраняется целиком.
+   */
+  1: (data) => {
+    const rng = data.rng as { state?: number } | undefined
+    const world = generateWorld(rng?.state ?? 1)
+    return { ...data, world, locationId: defaultStartLocationId(world) }
+  },
+}
 
 export type LoadResult =
   | { readonly ok: true; readonly state: GameState }
@@ -74,6 +83,9 @@ function validate(record: Record<string, unknown>): string | null {
   }
   const character = record.character
   if (typeof character !== 'object' || character === null) return 'В сохранении нет персонажа.'
+  const world = record.world
+  if (typeof world !== 'object' || world === null) return 'В сохранении нет мира.'
+  if (typeof record.locationId !== 'string') return 'В сохранении не сказано, где находится герой.'
   if (!Array.isArray(record.log)) return 'В сохранении нет журнала.'
   return null
 }

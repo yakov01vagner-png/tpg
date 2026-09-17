@@ -7,6 +7,7 @@ import { CharacterScreen } from './src/screens/CharacterScreen'
 import { CreateCharacterScreen } from './src/screens/CreateCharacterScreen'
 import { JournalScreen } from './src/screens/JournalScreen'
 import { LocationScreen } from './src/screens/LocationScreen'
+import { RoadScreen } from './src/screens/RoadScreen'
 import { colors, font, spacing } from './src/theme'
 import { Header } from './src/ui/Header'
 import { TabBar, type TabId } from './src/ui/TabBar'
@@ -32,6 +33,7 @@ export default function App() {
             <Header game={state.game} />
             <View style={styles.body}>
               {tab === 'location' ? <LocationScreen game={state.game} /> : null}
+              {tab === 'road' ? <RoadScreen game={state.game} /> : null}
               {tab === 'character' ? <CharacterScreen game={state.game} /> : null}
               {tab === 'journal' ? <JournalScreen game={state.game} /> : null}
             </View>

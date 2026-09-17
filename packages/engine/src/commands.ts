@@ -18,17 +18,20 @@ import type { TimeWindow } from './time'
 import {
   DAY_WINDOW,
   MINUTES_PER_HOUR,
+  formatDuration,
   formatWindow,
   hours,
   isWithinWindow,
   nextTimeOfDay,
 } from './time'
+import { roadsFrom } from './world/queries'
 
 /**
  * Команды — единственный способ изменить состояние (п.2 дизайн-документа).
  * UI не мутирует состояние сам: он отправляет команду и получает новое.
  */
 export type Command =
+  | { readonly type: 'travel'; readonly toLocationId: string }
   | { readonly type: 'work'; readonly jobId: string }
   | { readonly type: 'study'; readonly courseId: string }
   | { readonly type: 'takeExam'; readonly examId: string }
@@ -64,6 +67,8 @@ export function applyCommand(
   content: Content = CONTENT,
 ): CommandResult {
   switch (command.type) {
+    case 'travel':
+      return travel(state, command.toLocationId)
     case 'work':
       return work(state, command.jobId, content)
     case 'study':
@@ -101,6 +106,45 @@ export function canApply(
 }
 
 // --- команды ---------------------------------------------------------------
+
+/**
+ * Переход в соседнюю по дороге локацию.
+ *
+ * Дорога — это просто длинное действие: модель времени из п.11.1 принимает её
+ * без переделки. Ходить можно только к соседу, дальний путь складывается из
+ * нескольких переходов — потом в них будет чему случаться.
+ */
+function travel(state: GameState, toLocationId: string): CommandResult {
+  const destination = state.world.locations[toLocationId]
+  if (!destination) return fail('unknownAction', 'Такого места нет.')
+
+  const road = roadsFrom(state.world, state.locationId).find(
+    (candidate) => candidate.to === toLocationId,
+  )
+  if (!road) return fail('unknownAction', `Отсюда нет прямой дороги в ${destination.name}.`)
+
+  const cost = travelFatigue(road.hours)
+  const blocked = checkFatigue(state.character, cost)
+  if (blocked) return blocked
+
+  const from = state.world.locations[state.locationId]
+  const draft = open(state)
+  notice(
+    draft,
+    `Дорога${from ? ` из ${from.name}` : ''} в ${destination.name}: ${formatDuration(hours(road.hours))} пути.`,
+  )
+  advance(draft, hours(road.hours))
+  addFatigue(draft, cost)
+  practice(draft, 'athletics', road.hours * 2.5)
+  practice(draft, 'survival', road.hours * 1.5)
+  draft.locationId = toLocationId
+  return close(draft)
+}
+
+/** Дорога выматывает примерно как работа: три с половиной единицы за час хода. */
+export function travelFatigue(roadHours: number): number {
+  return Math.round(roadHours * 3.5)
+}
 
 function work(state: GameState, jobId: string, content: Content): CommandResult {
   const job = content.jobs[jobId]
@@ -327,12 +371,20 @@ interface Draft {
   time: GameTime
   rng: Rng
   character: Character
+  locationId: string
   readonly base: GameState
   readonly events: GameEvent[]
 }
 
 function open(state: GameState): Draft {
-  return { time: state.time, rng: state.rng, character: state.character, base: state, events: [] }
+  return {
+    time: state.time,
+    rng: state.rng,
+    character: state.character,
+    locationId: state.locationId,
+    base: state,
+    events: [],
+  }
 }
 
 function close(draft: Draft): CommandResult {
@@ -341,6 +393,7 @@ function close(draft: Draft): CommandResult {
     time: draft.time,
     rng: draft.rng,
     character: draft.character,
+    locationId: draft.locationId,
     log: appendLog(draft.base.log, draft.time, draft.events),
   }
   return { ok: true, state, events: draft.events }

@@ -1,4 +1,4 @@
-import { FATIGUE_MAX, type GameState, formatTime } from '@tpg/engine'
+import { FATIGUE_MAX, type GameState, addressOf, formatTime } from '@tpg/engine'
 import { StyleSheet, Text, View } from 'react-native'
 import { colors, font, spacing } from '../theme'
 import { Meter } from './atoms'
@@ -6,8 +6,19 @@ import { Meter } from './atoms'
 export function Header({ game }: { game: GameState }) {
   const hero = game.character
   const points = hero.unspentSkillPoints + hero.unspentAttributePoints
+  const here = game.world.locations[game.locationId]
   return (
     <View style={styles.box}>
+      {here ? (
+        <View style={styles.row}>
+          <Text numberOfLines={1} style={styles.place}>
+            {here.name}
+          </Text>
+          <Text numberOfLines={1} style={styles.address}>
+            {addressOf(game.world, game.locationId).split(' · ')[0]}
+          </Text>
+        </View>
+      ) : null}
       <View style={styles.row}>
         <Text style={styles.time}>{formatTime(game.time)}</Text>
         <Text style={styles.money}>{hero.money} монет</Text>
@@ -36,4 +47,6 @@ const styles = StyleSheet.create({
   time: { color: colors.text, flex: 1, fontSize: font.heading },
   money: { color: colors.gold, fontSize: font.heading },
   level: { color: colors.dim, fontSize: font.small },
+  place: { color: colors.text, flex: 1, fontSize: font.body },
+  address: { color: colors.faint, flexShrink: 1, fontSize: font.tiny },
 })

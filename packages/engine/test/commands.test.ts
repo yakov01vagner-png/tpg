@@ -6,10 +6,15 @@ import { applyCommand, canApply, examChance } from '../src/commands'
 import type { GameState } from '../src/state'
 import { createGame } from '../src/state'
 import { WORLD_START, hourOf, hours } from '../src/time'
+import { generateWorld } from '../src/world/generate'
+import { roadsFrom } from '../src/world/queries'
+
+// Один мир на весь файл: генерировать семьдесят локаций в каждом тесте незачем.
+const WORLD = generateWorld(1)
 
 function game(overrides: Partial<Character> = {}, seed = 1): GameState {
   const character = { ...createCharacter({ name: 'Тест', money: 50 }), ...overrides }
-  return createGame(character, seed)
+  return createGame(character, seed, WORLD)
 }
 
 /** Развернуть удачный результат или упасть с внятным сообщением. */
@@ -260,5 +265,49 @@ describe('предпросмотр доступности', () => {
     const snapshot = JSON.stringify(state)
     canApply(state, { type: 'work', jobId: 'unloadCarts' })
     expect(JSON.stringify(state)).toBe(snapshot)
+  })
+})
+
+describe('дорога', () => {
+  const neighbourOf = (state: GameState) => {
+    const road = roadsFrom(state.world, state.locationId)[0]
+    if (!road) throw new Error('стартовая локация без дорог')
+    return road
+  }
+
+  it('переносит в соседнее место и берёт за это время и силы', () => {
+    const before = game()
+    const road = neighbourOf(before)
+    const after = ok(applyCommand(before, { type: 'travel', toLocationId: road.to }))
+
+    expect(after.locationId).toBe(road.to)
+    expect(after.time).toBe(before.time + hours(road.hours))
+    expect(after.character.fatigue).toBeGreaterThan(0)
+    expect(progress(after, 'athletics')).toBeGreaterThan(progress(before, 'athletics'))
+  })
+
+  it('не пускает туда, куда нет дороги', () => {
+    const state = game()
+    const neighbours = new Set(roadsFrom(state.world, state.locationId).map((road) => road.to))
+    const far = Object.keys(state.world.locations).find(
+      (id) => id !== state.locationId && !neighbours.has(id),
+    )
+    expect(far).toBeDefined()
+    const result = applyCommand(state, { type: 'travel', toLocationId: far ?? '' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toContain('нет прямой дороги')
+  })
+
+  it('не отправляет в путь вымотанного', () => {
+    const state = game({ fatigue: 95 })
+    const result = applyCommand(state, { type: 'travel', toLocationId: neighbourOf(state).to })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('exhausted')
+  })
+
+  it('ходит и ночью: дорога не спрашивает расписания', () => {
+    const night: GameState = { ...game(), time: WORLD_START + hours(17) }
+    const result = applyCommand(night, { type: 'travel', toLocationId: neighbourOf(night).to })
+    expect(result.ok).toBe(true)
   })
 })
