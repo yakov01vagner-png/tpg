@@ -3,10 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "description": "Текстовая мобильная RPG-песочница (см. DESIGN.md)",
-  "workspaces": [
-    "packages/*",
-    "apps/*"
-  ],
+  "workspaces": ["packages/*", "apps/*"],
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",

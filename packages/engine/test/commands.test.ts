@@ -40,11 +40,24 @@ describe('работа', () => {
     expect(after.log.length).toBeGreaterThan(before.log.length)
   })
 
-  it('не берёт на работу ночью', () => {
+  it('не берёт на дневную работу ночью', () => {
     const night = { ...game(), time: WORLD_START + hours(17) }
     const result = applyCommand(night, { type: 'work', jobId: 'unloadCarts' })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('night')
+    if (!result.ok) expect(result.code).toBe('closed')
+  })
+
+  it('ночная работа живёт по своему расписанию', () => {
+    const night = { ...game(), time: WORLD_START + hours(17) }
+    const day = game()
+    expect(applyCommand(night, { type: 'work', jobId: 'nightWatch' }).ok).toBe(true)
+
+    const denied = applyCommand(day, { type: 'work', jobId: 'nightWatch' })
+    expect(denied.ok).toBe(false)
+    if (!denied.ok) {
+      expect(denied.code).toBe('closed')
+      expect(denied.message).toContain('22:00')
+    }
   })
 
   it('проверяет требования', () => {

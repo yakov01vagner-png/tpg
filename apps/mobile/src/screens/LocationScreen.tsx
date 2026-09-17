@@ -6,8 +6,10 @@ import {
   JOBS,
   MAGIC_RANKS,
   SKILLS,
+  type TimeWindow,
   canApply,
   formatDuration,
+  formatWindowShort,
 } from '@tpg/engine'
 import { ScrollView, StyleSheet } from 'react-native'
 import { dispatch } from '../game/store'
@@ -25,6 +27,9 @@ export function LocationScreen({ game }: { game: GameState }) {
     return check.ok ? null : check.message
   }
 
+  // Расписание показываем только там, где оно не дневное, — иначе шум.
+  const schedule = (window?: TimeWindow) => (window ? ` · ${formatWindowShort(window)}` : '')
+
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <Section title="Работа">
@@ -35,7 +40,7 @@ export function LocationScreen({ game }: { game: GameState }) {
               key={job.id}
               title={job.label}
               description={job.description}
-              meta={`${formatDuration(job.durationMinutes)} · +${job.pay}`}
+              meta={`${formatDuration(job.durationMinutes)} · +${job.pay}${schedule(job.window)}`}
               reason={reasonFor(command)}
               onPress={() => dispatch(command)}
             />
@@ -51,7 +56,7 @@ export function LocationScreen({ game }: { game: GameState }) {
               key={course.id}
               title={course.label}
               description={course.description}
-              meta={`${formatDuration(course.durationMinutes)} · −${course.cost} · ${SKILLS[course.skill].label}`}
+              meta={`${formatDuration(course.durationMinutes)} · −${course.cost} · ${SKILLS[course.skill].label}${schedule(course.window)}`}
               reason={reasonFor(command)}
               onPress={() => dispatch(command)}
             />

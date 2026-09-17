@@ -1,4 +1,5 @@
 import type { MagicRankId } from '../magic'
+import type { TimeWindow } from '../time'
 import { hours } from '../time'
 import type { Requirements } from './jobs'
 
@@ -20,6 +21,8 @@ export interface ExamDef {
   readonly comfortableMargin: number
   readonly fatigue: number
   readonly requires?: Requirements
+  /** Часы, в которые дело можно начать. По умолчанию — дневные. */
+  readonly window?: TimeWindow
 }
 
 export const EXAMS: readonly ExamDef[] = [
@@ -42,6 +45,26 @@ export const EXAMS: readonly ExamDef[] = [
     durationMinutes: hours(4),
     comfortableMargin: 8,
     fatigue: 20,
+  },
+  {
+    id: 'examStudent',
+    label: 'Испытание на Ученика',
+    description: 'Здесь спрашивают не слова, а работу. Провалившихся запоминают надолго.',
+    rank: 'student',
+    cost: 90,
+    durationMinutes: hours(6),
+    comfortableMargin: 10,
+    fatigue: 30,
+  },
+  {
+    id: 'examJourneyman',
+    label: 'Испытание на Подмастерье',
+    description: 'Ранг, после которого тебя нанимают, а не гоняют. Цена соответствует.',
+    rank: 'journeyman',
+    cost: 180,
+    durationMinutes: hours(8),
+    comfortableMargin: 12,
+    fatigue: 40,
   },
 ]
 

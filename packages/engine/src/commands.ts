@@ -14,7 +14,15 @@ import { SKILLS } from './skills'
 import type { GameState } from './state'
 import { appendLog } from './state'
 import type { GameTime } from './time'
-import { MINUTES_PER_HOUR, hours, isNight, nextTimeOfDay } from './time'
+import type { TimeWindow } from './time'
+import {
+  DAY_WINDOW,
+  MINUTES_PER_HOUR,
+  formatWindow,
+  hours,
+  isWithinWindow,
+  nextTimeOfDay,
+} from './time'
 
 /**
  * Команды — единственный способ изменить состояние (п.2 дизайн-документа).
@@ -34,7 +42,7 @@ export type FailureCode =
   | 'requirements'
   | 'noMoney'
   | 'exhausted'
-  | 'night'
+  | 'closed'
   | 'noPoints'
   | 'maxed'
   | 'rankNotEligible'
@@ -98,7 +106,7 @@ function work(state: GameState, jobId: string, content: Content): CommandResult 
   const job = content.jobs[jobId]
   if (!job) return fail('unknownAction', 'Такой работы здесь нет.')
   const blocked =
-    checkNight(state.time, 'Ночью на работу не нанимают — приходи утром.') ??
+    checkWindow(state.time, job.window, 'На эту работу нанимают') ??
     checkRequirements(state.character, job.requires) ??
     checkFatigue(state.character, job.fatigue)
   if (blocked) return blocked
@@ -119,7 +127,7 @@ function study(state: GameState, courseId: string, content: Content): CommandRes
   const course = content.courses[courseId]
   if (!course) return fail('unknownAction', 'Такого наставника здесь нет.')
   const blocked =
-    checkNight(state.time, 'Ночью занятий не бывает.') ??
+    checkWindow(state.time, course.window, 'Занятия идут') ??
     checkRequirements(state.character, course.requires) ??
     checkMoney(state.character, course.cost) ??
     checkFatigue(state.character, course.fatigue)
@@ -161,7 +169,7 @@ function takeExam(state: GameState, examId: string, content: Content): CommandRe
     )
   }
   const blocked =
-    checkNight(state.time, 'Испытания проводят днём.') ??
+    checkWindow(state.time, exam.window, 'Испытания проводят') ??
     checkRequirements(character, exam.requires) ??
     checkMoney(character, exam.cost) ??
     checkFatigue(character, exam.fatigue)
@@ -260,8 +268,17 @@ function spendAttributePoint(state: GameState, attributeId: AttributeId): Comman
 
 // --- проверки --------------------------------------------------------------
 
-function checkNight(time: GameTime, message: string): CommandResult | null {
-  return isNight(time) ? fail('night', message) : null
+/**
+ * Дело можно начать только в своё окно. У большинства оно дневное, но есть
+ * ночная работа — поэтому проверка не «сейчас ночь», а «сейчас не их часы».
+ */
+function checkWindow(
+  time: GameTime,
+  window: TimeWindow | undefined,
+  what: string,
+): CommandResult | null {
+  const actual = window ?? DAY_WINDOW
+  return isWithinWindow(time, actual) ? null : fail('closed', `${what} ${formatWindow(actual)}.`)
 }
 
 function checkMoney(character: Character, cost: number): CommandResult | null {
