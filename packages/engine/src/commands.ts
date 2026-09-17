@@ -1,9 +1,21 @@
 import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
 import type { Character } from './character'
-import { FATIGUE_MAX, attributeForSkill, fatigueFactor, skillLevel } from './character'
+import {
+  FATIGUE_MAX,
+  attributeForSkill,
+  carried,
+  carriedWeight,
+  carryCapacity,
+  fatigueFactor,
+  skillLevel,
+} from './character'
 import type { Availability, Content, Requirements } from './content'
 import { CONTENT } from './content'
+import type { GoodId } from './content/goods'
+import { GOODS } from './content/goods'
+import type { Settlement } from './economy'
+import { quoteBuy, quoteSell, tickSettlement } from './economy'
 import type { GameEvent } from './events'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
 import { isAvailableAt } from './place'
@@ -19,6 +31,7 @@ import type { TimeWindow } from './time'
 import {
   DAY_WINDOW,
   MINUTES_PER_HOUR,
+  dayOf,
   formatDuration,
   formatWindow,
   hours,
@@ -33,6 +46,8 @@ import { roadsFrom } from './world/queries'
  */
 export type Command =
   | { readonly type: 'travel'; readonly toLocationId: string }
+  | { readonly type: 'buy'; readonly good: GoodId; readonly amount: number }
+  | { readonly type: 'sell'; readonly good: GoodId; readonly amount: number }
   | { readonly type: 'work'; readonly jobId: string }
   | { readonly type: 'study'; readonly courseId: string }
   | { readonly type: 'takeExam'; readonly examId: string }
@@ -51,6 +66,8 @@ export type FailureCode =
   | 'maxed'
   | 'rankNotEligible'
   | 'unavailableHere'
+  | 'noGoods'
+  | 'overloaded'
   | 'invalid'
 
 export type CommandResult =
@@ -71,6 +88,10 @@ export function applyCommand(
   switch (command.type) {
     case 'travel':
       return travel(state, command.toLocationId)
+    case 'buy':
+      return buy(state, command.good, command.amount)
+    case 'sell':
+      return sell(state, command.good, command.amount)
     case 'work':
       return work(state, command.jobId, content)
     case 'study':
@@ -146,6 +167,66 @@ function travel(state: GameState, toLocationId: string): CommandResult {
 /** Дорога выматывает примерно как работа: три с половиной единицы за час хода. */
 export function travelFatigue(roadHours: number): number {
   return Math.round(roadHours * 3.5)
+}
+
+/** Сколько времени уходит на сделку — торг не бывает мгновенным. */
+export const TRADE_MINUTES = 15
+
+function buy(state: GameState, good: GoodId, amount: number): CommandResult {
+  const problem = checkTradeRequest(good, amount)
+  if (problem) return problem
+  const settlement = state.settlements[state.locationId]
+  if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
+
+  const tradeSkill = skillLevel(state.character, 'trade')
+  const quote = quoteBuy(state.world, settlement, good, amount, tradeSkill)
+  if (quote.amount < amount) {
+    return fail('noGoods', `Столько тут не купить: ${GOODS[good].label.toLowerCase()} в обрез.`)
+  }
+  if (state.character.money < quote.total) {
+    return fail('noMoney', `Не хватает денег: нужно ${quote.total}, есть ${state.character.money}.`)
+  }
+  const weight = GOODS[good].weight * amount
+  if (carriedWeight(state.character) + weight > carryCapacity(state.character)) {
+    return fail('overloaded', 'Столько на себе не унести.')
+  }
+
+  const draft = open(state)
+  notice(draft, `Куплено: ${GOODS[good].label.toLowerCase()}, ${amount} — за ${quote.total}.`)
+  advance(draft, TRADE_MINUTES)
+  addMoney(draft, -quote.total)
+  addGoods(draft, good, amount)
+  draft.settlements = { ...draft.settlements, [state.locationId]: quote.settlement }
+  practice(draft, 'trade', Math.min(30, quote.total * 0.12))
+  return close(draft)
+}
+
+function sell(state: GameState, good: GoodId, amount: number): CommandResult {
+  const problem = checkTradeRequest(good, amount)
+  if (problem) return problem
+  const settlement = state.settlements[state.locationId]
+  if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
+  if (carried(state.character, good) < amount) {
+    return fail('noGoods', `У тебя нет столько: ${GOODS[good].label.toLowerCase()}.`)
+  }
+
+  const tradeSkill = skillLevel(state.character, 'trade')
+  const quote = quoteSell(state.world, settlement, good, amount, tradeSkill)
+
+  const draft = open(state)
+  notice(draft, `Продано: ${GOODS[good].label.toLowerCase()}, ${amount} — за ${quote.total}.`)
+  advance(draft, TRADE_MINUTES)
+  addMoney(draft, quote.total)
+  addGoods(draft, good, -amount)
+  draft.settlements = { ...draft.settlements, [state.locationId]: quote.settlement }
+  practice(draft, 'trade', Math.min(30, quote.total * 0.12))
+  return close(draft)
+}
+
+function checkTradeRequest(good: GoodId, amount: number): CommandResult | null {
+  if (!GOODS[good]) return fail('unknownAction', 'Такого товара нет.')
+  if (!Number.isInteger(amount) || amount <= 0) return fail('invalid', 'Сколько именно?')
+  return null
 }
 
 function work(state: GameState, jobId: string, content: Content): CommandResult {
@@ -391,6 +472,7 @@ interface Draft {
   rng: Rng
   character: Character
   locationId: string
+  settlements: Readonly<Record<string, Settlement>>
   readonly base: GameState
   readonly events: GameEvent[]
 }
@@ -401,21 +483,50 @@ function open(state: GameState): Draft {
     rng: state.rng,
     character: state.character,
     locationId: state.locationId,
+    settlements: state.settlements,
     base: state,
     events: [],
   }
 }
 
 function close(draft: Draft): CommandResult {
+  // Мир живёт вместе с игровым временем: сколько суток прошло, столько поселения
+  // и досчитывают. Никаких фоновых таймеров — только детерминированный догон.
+  const daysPassed = dayOf(draft.time) - dayOf(draft.base.time)
+  const settlements =
+    daysPassed > 0 ? tickAll(draft.base, draft.settlements, daysPassed) : draft.settlements
+
   const state: GameState = {
     ...draft.base,
     time: draft.time,
     rng: draft.rng,
     character: draft.character,
     locationId: draft.locationId,
+    settlements,
     log: appendLog(draft.base.log, draft.time, draft.events),
   }
   return { ok: true, state, events: draft.events }
+}
+
+function tickAll(
+  state: GameState,
+  settlements: Readonly<Record<string, Settlement>>,
+  days: number,
+): Record<string, Settlement> {
+  const next: Record<string, Settlement> = {}
+  for (const [id, settlement] of Object.entries(settlements)) {
+    next[id] = tickSettlement(state.world, settlement, days)
+  }
+  return next
+}
+
+function addGoods(draft: Draft, good: GoodId, delta: number): void {
+  const current = draft.character.inventory[good] ?? 0
+  const next = Math.max(0, current + delta)
+  const inventory = { ...draft.character.inventory }
+  if (next === 0) delete inventory[good]
+  else inventory[good] = next
+  patch(draft, { inventory })
 }
 
 function patch(draft: Draft, changes: Partial<Character>): void {

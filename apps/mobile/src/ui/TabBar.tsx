@@ -1,10 +1,11 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { colors, font, spacing } from '../theme'
 
-export type TabId = 'location' | 'road' | 'character' | 'journal'
+export type TabId = 'location' | 'trade' | 'road' | 'character' | 'journal'
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'location', label: 'Дела' },
+  { id: 'trade', label: 'Торг' },
   { id: 'road', label: 'Дорога' },
   { id: 'character', label: 'Герой' },
   { id: 'journal', label: 'Журнал' },

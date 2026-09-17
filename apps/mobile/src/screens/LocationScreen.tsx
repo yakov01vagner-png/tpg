@@ -31,9 +31,9 @@ export function LocationScreen({ game }: { game: GameState }) {
   const schedule = (window?: TimeWindow) => (window ? ` · ${formatWindowShort(window)}` : '')
 
   // Список дел — не весь контент игры, а то, что водится именно здесь.
-  const jobs = jobsAt(game.world, game.locationId)
-  const courses = coursesAt(game.world, game.locationId)
-  const exams = examsAt(game.world, game.locationId)
+  const jobs = jobsAt(game)
+  const courses = coursesAt(game)
+  const exams = examsAt(game)
 
   return (
     <ScrollView contentContainerStyle={styles.content}>

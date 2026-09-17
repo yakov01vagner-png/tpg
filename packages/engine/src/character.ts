@@ -1,5 +1,7 @@
 import type { AttributeId, Attributes } from './attributes'
 import { baseAttributes, clampAttribute } from './attributes'
+import type { GoodId } from './content/goods'
+import { GOODS } from './content/goods'
 import type { MagicRankId } from './magic'
 import type { SkillProgress } from './progression'
 import { EMPTY_SKILL } from './progression'
@@ -21,6 +23,8 @@ export interface Character {
   readonly magicRank: MagicRankId | null
   /** Теги биографии: остаются с персонажем навсегда, их читают другие системы. */
   readonly tags: readonly string[]
+  /** Что несёшь на себе. Отсутствие товара в списке означает ноль. */
+  readonly inventory: Readonly<Partial<Record<GoodId, number>>>
 }
 
 export const FATIGUE_MAX = 100
@@ -64,6 +68,7 @@ export function createCharacter(draft: CharacterDraft): Character {
     fatigue: 0,
     magicRank: null,
     tags: [...(draft.tags ?? [])],
+    inventory: {},
   }
 }
 
@@ -78,6 +83,27 @@ export function attributeForSkill(character: Character, skill: SkillId): number 
 
 export function hasTag(character: Character, tag: string): boolean {
   return character.tags.includes(tag)
+}
+
+export function carried(character: Character, good: GoodId): number {
+  return character.inventory[good] ?? 0
+}
+
+/** Сколько всего весит поклажа. */
+export function carriedWeight(character: Character): number {
+  let weight = 0
+  for (const [good, amount] of Object.entries(character.inventory)) {
+    weight += GOODS[good as GoodId].weight * (amount ?? 0)
+  }
+  return Math.round(weight * 10) / 10
+}
+
+/**
+ * Сколько можно унести на себе. Пока только на себе: вьючные животные и телеги —
+ * отдельный разговор, и он не про этот блок.
+ */
+export function carryCapacity(character: Character): number {
+  return Math.round(15 + character.attributes.strength * 5 + character.skills.athletics.level * 0.3)
 }
 
 /**

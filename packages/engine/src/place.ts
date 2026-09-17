@@ -1,51 +1,60 @@
 import type { Content, CourseDef, ExamDef, JobDef } from './content'
 import { CONTENT } from './content'
 import type { Availability } from './content/availability'
-import type { Location, World } from './world/types'
+import type { GameState } from './state'
+import type { Location } from './world/types'
 
 /**
  * Что можно делать в конкретном месте.
  *
- * Содержимое города — не список «всего, что есть в игре», а то, что вообще
- * бывает в таком месте: в деревне нет школы магии, в столице некому кайлить
- * породу. Ради этого и нужна дорога.
+ * Содержимое города — не список «всего, что есть в игре», а то, что бывает в
+ * таком месте: в деревне нет школы магии, в столице некому кайлить породу.
+ * Ради этого и нужна дорога.
  */
-export function isAvailableAt(where: Availability | undefined, location: Location): boolean {
+export function isAvailableAt(
+  where: Availability | undefined,
+  location: Location,
+  population = location.population,
+): boolean {
   if (!where) return true
   if (where.archetypes && !where.archetypes.includes(location.archetype)) return false
   if (where.terrains && !where.terrains.includes(location.terrain)) return false
-  if (where.minPopulation !== undefined && location.population < where.minPopulation) return false
+  if (where.minPopulation !== undefined && population < where.minPopulation) return false
   return true
 }
 
 function at<T extends { readonly where?: Availability }>(
   items: Readonly<Record<string, T>>,
-  location: Location | undefined,
+  state: GameState,
+  locationId: string,
 ): readonly T[] {
+  const location = state.world.locations[locationId]
   if (!location) return []
-  return Object.values(items).filter((item) => isAvailableAt(item.where, location))
+  // Население берём живое: вымирающая деревня перестаёт быть городком.
+  const population = state.settlements[locationId]?.population ?? location.population
+  return Object.values(items).filter((item) => isAvailableAt(item.where, location, population))
 }
 
 export function jobsAt(
-  world: World,
-  locationId: string,
+  state: GameState,
+  locationId: string = state.locationId,
   content: Content = CONTENT,
 ): readonly JobDef[] {
-  return at(content.jobs, world.locations[locationId])
+  return at(content.jobs, state, locationId)
 }
 
 export function coursesAt(
-  world: World,
-  locationId: string,
+  state: GameState,
+  locationId: string = state.locationId,
   content: Content = CONTENT,
 ): readonly CourseDef[] {
-  return at(content.courses, world.locations[locationId])
+  return at(content.courses, state, locationId)
 }
 
 export function examsAt(
-  world: World,
-  locationId: string,
+  state: GameState,
+  locationId: string = state.locationId,
   content: Content = CONTENT,
 ): readonly ExamDef[] {
-  return at(content.exams, world.locations[locationId])
+  return at(content.exams, state, locationId)
 }

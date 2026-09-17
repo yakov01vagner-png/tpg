@@ -1,6 +1,8 @@
+import { createSettlements } from './economy'
 import type { GameState } from './state'
 import { SCHEMA_VERSION } from './state'
 import { defaultStartLocationId, generateWorld } from './world/generate'
+import type { World } from './world/types'
 
 /**
  * Сохранение и загрузка.
@@ -22,6 +24,19 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
     const rng = data.rng as { state?: number } | undefined
     const world = generateWorld(rng?.state ?? 1)
     return { ...data, world, locationId: defaultStartLocationId(world) }
+  },
+  /**
+   * v2 → v3: появились товары. Поселениям раздаются обычные для них запасы, а
+   * герою — пустая котомка: в прошлой версии носить было нечего.
+   */
+  2: (data) => {
+    const world = data.world as World
+    const character = (data.character ?? {}) as Record<string, unknown>
+    return {
+      ...data,
+      settlements: createSettlements(world),
+      character: { ...character, inventory: character.inventory ?? {} },
+    }
   },
 }
 
@@ -86,6 +101,9 @@ function validate(record: Record<string, unknown>): string | null {
   const world = record.world
   if (typeof world !== 'object' || world === null) return 'В сохранении нет мира.'
   if (typeof record.locationId !== 'string') return 'В сохранении не сказано, где находится герой.'
+  if (typeof record.settlements !== 'object' || record.settlements === null) {
+    return 'В сохранении нет состояния поселений.'
+  }
   if (!Array.isArray(record.log)) return 'В сохранении нет журнала.'
   return null
 }

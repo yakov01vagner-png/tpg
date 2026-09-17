@@ -1,4 +1,6 @@
 import type { Character } from './character'
+import type { Settlement } from './economy'
+import { createSettlements } from './economy'
 import type { GameEvent } from './events'
 import { describeEvent } from './events'
 import type { Rng } from './rng'
@@ -9,7 +11,7 @@ import { defaultStartLocationId, generateWorld } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -33,6 +35,11 @@ export interface GameState {
    * (DESIGN.md, п.3.1) — поэтому лежит прямо в состоянии и уходит в сейв.
    */
   readonly world: World
+  /**
+   * Живая часть поселений: население и запасы товаров. Скелет мира неизменен,
+   * а вот это меняется каждый игровой день.
+   */
+  readonly settlements: Readonly<Record<string, Settlement>>
   /** Где сейчас находится игрок. */
   readonly locationId: string
   readonly log: readonly LogEntry[]
@@ -50,6 +57,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     rng: createRng(seed),
     character,
     world,
+    settlements: createSettlements(world),
     locationId,
     log: [
       {

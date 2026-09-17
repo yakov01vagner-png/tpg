@@ -22,8 +22,8 @@ const gameAt = (locationId: string) => ({
 
 describe('место определяет, что можно делать', () => {
   it('в деревне дел заметно меньше, чем в столице', () => {
-    const village = jobsAt(world, someplace('village')).length
-    const capital = jobsAt(world, someplace('capital')).length
+    const village = jobsAt(gameAt(someplace('village'))).length
+    const capital = jobsAt(gameAt(someplace('capital'))).length
     console.log(`работ: в деревне ${village}, в столице ${capital}`)
     expect(village).toBeGreaterThan(0)
     expect(capital).toBeGreaterThan(village)
@@ -32,21 +32,21 @@ describe('место определяет, что можно делать', () =
   it('в деревне не у кого учиться и некому принимать испытание', () => {
     const villageId = someplace('village')
     // Единственное исключение — уличные наговоры, и те не для всякого.
-    expect(coursesAt(world, villageId).length).toBeLessThanOrEqual(1)
-    expect(examsAt(world, villageId).length).toBe(0)
+    expect(coursesAt(gameAt(villageId)).length).toBeLessThanOrEqual(1)
+    expect(examsAt(gameAt(villageId)).length).toBe(0)
   })
 
   it('школа магии и испытания есть только в крупных местах', () => {
     const capitalId = someplace('capital')
-    expect(coursesAt(world, capitalId).map((course) => course.id)).toContain('magicAdeptCourse')
-    expect(examsAt(world, capitalId).length).toBeGreaterThan(0)
-    expect(examsAt(world, someplace('village')).length).toBe(0)
-    expect(examsAt(world, someplace('mine')).length).toBe(0)
+    expect(coursesAt(gameAt(capitalId)).map((course) => course.id)).toContain('magicAdeptCourse')
+    expect(examsAt(gameAt(capitalId)).length).toBeGreaterThan(0)
+    expect(examsAt(gameAt(someplace('village'))).length).toBe(0)
+    expect(examsAt(gameAt(someplace('mine'))).length).toBe(0)
   })
 
   it('у каждого вида места своя работа', () => {
     const idsAt = (archetype: LocationArchetype) =>
-      jobsAt(world, someplace(archetype)).map((job) => job.id)
+      jobsAt(gameAt(someplace(archetype))).map((job) => job.id)
     expect(idsAt('mine')).toContain('quarryShift')
     expect(idsAt('port')).toContain('loadShips')
     expect(idsAt('monastery')).toContain('copyPsalter')
@@ -60,7 +60,7 @@ describe('место определяет, что можно делать', () =
     for (const archetype of ['village', 'town', 'city', 'capital', 'mine', 'port'] as const) {
       const locationId = someplace(archetype)
       const state = gameAt(locationId)
-      for (const job of jobsAt(world, locationId)) {
+      for (const job of jobsAt(state)) {
         const check = canApply(state, { type: 'work', jobId: job.id })
         if (!check.ok) {
           // Отказ по навыкам, деньгам или часам — нормально; «здесь такого нет» — нет.
@@ -69,7 +69,7 @@ describe('место определяет, что можно делать', () =
           )
         }
       }
-      for (const course of coursesAt(world, locationId)) {
+      for (const course of coursesAt(state)) {
         const check = canApply(state, { type: 'study', courseId: course.id })
         if (!check.ok) {
           expect(check.code, `${course.label} в месте «${archetype}»`).not.toBe('unavailableHere')
