@@ -15,8 +15,10 @@ import { CONTENT } from './content'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import type { Settlement } from './economy'
-import { quoteBuy, quoteSell, tickSettlement } from './economy'
+import { quoteBuy, quoteSell } from './economy'
 import type { GameEvent } from './events'
+import type { LifeEvent } from './life'
+import { tickDays } from './life'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
 import { isAvailableAt } from './place'
 import { PROGRESSION, applyCharacterXp, applySkillXp } from './progression'
@@ -38,7 +40,7 @@ import {
   isWithinWindow,
   nextTimeOfDay,
 } from './time'
-import { roadsFrom } from './world/queries'
+import { regionOf, roadsFrom } from './world/queries'
 
 /**
  * Команды — единственный способ изменить состояние (п.2 дизайн-документа).
@@ -493,8 +495,11 @@ function close(draft: Draft): CommandResult {
   // Мир живёт вместе с игровым временем: сколько суток прошло, столько поселения
   // и досчитывают. Никаких фоновых таймеров — только детерминированный догон.
   const daysPassed = dayOf(draft.time) - dayOf(draft.base.time)
-  const settlements =
-    daysPassed > 0 ? tickAll(draft.base, draft.settlements, daysPassed) : draft.settlements
+  const life =
+    daysPassed > 0
+      ? tickDays(draft.base.world, draft.settlements, daysPassed)
+      : { settlements: draft.settlements, events: [] as readonly LifeEvent[] }
+  const events = [...draft.events, ...worldNews(draft.base, draft.locationId, life.events)]
 
   const state: GameState = {
     ...draft.base,
@@ -502,22 +507,36 @@ function close(draft: Draft): CommandResult {
     rng: draft.rng,
     character: draft.character,
     locationId: draft.locationId,
-    settlements,
-    log: appendLog(draft.base.log, draft.time, draft.events),
+    settlements: life.settlements,
+    log: appendLog(draft.base.log, draft.time, events),
   }
-  return { ok: true, state, events: draft.events }
+  return { ok: true, state, events }
 }
 
-function tickAll(
+/**
+ * Новости мира попадают в журнал, только если случились по соседству.
+ * Игроку незачем знать о голоде на другом конце света: он бы о нём и не услышал.
+ */
+function worldNews(
   state: GameState,
-  settlements: Readonly<Record<string, Settlement>>,
-  days: number,
-): Record<string, Settlement> {
-  const next: Record<string, Settlement> = {}
-  for (const [id, settlement] of Object.entries(settlements)) {
-    next[id] = tickSettlement(state.world, settlement, days)
+  locationId: string,
+  events: readonly LifeEvent[],
+): readonly GameEvent[] {
+  if (events.length === 0) return []
+  const here = regionOf(state.world, locationId)
+  const news: GameEvent[] = []
+  for (const event of events) {
+    if (!here || regionOf(state.world, event.locationId)?.id !== here.id) continue
+    const name = state.world.locations[event.locationId]?.name ?? 'где-то рядом'
+    news.push({
+      type: 'notice',
+      text:
+        event.type === 'famine'
+          ? `Голод в ${name}: умерло ${event.deaths}.`
+          : `${name} опустел — жители разошлись.`,
+    })
   }
-  return next
+  return news
 }
 
 function addGoods(draft: Draft, good: GoodId, delta: number): void {

@@ -1,14 +1,15 @@
 import {
   ARCHETYPE_NAMES,
+  IMPORT_RELIANCE,
   KINGDOM_BLUEPRINTS,
   type KingdomBlueprint,
   NAME_QUALIFIERS,
-  POPULATION_RANGES,
   PROVINCE_NAMES,
   PROVINCE_PREFIXES,
   SETTLEMENT_NAMES,
   TERRAIN_FERTILITY,
 } from '../content/world'
+import { landCapacityOf } from '../life'
 import type { Rng } from '../rng'
 import { createRng, nextFloat, nextInt } from '../rng'
 import { hopsBetween } from './queries'
@@ -57,6 +58,7 @@ export function generateWorld(
         // Провинция обычно повторяет местность своей области, но не всегда:
         // иначе области выходят однородными до скуки.
         const terrain = roll.chance(0.7) ? regionPlan.terrain : roll.pick(blueprint.terrains)
+        const fertility = round2(roll.betweenFloat(TERRAIN_FERTILITY[terrain]))
         const locationIds: string[] = []
         const locationCount = roll.int(2, 4)
 
@@ -71,7 +73,15 @@ export function generateWorld(
             name: isCapital ? blueprint.capitalName : names.forArchetype(archetype),
             archetype,
             terrain,
-            population: roll.between(POPULATION_RANGES[archetype]),
+            // Население считается от того, сколько кормит земля: мир начинается
+            // в равновесии, а не в состоянии неизбежного голода.
+            population: Math.max(
+              20,
+              Math.round(
+                landCapacityOf(archetype, terrain, fertility) *
+                  roll.betweenFloat(IMPORT_RELIANCE[archetype]),
+              ),
+            ),
           }
           locationIds.push(id)
         }
@@ -81,7 +91,7 @@ export function generateWorld(
           regionId,
           name: names.forProvince(terrain),
           terrain,
-          fertility: round2(roll.betweenFloat(TERRAIN_FERTILITY[terrain])),
+          fertility,
           locationIds,
         }
         provinceIds.push(provinceId)

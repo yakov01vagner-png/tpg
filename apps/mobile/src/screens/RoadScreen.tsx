@@ -5,6 +5,7 @@ import {
   TERRAIN_LABELS,
   addressOf,
   canApply,
+  foodSecurity,
   formatDuration,
   hours,
   roadsFrom,
@@ -25,7 +26,11 @@ import { Empty, Section } from '../ui/atoms'
  */
 export function RoadScreen({ game }: { game: GameState }) {
   const here = game.world.locations[game.locationId]
+  const settlement = game.settlements[game.locationId]
   const roads = roadsFrom(game.world, game.locationId)
+  // Население и сытость берём живые: деревня могла обезлюдеть, пока ты ходил.
+  const people = settlement?.population ?? here?.population ?? 0
+  const fed = settlement ? wellFed(foodSecurity(settlement)) : null
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -34,8 +39,9 @@ export function RoadScreen({ game }: { game: GameState }) {
           <Text style={styles.hereName}>{here.name}</Text>
           <Text style={styles.hereMeta}>
             {ARCHETYPE_LABELS[here.archetype]} · {TERRAIN_LABELS[here.terrain]} ·{' '}
-            {formatPopulation(here.population)} жителей
+            {people > 0 ? `${formatPopulation(people)} жителей` : 'заброшено'}
           </Text>
+          {fed ? <Text style={fed.style}>{fed.label}</Text> : null}
           <Text style={styles.hereAddress}>{addressOf(game.world, game.locationId)}</Text>
         </View>
       ) : null}
@@ -45,13 +51,14 @@ export function RoadScreen({ game }: { game: GameState }) {
         {roads.map((road) => {
           const target = game.world.locations[road.to]
           if (!target) return null
+          const neighbours = game.settlements[road.to]?.population ?? target.population
           const command: Command = { type: 'travel', toLocationId: road.to }
           const check = canApply(game, command)
           return (
             <ActionCard
               key={road.to}
               title={target.name}
-              description={`${ARCHETYPE_LABELS[target.archetype]}, ${formatPopulation(target.population)} жителей · усталость +${travelFatigue(road.hours)}`}
+              description={`${ARCHETYPE_LABELS[target.archetype]}, ${neighbours > 0 ? `${formatPopulation(neighbours)} жителей` : 'заброшено'} · усталость +${travelFatigue(road.hours)}`}
               meta={formatDuration(hours(road.hours))}
               reason={check.ok ? null : check.message}
               onPress={() => dispatch(command)}
@@ -61,6 +68,16 @@ export function RoadScreen({ game }: { game: GameState }) {
       </Section>
     </ScrollView>
   )
+}
+
+/**
+ * Сытость словами: число обеспеченности игроку ничего не скажет, а «голодает»
+ * скажет сразу — и объяснит, почему тут втридорога просят за зерно.
+ */
+function wellFed(security: number): { label: string; style: object } {
+  if (security < 0.25) return { label: 'Голодает', style: styles.hungry }
+  if (security < 0.6) return { label: 'Живёт впроголодь', style: styles.lean }
+  return { label: 'Сыто', style: styles.fed }
 }
 
 /** 12400 → «12 400»: на телефоне длинные числа иначе не читаются. */
@@ -79,4 +96,7 @@ const styles = StyleSheet.create({
   hereName: { color: colors.text, fontSize: font.title },
   hereMeta: { color: colors.dim, fontSize: font.small, marginTop: spacing.xs },
   hereAddress: { color: colors.faint, fontSize: font.tiny, marginTop: spacing.sm },
+  fed: { color: colors.good, fontSize: font.small, marginTop: spacing.xs },
+  lean: { color: colors.gold, fontSize: font.small, marginTop: spacing.xs },
+  hungry: { color: colors.danger, fontSize: font.small, marginTop: spacing.xs },
 })
