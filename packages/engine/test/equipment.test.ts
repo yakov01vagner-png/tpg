@@ -44,7 +44,7 @@ describe('снаряжение', () => {
     const before = state.character.money
     state = ok(applyCommand(state, { type: 'buyItem', itemId: 'mail' }))
     // Заплатил за кольчугу, но что-то вернули за стёганку.
-    expect(state.character.money).toBeGreaterThan(before - ITEMS_BY_ID.mail!.price)
+    expect(state.character.money).toBeGreaterThan(before - (ITEMS_BY_ID.mail?.price ?? 0))
   })
 
   it('в деревне лат не купишь', () => {

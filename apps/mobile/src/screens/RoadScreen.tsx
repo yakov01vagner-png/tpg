@@ -17,6 +17,7 @@ import { dispatch } from '../game/store'
 import { colors, font, radius, spacing } from '../theme'
 import { ActionCard } from '../ui/ActionCard'
 import { Empty, Section } from '../ui/atoms'
+import { MapScreen } from './MapScreen'
 import { WorldScreen } from './WorldScreen'
 
 /**
@@ -27,7 +28,7 @@ import { WorldScreen } from './WorldScreen'
  * карты с зумом (DESIGN.md, п.10).
  */
 export function RoadScreen({ game }: { game: GameState }) {
-  const [view, setView] = useState<'roads' | 'world'>('roads')
+  const [view, setView] = useState<'roads' | 'map' | 'world'>('roads')
   const here = game.world.locations[game.locationId]
   const settlement = game.settlements[game.locationId]
   const roads = roadsFrom(game.world, game.locationId)
@@ -35,11 +36,11 @@ export function RoadScreen({ game }: { game: GameState }) {
   const people = settlement?.population ?? here?.population ?? 0
   const fed = settlement ? wellFed(foodSecurity(settlement)) : null
 
-  if (view === 'world') {
+  if (view !== 'roads') {
     return (
       <View style={styles.wrap}>
         <Switcher view={view} onChange={setView} />
-        <WorldScreen game={game} />
+        {view === 'map' ? <MapScreen game={game} /> : <WorldScreen game={game} />}
       </View>
     )
   }
@@ -108,19 +109,19 @@ function Switcher({
   view,
   onChange,
 }: {
-  view: 'roads' | 'world'
-  onChange: (next: 'roads' | 'world') => void
+  view: 'roads' | 'map' | 'world'
+  onChange: (next: 'roads' | 'map' | 'world') => void
 }) {
   return (
     <View style={styles.switcher}>
-      {(['roads', 'world'] as const).map((option) => (
+      {(['roads', 'map', 'world'] as const).map((option) => (
         <Pressable
           key={option}
           onPress={() => onChange(option)}
           style={[styles.switch, option === view && styles.switchActive]}
         >
           <Text style={[styles.switchLabel, option === view && styles.switchLabelActive]}>
-            {option === 'roads' ? 'Дороги' : 'Мир'}
+            {option === 'roads' ? 'Дороги' : option === 'map' ? 'Карта' : 'Сводка'}
           </Text>
         </Pressable>
       ))}

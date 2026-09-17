@@ -912,7 +912,7 @@ function giveFood(state: GameState, amount: number): CommandResult {
       ? { ...quest, progress: quest.progress + amount }
       : quest,
   )
-  notice(draft, hungry ? `Хлеб роздан. Здесь это запомнят.` : 'Хлеб оставлен в амбаре.')
+  notice(draft, hungry ? 'Хлеб роздан. Здесь это запомнят.' : 'Хлеб оставлен в амбаре.')
   advance(draft, hours(2))
   return close(draft)
 }

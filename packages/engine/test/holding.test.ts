@@ -76,9 +76,9 @@ describe('своё владение', () => {
 
     // Через положенное время амбар стоит.
     const later = tickDays(world, after.settlements, BUILDINGS.granary.days + 1).settlements
-    expect(
-      hasBuilding(later[after.locationId] ?? after.settlements[after.locationId]!, 'granary'),
-    ).toBe(true)
+    const built = later[after.locationId] ?? after.settlements[after.locationId]
+    if (!built) throw new Error('поселение пропало из мира')
+    expect(hasBuilding(built, 'granary')).toBe(true)
   })
 
   it('амбар поднимает норму запаса, которую место держит', () => {
