@@ -10,7 +10,8 @@
     "typecheck": "tsc --build --force && tsc --noEmit -p apps/mobile",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "mobile": "npm start --workspace @tpg/mobile"
+    "mobile": "npm start --workspace @tpg/mobile",
+    "web": "npm run web --workspace @tpg/mobile"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
