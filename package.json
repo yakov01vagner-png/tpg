@@ -11,11 +11,13 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "mobile": "npm start --workspace @tpg/mobile",
-    "web": "npm run web --workspace @tpg/mobile"
+    "web": "npm run web --workspace @tpg/mobile",
+    "century": "tsx tools/century.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^22.10.2",
+    "tsx": "^4.23.13",
     "typescript": "~6.0.3",
     "vitest": "^2.1.8"
   }
