@@ -2,6 +2,7 @@ import type { GoodId } from './content/goods'
 import { GOOD_IDS } from './content/goods'
 import type { Settlement } from './economy'
 import { RECRUIT_RECOVERY, recruitPool, targetStock } from './economy'
+import { hasBuilding } from './holding'
 import type { LocationArchetype, Terrain, World } from './world/types'
 
 /**
@@ -102,17 +103,24 @@ export function landCapacityOf(
 export function carryingCapacity(
   world: World,
   locationId: string,
-  _config: LifeConfig = LIFE,
+  settlement?: Settlement,
 ): number {
   const location = world.locations[locationId]
   if (!location) return 0
   const fertility = world.provinces[location.provinceId]?.fertility ?? 0.5
-  return landCapacityOf(location.archetype, location.terrain, fertility)
+  const base = landCapacityOf(location.archetype, location.terrain, fertility)
+  // Мельница кормит больше ртов с той же земли — значит, и предел выше.
+  return Math.round(base * (settlement && hasBuilding(settlement, 'mill') ? 1.18 : 1))
 }
 
 /** Сколько еды место производит за сутки. */
-export function foodCapacity(world: World, locationId: string, config: LifeConfig = LIFE): number {
-  return carryingCapacity(world, locationId, config) * config.foodPerPerson
+export function foodCapacity(
+  world: World,
+  locationId: string,
+  config: LifeConfig = LIFE,
+  settlement?: Settlement,
+): number {
+  return carryingCapacity(world, locationId, settlement) * config.foodPerPerson
 }
 
 export function foodStock(settlement: Settlement): number {
@@ -120,8 +128,13 @@ export function foodStock(settlement: Settlement): number {
 }
 
 /** Насколько место обеспечено едой: 1 — полный амбар, 0 — пусто. */
+export function stockDays(settlement: Settlement, config: LifeConfig = LIFE): number {
+  // Амбар не родит хлеба, но позволяет держать запас вдвое дольше.
+  return config.daysOfStock * (hasBuilding(settlement, 'granary') ? 1.8 : 1)
+}
+
 export function foodSecurity(settlement: Settlement, config: LifeConfig = LIFE): number {
-  const wanted = settlement.population * config.foodPerPerson * config.daysOfStock
+  const wanted = settlement.population * config.foodPerPerson * stockDays(settlement, config)
   if (wanted <= 0) return 1
   return Math.min(1, foodStock(settlement) / wanted)
 }
@@ -180,8 +193,8 @@ function produceAndEat(
     }
 
     const stock = { ...settlement.stock }
-    // Что даёт земля.
-    const produced = foodCapacity(world, id, config)
+    // Что даёт земля. Мельница выжимает из того же поля больше.
+    const produced = foodCapacity(world, id, config) * (hasBuilding(settlement, 'mill') ? 1.18 : 1)
     const location = world.locations[id]
     const seaside = location?.terrain === 'coast' || location?.terrain === 'marsh'
     if (seaside) {
@@ -201,11 +214,23 @@ function produceAndEat(
     const hunger = needed > 0 ? shortfall / needed : 0
 
     // Прочие товары потихоньку возвращаются к обычному для места уровню.
+    const smithy = hasBuilding(settlement, 'smithy')
     for (const good of GOOD_IDS) {
       if (good === 'grain' || good === 'fish') continue
-      const target = targetStock(world, id, good, settlement.population)
+      const craft = smithy && (good === 'tools' || good === 'weapons') ? 1.4 : 1
+      const target = targetStock(world, id, good, settlement.population) * craft
       stock[good] = stock[good] + (target - stock[good]) * config.goodsRecovery
     }
+
+    // Стройка идёт своим чередом, пока хозяин в отъезде.
+    const building =
+      settlement.building && settlement.building.daysLeft > 1
+        ? { ...settlement.building, daysLeft: settlement.building.daysLeft - 1 }
+        : null
+    const buildings =
+      settlement.building && settlement.building.daysLeft <= 1
+        ? [...settlement.buildings, settlement.building.id]
+        : settlement.buildings
 
     // Голод рождает разбой, сытость его гасит — медленно.
     const banditry = Math.min(
@@ -213,7 +238,9 @@ function produceAndEat(
       Math.max(0, settlement.banditry + (hunger > 0 ? hunger * 0.03 : -0.004)),
     )
     // Рекруты возвращаются: подросли, вернулись с отхожих промыслов.
-    const pool = recruitPool(settlement.population)
+    // При казармах идут охотнее: есть куда прийти и кому учить.
+    const pool =
+      recruitPool(settlement.population) * (hasBuilding(settlement, 'barracks') ? 1.5 : 1)
     const recruits = Math.min(pool, settlement.recruits + pool * RECRUIT_RECOVERY)
 
     let population = settlement.population
@@ -226,7 +253,7 @@ function produceAndEat(
         const refuge = bestFedNeighbour(world, settlements, id, config)
         if (refuge) arrivals[refuge] = (arrivals[refuge] ?? 0) + leaving
       }
-    } else if (population < carryingCapacity(world, id, config)) {
+    } else if (population < carryingCapacity(world, id, settlement)) {
       population += Math.max(1, Math.round(population * config.growth))
     }
 
@@ -239,8 +266,12 @@ function produceAndEat(
       ...settlement,
       population,
       stock: clampStock(stock),
-      recruits: Math.round(recruits),
+      // Дробь не округляем: суточная прибавка меньше человека, и округление
+      // до целого съело бы её полностью — рекруты не восполнялись бы никогда.
+      recruits: Math.round(recruits * 100) / 100,
       banditry: Math.round(banditry * 1000) / 1000,
+      building,
+      buildings,
     }
   }
 
@@ -275,7 +306,7 @@ function share(
     for (const id of group) {
       const settlement = next[id]
       if (!settlement || settlement.population <= 0) continue
-      const wanted = settlement.population * config.foodPerPerson * config.daysOfStock
+      const wanted = settlement.population * config.foodPerPerson * stockDays(settlement, config)
       const have = foodStock(settlement)
       // По опасным дорогам возят осторожнее и меньше.
       const safety = 1 - settlement.banditry * 0.5

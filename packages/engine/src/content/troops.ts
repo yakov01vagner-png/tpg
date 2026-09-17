@@ -6,7 +6,7 @@ import type { LocationArchetype } from '../world/types'
  * Именных спутников в игре нет: это безымянные наёмные специалисты. Поэтому
  * воин — это данные, а отряд — просто счётчик по видам.
  */
-export const TROOP_IDS = ['militia', 'spearman', 'archer', 'manAtArms', 'horseman'] as const
+export const TROOP_IDS = ['militia', 'spearman', 'archer', 'manAtArms', 'horseman', 'mage'] as const
 
 export type TroopId = (typeof TROOP_IDS)[number]
 
@@ -88,6 +88,21 @@ export const TROOPS: Record<TroopId, TroopDef> = {
     mounted: false,
     where: ['city', 'capital', 'fortress'],
     minPopulation: 3000,
+  },
+  mage: {
+    id: 'mage',
+    label: 'Маг',
+    description:
+      'Адепт школы, готовый идти за деньги. В строю бесполезен, но то, что он делает, строем не сделать.',
+    tier: 3,
+    hireCost: 160,
+    wage: 9,
+    attack: 2,
+    defense: 3,
+    ranged: 0,
+    mounted: false,
+    where: ['capital', 'city'],
+    minPopulation: 5000,
   },
   horseman: {
     id: 'horseman',

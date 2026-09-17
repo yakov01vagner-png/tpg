@@ -1,6 +1,6 @@
 import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
-import type { Battle, GroupId, OrderId } from './battle'
+import type { Battle, BattleSide, GroupId, OrderId } from './battle'
 import { fleeBattle, resolveRound, startBattle, unformUp } from './battle'
 import type { Character } from './character'
 import {
@@ -14,15 +14,28 @@ import {
 } from './character'
 import type { Availability, Content, Requirements } from './content'
 import { CONTENT } from './content'
+import type { BuildingId } from './content/buildings'
+import { BUILDINGS } from './content/buildings'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import type { TroopId } from './content/troops'
-import { TROOPS } from './content/troops'
+import { TROOPS, TROOP_FOOD_PER_DAY } from './content/troops'
 import type { Settlement } from './economy'
 import { quoteBuy, quoteSell } from './economy'
 import type { GameEvent } from './events'
+import {
+  PLAYER,
+  dailyTax,
+  freeSlots,
+  garrisonLimit,
+  garrisonSize,
+  garrisonWages,
+  hasBuilding,
+  holdingsOf,
+  isOwnedByPlayer,
+} from './holding'
 import type { LifeEvent } from './life'
-import { tickDays } from './life'
+import { foodSecurity, tickDays } from './life'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
 import type { Party } from './party'
 import {
@@ -58,7 +71,8 @@ import {
   nextTimeOfDay,
 } from './time'
 import type { Politics } from './war'
-import { banditBand, tickPolitics, warband, warsOf } from './war'
+import type { WarEvent } from './war'
+import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
 import { kingdomOf, regionOf, roadsFrom } from './world/queries'
 
 /**
@@ -77,6 +91,14 @@ export type Command =
   | { readonly type: 'takeService'; readonly kingdomId: string }
   | { readonly type: 'leaveService' }
   | { readonly type: 'seekEnemy' }
+  | { readonly type: 'build'; readonly building: BuildingId }
+  | { readonly type: 'station'; readonly troop: TroopId; readonly count: number }
+  | { readonly type: 'withdraw'; readonly troop: TroopId; readonly count: number }
+  | { readonly type: 'besiege' }
+  | { readonly type: 'siegeWait'; readonly days: number }
+  | { readonly type: 'siegeAssault' }
+  | { readonly type: 'siegeLift' }
+  | { readonly type: 'askForFief' }
   | { readonly type: 'buy'; readonly good: GoodId; readonly amount: number }
   | { readonly type: 'sell'; readonly good: GoodId; readonly amount: number }
   | { readonly type: 'work'; readonly jobId: string }
@@ -99,6 +121,8 @@ export type FailureCode =
   | 'unavailableHere'
   | 'inBattle'
   | 'noRecruits'
+  | 'notYours'
+  | 'noRoom'
   | 'noGoods'
   | 'overloaded'
   | 'invalid'
@@ -147,6 +171,22 @@ export function applyCommand(
       return leaveService(state)
     case 'seekEnemy':
       return seekEnemy(state)
+    case 'build':
+      return build(state, command.building)
+    case 'station':
+      return moveToGarrison(state, command.troop, command.count)
+    case 'withdraw':
+      return moveFromGarrison(state, command.troop, command.count)
+    case 'besiege':
+      return besiege(state)
+    case 'siegeWait':
+      return siegeWait(state, command.days)
+    case 'siegeAssault':
+      return siegeAssault(state)
+    case 'siegeLift':
+      return siegeLift(state)
+    case 'askForFief':
+      return askForFief(state)
     case 'buy':
       return buy(state, command.good, command.amount)
     case 'sell':
@@ -340,7 +380,10 @@ function battleOrders(state: GameState, orders: Readonly<Record<GroupId, OrderId
   const result = resolveRound(
     battle,
     orders,
-    { command: skillLevel(state.character, 'command') },
+    {
+      command: skillLevel(state.character, 'command'),
+      magic: skillLevel(state.character, 'magic'),
+    },
     draft.rng,
   )
   draft.rng = result.rng
@@ -391,6 +434,28 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
 
   if (battle.outcome === 'won') {
     addMoney(draft, battle.spoils.money)
+    draft.renown += 1
+
+    // Взятие: место меняет хозяина и надолго это запоминает.
+    if (battle.stake?.type === 'siege') {
+      const taken = draft.settlements[battle.stake.locationId]
+      const name = state.world.locations[battle.stake.locationId]?.name ?? 'место'
+      if (taken) {
+        draft.settlements = {
+          ...draft.settlements,
+          [battle.stake.locationId]: {
+            ...taken,
+            owner: PLAYER,
+            garrison: {},
+            population: Math.round(taken.population * 0.93),
+            banditry: Math.min(1, taken.banditry + 0.25),
+            stock: { ...taken.stock, grain: Math.round(taken.stock.grain * 0.6) },
+          },
+        }
+        notice(draft, `${name} взят. Людей поубавилось, и они это запомнят.`)
+      }
+      draft.siege = null
+    }
     const captured = battle.spoils.prisoners
     if (captured > 0) {
       if (prisoners === 'ransom') {
@@ -419,6 +484,220 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
     }
   }
   return close(draft)
+}
+
+/**
+ * Своя земля: строить, ставить гарнизон и снимать его.
+ *
+ * Всё это доступно только держателю. Владеть — значит платить: постройка стоит
+ * денег и суток, гарнизон стоит жалованья и ест местный хлеб.
+ */
+function build(state: GameState, building: BuildingId): CommandResult {
+  const def = BUILDINGS[building]
+  if (!def) return fail('unknownAction', 'Такого не строят.')
+  const settlement = state.settlements[state.locationId]
+  const here = state.world.locations[state.locationId]
+  if (!settlement || !here) return fail('invalid', 'Непонятно, где находится герой.')
+  if (!isOwnedByPlayer(settlement)) return fail('notYours', 'Это не твоя земля.')
+  if (def.where && !def.where.includes(here.archetype)) {
+    return fail('unavailableHere', 'В таком месте это не построишь.')
+  }
+  if (hasBuilding(settlement, building)) return fail('invalid', 'Уже стоит.')
+  if (settlement.building) return fail('noRoom', 'Здесь уже идёт стройка.')
+  if (freeSlots(state.world, settlement) <= 0) return fail('noRoom', 'Свободного места больше нет.')
+  if (state.character.money < def.cost) {
+    return fail('noMoney', `Не хватает денег: нужно ${def.cost}, есть ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  notice(draft, `Заложено: ${def.label.toLowerCase()} — ${def.days} суток работы.`)
+  advance(draft, hours(2))
+  addMoney(draft, -def.cost)
+  draft.settlements = {
+    ...draft.settlements,
+    [state.locationId]: { ...settlement, building: { id: building, daysLeft: def.days } },
+  }
+  return close(draft)
+}
+
+function moveToGarrison(state: GameState, troop: TroopId, count: number): CommandResult {
+  if (!TROOPS[troop]) return fail('unknownAction', 'Таких не бывает.')
+  if (!Number.isInteger(count) || count <= 0) return fail('invalid', 'Сколько именно?')
+  const settlement = state.settlements[state.locationId]
+  if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
+  if (!isOwnedByPlayer(settlement)) return fail('notYours', 'Это не твоя земля.')
+  if (troopCount(state.party, troop) < count) return fail('invalid', 'Столько у тебя нет.')
+  if (garrisonSize(settlement) + count > garrisonLimit(state.world, settlement)) {
+    return fail('noRoom', 'Столько здесь не разместить — нужны казармы.')
+  }
+
+  const draft = open(state)
+  notice(draft, `В гарнизон: ${TROOPS[troop].label.toLowerCase()} — ${count}.`)
+  draft.party = withUnits(draft.party, troop, -count)
+  draft.settlements = {
+    ...draft.settlements,
+    [state.locationId]: {
+      ...settlement,
+      garrison: { ...settlement.garrison, [troop]: (settlement.garrison[troop] ?? 0) + count },
+    },
+  }
+  return close(draft)
+}
+
+function moveFromGarrison(state: GameState, troop: TroopId, count: number): CommandResult {
+  if (!TROOPS[troop]) return fail('unknownAction', 'Таких не бывает.')
+  if (!Number.isInteger(count) || count <= 0) return fail('invalid', 'Сколько именно?')
+  const settlement = state.settlements[state.locationId]
+  if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
+  if (!isOwnedByPlayer(settlement)) return fail('notYours', 'Это не твоя земля.')
+  if ((settlement.garrison[troop] ?? 0) < count) return fail('invalid', 'Столько в гарнизоне нет.')
+
+  const draft = open(state)
+  notice(draft, `Из гарнизона: ${TROOPS[troop].label.toLowerCase()} — ${count}.`)
+  draft.party = withUnits(draft.party, troop, count)
+  const garrison = { ...settlement.garrison }
+  const left = (garrison[troop] ?? 0) - count
+  if (left <= 0) delete garrison[troop]
+  else garrison[troop] = left
+  draft.settlements = { ...draft.settlements, [state.locationId]: { ...settlement, garrison } }
+  return close(draft)
+}
+
+/**
+ * Осада (DESIGN.md, п.5: осады — отдельная фаза того же боя).
+ *
+ * Стены не делают отдельной игры: это множитель обороны в тех же раундах.
+ * Зато у осаждающего есть второе оружие — время: сидеть под стенами дешевле,
+ * чем лезть на них, но пока сидишь, тебя самого надо кормить.
+ */
+function besiege(state: GameState): CommandResult {
+  if (state.siege) return fail('invalid', 'Ты уже стоишь под стенами.')
+  const settlement = state.settlements[state.locationId]
+  const here = state.world.locations[state.locationId]
+  if (!settlement || !here) return fail('invalid', 'Непонятно, где находится герой.')
+  if (isOwnedByPlayer(settlement)) return fail('invalid', 'Это и так твоё.')
+  if (partySize(state.party) < 8) return fail('invalid', 'С такими силами стены не обложишь.')
+  if (!hostileTo(state, settlement)) {
+    return fail('invalid', 'Это место тебе не враг — на него незачем идти.')
+  }
+
+  const draft = open(state)
+  notice(draft, `${here.name} обложен. Дальше — ждать или штурмовать.`)
+  advance(draft, hours(6))
+  addFatigue(draft, 10)
+  draft.siege = { locationId: state.locationId, days: 0 }
+  return close(draft)
+}
+
+/** Сидеть под стенами: у осаждённых кончается хлеб, у осаждающих — терпение. */
+function siegeWait(state: GameState, days: number): CommandResult {
+  const siege = state.siege
+  if (!siege) return fail('invalid', 'Ты никого не осаждаешь.')
+  if (!Number.isInteger(days) || days <= 0 || days > 10) {
+    return fail('invalid', 'Ждать можно от суток до десяти.')
+  }
+  const settlement = state.settlements[siege.locationId]
+  if (!settlement) return fail('invalid', 'Осаждать нечего.')
+
+  const draft = open(state)
+  notice(draft, `Осада: ${days} сут. под стенами.`)
+  advance(draft, hours(24 * days))
+  addFatigue(draft, days * 4)
+  // Блокада: в город не везут ничего, запасы тают быстрее обычного.
+  draft.settlements = {
+    ...draft.settlements,
+    [siege.locationId]: {
+      ...settlement,
+      stock: {
+        ...settlement.stock,
+        grain: Math.max(0, settlement.stock.grain * (1 - 0.15 * days)),
+        fish: Math.max(0, settlement.stock.fish * (1 - 0.2 * days)),
+      },
+    },
+  }
+  draft.siege = { ...siege, days: siege.days + days }
+  return close(draft)
+}
+
+function siegeAssault(state: GameState): CommandResult {
+  const siege = state.siege
+  if (!siege) return fail('invalid', 'Ты никого не осаждаешь.')
+  const settlement = state.settlements[siege.locationId]
+  const here = state.world.locations[siege.locationId]
+  if (!settlement || !here) return fail('invalid', 'Осаждать нечего.')
+
+  const draft = open(state)
+  // Изголодавшийся гарнизон дерётся хуже: за это и сидят под стенами.
+  const starving = Math.max(0.35, foodSecurity(settlement))
+  const defenders: BattleSide = {
+    name: `Гарнизон: ${here.name}`,
+    units:
+      garrisonSize(settlement) > 0
+        ? settlement.garrison
+        : { militia: Math.max(4, Math.round(settlement.population / 120)) },
+    morale: Math.round(45 + starving * 35 - siege.days * 2),
+    fatigue: 0,
+  }
+  draft.battle = startBattle(draft.party, defenders, here.terrain, {
+    stake: { type: 'siege', locationId: siege.locationId },
+    wallBonus: hasBuilding(settlement, 'walls') ? 2.1 : 1.35,
+  })
+  notice(draft, `Штурм: ${here.name}.`)
+  advance(draft, hours(2))
+  addFatigue(draft, 8)
+  return close(draft)
+}
+
+function siegeLift(state: GameState): CommandResult {
+  if (!state.siege) return fail('invalid', 'Ты никого не осаждаешь.')
+  const draft = open(state)
+  notice(draft, 'Осада снята.')
+  draft.siege = null
+  return close(draft)
+}
+
+/** Земля за службу: корона жалует лен тому, кто себя показал. */
+function askForFief(state: GameState): CommandResult {
+  if (!state.service) return fail('invalid', 'Земли просят у того, кому служат.')
+  if (state.renown < 3) {
+    return fail('requirements', `За тобой мало славы: нужно 3 победы, есть ${state.renown}.`)
+  }
+  const crown = `crown:${state.service}`
+  const here = kingdomOf(state.world, state.locationId)
+  if (here?.id !== state.service) {
+    return fail('unavailableHere', 'Просить надо там, где тебя слышат, — на землях сюзерена.')
+  }
+
+  // Жалуют не лучшее: самое мелкое из того, что держит корона.
+  const candidates = Object.values(state.settlements)
+    .filter((settlement) => settlement.owner === crown)
+    .filter((settlement) => state.world.locations[settlement.locationId]?.archetype !== 'capital')
+    .sort((a, b) => a.population - b.population)
+  const granted = candidates[0]
+  if (!granted) return fail('unavailableHere', 'У короны нет свободной земли для тебя.')
+
+  const draft = open(state)
+  const name = state.world.locations[granted.locationId]?.name ?? 'земля'
+  notice(draft, `Пожалован лен: ${name}.`)
+  advance(draft, hours(3))
+  draft.settlements = {
+    ...draft.settlements,
+    [granted.locationId]: { ...granted, owner: PLAYER },
+  }
+  draft.renown = Math.max(0, draft.renown - 3)
+  return close(draft)
+}
+
+/** Враждебно ли место: воюет ли его держатель с тем, за кого стоит игрок. */
+function hostileTo(state: GameState, settlement: Settlement): boolean {
+  const owner = settlement.owner
+  if (!owner) return true
+  const side = state.service
+  if (!side) return false
+  const ownerSide = owner.startsWith('crown:')
+    ? owner.slice('crown:'.length)
+    : (lordById(state.politics, owner)?.kingdomId ?? owner)
+  return atWar(state.politics, side, ownerSide)
 }
 
 function takeService(state: GameState, kingdomId: string): CommandResult {
@@ -770,6 +1049,8 @@ interface Draft {
   battle: Battle | null
   politics: Politics
   service: string | null
+  siege: { locationId: string; days: number } | null
+  renown: number
   over: boolean
   readonly base: GameState
   readonly events: GameEvent[]
@@ -786,6 +1067,8 @@ function open(state: GameState): Draft {
     battle: state.battle,
     politics: state.politics,
     service: state.service,
+    siege: state.siege,
+    renown: state.renown,
     over: state.over,
     base: state,
     events: [],
@@ -827,6 +1110,8 @@ function close(draft: Draft): CommandResult {
     battle: draft.battle,
     politics: draft.politics,
     service: draft.service,
+    siege: draft.siege,
+    renown: draft.renown,
     over: draft.over,
     log: appendLog(draft.base.log, draft.time, draft.events),
   }
@@ -863,31 +1148,57 @@ function worldNews(
 function warNews(
   state: GameState,
   locationId: string,
-  events: readonly import('./war').WarEvent[],
+  events: readonly WarEvent[],
 ): readonly GameEvent[] {
   const news: GameEvent[] = []
   const hereKingdom = kingdomOf(state.world, locationId)?.id
+  const kingdomName = (id: string) =>
+    state.world.kingdoms[id]?.name ?? lordById(state.politics, id)?.name ?? 'неизвестные'
+
   for (const event of events) {
     if (event.type === 'raid') {
-      if (regionOf(state.world, event.locationId)?.id !== regionOf(state.world, locationId)?.id)
+      if (regionOf(state.world, event.locationId)?.id !== regionOf(state.world, locationId)?.id) {
         continue
+      }
       const name = state.world.locations[event.locationId]?.name ?? 'соседнее селение'
       news.push({ type: 'notice', text: `${name} разорено: уведено и убито ${event.lost}.` })
       continue
     }
-    // О войнах и мире слышно везде, но только про свои и соседские королевства.
-    const involved = event.war.a === hereKingdom || event.war.b === hereKingdom
-    const names = `${state.world.kingdoms[event.war.a]?.name ?? '?'} и ${state.world.kingdoms[event.war.b]?.name ?? '?'}`
-    if (event.type === 'warDeclared') {
+
+    if (event.type === 'rebellion') {
+      const lord = lordById(state.politics, event.lordId)
       news.push({
         type: 'notice',
-        text: involved
-          ? `Война: ${names}. Причина — ${event.war.reason}.`
-          : `Говорят, ${names} схватились: ${event.war.reason}.`,
+        text: lord
+          ? `${lord.title} ${lord.name} поднял мятеж против короны.`
+          : 'Один из вассалов поднял мятеж.',
       })
-    } else {
-      news.push({ type: 'notice', text: `Мир между ${names}.` })
+      continue
     }
+
+    if (event.type === 'archmage') {
+      // О своём архимаге слышно, о чужом — нет.
+      if (event.kingdomId !== hereKingdom) continue
+      const words = {
+        free: 'архимаг короны снова при дворе',
+        busy: 'архимаг короны занят своими делами',
+        refused: 'архимаг короны отказался служить',
+      }
+      news.push({ type: 'notice', text: `Говорят, ${words[event.state]}.` })
+      continue
+    }
+
+    const involved = event.war.a === hereKingdom || event.war.b === hereKingdom
+    const names = `${kingdomName(event.war.a)} и ${kingdomName(event.war.b)}`
+    news.push({
+      type: 'notice',
+      text:
+        event.type === 'warDeclared'
+          ? involved
+            ? `Война: ${names}. Причина — ${event.war.reason}.`
+            : `Говорят, ${names} схватились: ${event.war.reason}.`
+          : `Мир между ${names}.`,
+    })
   }
   return news
 }
@@ -899,6 +1210,7 @@ function warNews(
  * и неоплаченный отряд теряет дух и расходится сам — без всяких запретов.
  */
 function payUpkeep(draft: Draft, days: number): void {
+  collectHoldings(draft, days)
   if (partySize(draft.party) === 0) return
 
   let unpaid = 0
@@ -933,6 +1245,44 @@ function payUpkeep(draft: Draft, days: number): void {
   if (unpaid > 0) notice(draft, `Жалованье не плачено ${unpaid} сут. — люди ропщут.`)
   if (unfed > 0) notice(draft, `Отряд голодал ${unfed} сут.`)
   if (deserted > 0) notice(draft, `Ушло по-тихому: ${deserted}.`)
+}
+
+/**
+ * Своя земля за сутки: подати приходят, гарнизон ест и получает жалованье.
+ *
+ * Разорённая и голодная земля приносит меньше, чем стоит её держать, — и это
+ * правильно: владение должно быть решением, а не бесплатной прибавкой.
+ */
+function collectHoldings(draft: Draft, days: number): void {
+  const mine = holdingsOf(draft.settlements, PLAYER)
+  if (mine.length === 0) return
+
+  let income = 0
+  let wages = 0
+  const settlements = { ...draft.settlements }
+
+  for (const settlement of mine) {
+    income += dailyTax(settlement, foodSecurity(settlement)) * days
+    wages += garrisonWages(settlement) * days
+
+    // Гарнизон ест местный хлеб: он же его и защищает.
+    const eaten = Math.min(
+      settlement.stock.grain,
+      garrisonSize(settlement) * TROOP_FOOD_PER_DAY * days,
+    )
+    if (eaten > 0) {
+      settlements[settlement.locationId] = {
+        ...settlement,
+        stock: { ...settlement.stock, grain: settlement.stock.grain - eaten },
+      }
+    }
+  }
+
+  draft.settlements = settlements
+  const net = Math.round(income - wages)
+  if (net !== 0) addMoney(draft, net)
+  if (net < 0) notice(draft, `Земля не окупает гарнизон: ушло ${Math.abs(net)}.`)
+  else if (net > 0) notice(draft, `Подати с владений: ${net}.`)
 }
 
 /** Накормить отряд из поклажи. Возвращает false, если еды не хватило. */

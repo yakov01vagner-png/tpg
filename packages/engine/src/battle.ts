@@ -15,7 +15,7 @@ import type { Terrain } from './world/types'
  * выглядеть как разгром.
  */
 
-export const GROUP_IDS = ['vanguard', 'archers', 'flank', 'reserve'] as const
+export const GROUP_IDS = ['vanguard', 'archers', 'flank', 'reserve', 'mages'] as const
 export type GroupId = (typeof GROUP_IDS)[number]
 
 export const GROUP_LABELS: Record<GroupId, string> = {
@@ -23,9 +23,19 @@ export const GROUP_LABELS: Record<GroupId, string> = {
   archers: 'Стрелки',
   flank: 'Фланг',
   reserve: 'Резерв',
+  mages: 'Маги',
 }
 
-export const ORDER_IDS = ['hold', 'charge', 'shoot', 'flank', 'fallBack'] as const
+export const ORDER_IDS = [
+  'hold',
+  'charge',
+  'shoot',
+  'flank',
+  'fallBack',
+  'fireball',
+  'curse',
+  'ward',
+] as const
 export type OrderId = (typeof ORDER_IDS)[number]
 
 export const ORDER_LABELS: Record<OrderId, string> = {
@@ -34,6 +44,9 @@ export const ORDER_LABELS: Record<OrderId, string> = {
   shoot: 'Стрелять',
   flank: 'Обойти с фланга',
   fallBack: 'Отойти',
+  fireball: 'Ударить огнём',
+  curse: 'Наслать порчу',
+  ward: 'Укрыть своих',
 }
 
 export type Units = Readonly<Partial<Record<TroopId, number>>>
@@ -59,6 +72,12 @@ export interface Battle {
   readonly log: readonly string[]
   /** Заполняется, когда бой окончен. */
   readonly spoils: { readonly money: number; readonly prisoners: number }
+  /** Что стоит на кону: для штурма — место, которое переходит победителю. */
+  readonly stake: { readonly type: 'siege'; readonly locationId: string } | null
+  /** Во сколько раз стены усиливают оборону. Единица — стен нет. */
+  readonly wallBonus: number
+  /** Магическое истощение: чем выше, тем слабее и опаснее колдовство. */
+  readonly strain: number
 }
 
 /** Ниже этого рубежа отряд перестаёт драться и бежит. */
@@ -79,13 +98,15 @@ export function formUp(party: Party): Record<GroupId, Units> {
     archers: {},
     flank: {},
     reserve: {},
+    mages: {},
   }
   for (const [id, count] of Object.entries(party.units)) {
     const troop = id as TroopId
     const def = TROOPS[troop]
     const total = count ?? 0
     if (total <= 0) continue
-    if (def.ranged > 0) groups.archers[troop] = total
+    if (troop === 'mage') groups.mages[troop] = total
+    else if (def.ranged > 0) groups.archers[troop] = total
     else if (def.mounted) groups.flank[troop] = total
     else {
       // Четверть строя держим в резерве: он вступает свежим.
@@ -108,8 +129,16 @@ export function unformUp(groups: Readonly<Record<GroupId, Units>>): Units {
   return units
 }
 
-export function startBattle(party: Party, enemy: BattleSide, terrain: Terrain): Battle {
+export function startBattle(
+  party: Party,
+  enemy: BattleSide,
+  terrain: Terrain,
+  options: { readonly stake?: Battle['stake']; readonly wallBonus?: number } = {},
+): Battle {
   return {
+    stake: options.stake ?? null,
+    wallBonus: options.wallBonus ?? 1,
+    strain: 0,
     enemy,
     enemyStart: unitsSize(enemy.units),
     groups: formUp(party),
@@ -132,11 +161,17 @@ const ORDER_EFFECT: Record<OrderId, { attack: number; defense: number }> = {
   shoot: { attack: 1.2, defense: 0.75 },
   flank: { attack: 1.6, defense: 0.55 },
   fallBack: { attack: 0.15, defense: 1.4 },
+  // Маги в общий счёт силы не входят: их дело считается отдельно.
+  fireball: { attack: 0, defense: 0.6 },
+  curse: { attack: 0, defense: 0.6 },
+  ward: { attack: 0, defense: 0.8 },
 }
 
 export interface RoundContext {
   /** Навык «Командование» героя: он множит силу всего отряда. */
   readonly command: number
+  /** Навык «Магия» героя: сам он тоже чего-то стоит на поле. */
+  readonly magic: number
 }
 
 export interface RoundResult {
@@ -163,12 +198,41 @@ export function resolveRound(
     (id) => unitsSize(battle.groups[id]) > 0 && (orders[id] === 'hold' || orders[id] === 'charge'),
   )
 
+  // Колдовство считается отдельно от строя: маг не прибавляет копий, он меняет
+  // условия боя. И берёт за это плату — истощением и риском (DESIGN.md, п.5).
+  let enemyMoraleHit = 0
+  let extraEnemyLosses = 0
+  let wardBonus = 1
+  let strainAdded = 0
+  const strainFactor = Math.max(0.2, 1 - battle.strain / 110)
+
   for (const id of GROUP_IDS) {
     const units = battle.groups[id]
     if (unitsSize(units) === 0) continue
     const order = orders[id] ?? 'hold'
     const effect = ORDER_EFFECT[order]
     const power = groupPower(units, order, battle.terrain)
+
+    if (id === 'mages') {
+      const mages = unitsSize(units)
+      // Ранг самого героя добавляется к общей силе круга.
+      const might = (mages + context.magic / 25) * strainFactor
+      if (order === 'fireball') {
+        extraEnemyLosses += 0.018 * might
+        strainAdded += 14
+        log.push(`Маги бьют огнём: ${mages} круга.`)
+      } else if (order === 'curse') {
+        enemyMoraleHit += 3.5 * might
+        strainAdded += 9
+        log.push('Над чужим строем поднимается вой: порча.')
+      } else if (order === 'ward') {
+        wardBonus += 0.07 * might
+        strainAdded += 6
+        log.push('Маги держат защиту над своими.')
+      }
+      defense += power.defense * effect.defense
+      continue
+    }
 
     if (order === 'shoot' && power.ranged === 0) {
       log.push(`${GROUP_LABELS[id]}: стрелять нечем.`)
@@ -187,7 +251,7 @@ export function resolveRound(
   const fatiguePenalty = 1 - battle.fatigue / 250
   const moraleFactor = 0.6 + battle.morale / 250
   attack *= commandBonus * fatiguePenalty * moraleFactor
-  defense *= commandBonus * fatiguePenalty * moraleFactor
+  defense *= commandBonus * fatiguePenalty * moraleFactor * wardBonus
 
   // Враг: простой выбор — сильный лезет вперёд, слабый держится, разбитый пятится.
   const enemyOrder = chooseEnemyOrder(battle)
@@ -197,8 +261,13 @@ export function resolveRound(
   const enemyFatiguePenalty = 1 - battle.enemy.fatigue / 250
   const enemyAttack =
     enemyPower.attack * enemyEffect.attack * enemyMoraleFactor * enemyFatiguePenalty
+  // Стены считаются здесь: штурм — тот же бой, только обороне помогает камень.
   const enemyDefense =
-    enemyPower.defense * enemyEffect.defense * enemyMoraleFactor * enemyFatiguePenalty
+    enemyPower.defense *
+    enemyEffect.defense *
+    enemyMoraleFactor *
+    enemyFatiguePenalty *
+    battle.wallBonus
 
   log.push(`${battle.enemy.name}: ${ORDER_LABELS[enemyOrder].toLowerCase()}.`)
 
@@ -208,7 +277,7 @@ export function resolveRound(
   const [enemySwing, afterEnemySwing] = variance(generator, 0.15)
   generator = afterEnemySwing
 
-  const enemyLossShare = lossShare(attack * swing, enemyDefense)
+  const enemyLossShare = lossShare(attack * swing, enemyDefense) + extraEnemyLosses
   const ownLossShare = lossShare(enemyAttack * enemySwing, defense)
 
   const enemySize = unitsSize(battle.enemy.units)
@@ -230,6 +299,23 @@ export function resolveRound(
       : `Раунд ${round}: сошлись, но никто не дрогнул.`,
   )
 
+  // Откат: перегоревший круг теряет человека и пугает своих.
+  let strain = Math.min(140, battle.strain + strainAdded)
+  let backlashMorale = 0
+  let groupsAfterBacklash = groups
+  if (strain > 70 && strainAdded > 0) {
+    const [backfires, afterBackfire] = rollChance(generator, (strain - 70) / 140)
+    generator = afterBackfire
+    if (backfires) {
+      const [burned, afterBurn] = takeLosses(groups.mages, 1, generator)
+      generator = afterBurn
+      groupsAfterBacklash = { ...groups, mages: burned }
+      backlashMorale = 6
+      strain = Math.max(0, strain - 25)
+      log.push('Одного из магов выжгло изнутри. Своим это видеть не стоило.')
+    }
+  }
+
   // Потери бьют по духу сильнее, чем по численности: строй ломается раньше,
   // чем кончаются люди. Сравниваем доли, а не головы: двое из троих — разгром,
   // двое из сотни — царапина.
@@ -238,7 +324,8 @@ export function resolveRound(
   const enemyShare = enemySize > 0 ? enemyLosses / enemySize : 0
   const morale = clampMorale(
     battle.morale -
-      ownShare * MORALE_PER_LOSS +
+      ownShare * MORALE_PER_LOSS -
+      backlashMorale +
       (enemyShare > ownShare ? 4 : 0) -
       outnumberedPenalty(ownSize, enemySize),
   )
@@ -246,7 +333,8 @@ export function resolveRound(
     battle.enemy.morale -
       enemyShare * MORALE_PER_LOSS +
       (ownShare > enemyShare ? 4 : 0) -
-      outnumberedPenalty(enemySize, ownSize),
+      outnumberedPenalty(enemySize, ownSize) -
+      enemyMoraleHit,
   )
 
   const nextEnemy: BattleSide = {
@@ -283,7 +371,8 @@ export function resolveRound(
     battle: {
       ...battle,
       enemy: nextEnemy,
-      groups,
+      groups: groupsAfterBacklash,
+      strain,
       morale,
       fatigue: Math.min(100, battle.fatigue + 8),
       round,
@@ -391,7 +480,13 @@ function takeGroupLosses(
   orders: Readonly<Record<GroupId, OrderId>> | null,
   rng: Rng,
 ): [Record<GroupId, Units>, Rng] {
-  const exposure: Record<GroupId, number> = { vanguard: 0, archers: 0, flank: 0, reserve: 0 }
+  const exposure: Record<GroupId, number> = {
+    vanguard: 0,
+    archers: 0,
+    flank: 0,
+    reserve: 0,
+    mages: 0,
+  }
   for (const id of GROUP_IDS) {
     const size = unitsSize(groups[id])
     if (size === 0) continue
@@ -404,7 +499,9 @@ function takeGroupLosses(
           : order === 'shoot'
             ? 0.5
             : 0.35
-    exposure[id] = size * (id === 'reserve' ? weight * 0.3 : weight)
+    // Маги стоят позади всех: до них добираются в последнюю очередь.
+    const shelter = id === 'reserve' ? 0.3 : id === 'mages' ? 0.15 : 1
+    exposure[id] = size * weight * shelter
   }
   const total = GROUP_IDS.reduce((sum, id) => sum + exposure[id], 0)
   const next: Record<GroupId, Units> = { ...groups }

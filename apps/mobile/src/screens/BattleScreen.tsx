@@ -22,6 +22,7 @@ const ORDERS_FOR: Record<GroupId, readonly OrderId[]> = {
   archers: ['shoot', 'hold', 'fallBack'],
   flank: ['flank', 'charge', 'hold'],
   reserve: ['hold', 'charge', 'fallBack'],
+  mages: ['fireball', 'curse', 'ward'],
 }
 
 const DEFAULT_ORDERS: Record<GroupId, OrderId> = {
@@ -29,6 +30,7 @@ const DEFAULT_ORDERS: Record<GroupId, OrderId> = {
   archers: 'shoot',
   flank: 'flank',
   reserve: 'hold',
+  mages: 'fireball',
 }
 
 /**
@@ -63,6 +65,12 @@ export function BattleScreen({ game }: { game: GameState }) {
         <Text style={styles.line}>
           Раунд {battle.round} · твои {moraleWord(battle.morale)}
         </Text>
+        {battle.strain > 0 ? (
+          <Text style={battle.strain > 70 ? styles.strainHigh : styles.line}>
+            Истощение круга: {battle.strain}
+            {battle.strain > 70 ? ' — колдовать опасно' : ''}
+          </Text>
+        ) : null}
       </View>
 
       {finished ? null : (
@@ -177,6 +185,7 @@ const styles = StyleSheet.create({
   },
   title: { color: colors.text, fontSize: font.title },
   line: { color: colors.dim, fontSize: font.small },
+  strainHigh: { color: colors.danger, fontSize: font.small },
   group: {
     alignItems: 'center',
     backgroundColor: colors.surface,

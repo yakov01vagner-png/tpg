@@ -1,4 +1,7 @@
 import {
+  BUILDINGS,
+  BUILDING_IDS,
+  type BuildingId,
   type Command,
   type GameState,
   MAGIC_RANKS,
@@ -6,16 +9,23 @@ import {
   type TimeWindow,
   canApply,
   coursesAt,
+  dailyTax,
   examsAt,
+  foodSecurity,
   formatDuration,
   formatWindowShort,
+  freeSlots,
+  garrisonLimit,
+  garrisonSize,
+  isOwnedByPlayer,
   jobsAt,
   kingdomOf,
+  lordById,
   warsOf,
 } from '@tpg/engine'
-import { ScrollView, StyleSheet } from 'react-native'
+import { ScrollView, StyleSheet, Text, View } from 'react-native'
 import { dispatch } from '../game/store'
-import { spacing } from '../theme'
+import { colors, font, radius, spacing } from '../theme'
 import { ActionCard } from '../ui/ActionCard'
 import { Empty, Section } from '../ui/atoms'
 
@@ -92,6 +102,108 @@ export function LocationScreen({ game }: { game: GameState }) {
         })}
       </Section>
 
+      <Section title="Владение">
+        {(() => {
+          const settlement = game.settlements[game.locationId]
+          const here = game.world.locations[game.locationId]
+          if (!settlement || !here) return <Empty text="Здесь нечем владеть." />
+
+          if (!isOwnedByPlayer(settlement)) {
+            // Чужое место: можно осаждать, если с его хозяином война.
+            const siege = game.siege
+            if (siege?.locationId === game.locationId) {
+              return (
+                <>
+                  <ActionCard
+                    title="Ждать под стенами"
+                    description={`Осада идёт ${siege.days} сут. В городе тает хлеб.`}
+                    meta="3 сут"
+                    reason={reasonFor({ type: 'siegeWait', days: 3 })}
+                    onPress={() => dispatch({ type: 'siegeWait', days: 3 })}
+                  />
+                  <ActionCard
+                    title="Идти на приступ"
+                    description="Стены считаются в бою как оборона. Голодный гарнизон держится хуже."
+                    meta="штурм"
+                    reason={reasonFor({ type: 'siegeAssault' })}
+                    onPress={() => dispatch({ type: 'siegeAssault' })}
+                  />
+                  <ActionCard
+                    title="Снять осаду"
+                    meta=""
+                    onPress={() => dispatch({ type: 'siegeLift' })}
+                  />
+                </>
+              )
+            }
+            const owner = ownerName(game, settlement.owner)
+            return (
+              <ActionCard
+                title="Обложить город"
+                description={`Держит: ${owner}.`}
+                meta="осада"
+                reason={reasonFor({ type: 'besiege' })}
+                onPress={() => dispatch({ type: 'besiege' })}
+              />
+            )
+          }
+
+          const built = settlement.buildings.map((id: BuildingId) => BUILDINGS[id].label).join(', ')
+          return (
+            <>
+              <View style={styles.holding}>
+                <Text style={styles.holdingLine}>
+                  Твоя земля · подать {dailyTax(settlement, foodSecurity(settlement))} в сутки
+                </Text>
+                <Text style={styles.holdingDim}>
+                  Гарнизон {garrisonSize(settlement)} из {garrisonLimit(game.world, settlement)} ·
+                  свободных мест под стройку {freeSlots(game.world, settlement)}
+                </Text>
+                {built ? <Text style={styles.holdingDim}>Построено: {built}</Text> : null}
+                {settlement.building ? (
+                  <Text style={styles.holdingDim}>
+                    Строится: {BUILDINGS[settlement.building.id].label.toLowerCase()} — осталось{' '}
+                    {settlement.building.daysLeft} сут.
+                  </Text>
+                ) : null}
+              </View>
+
+              {BUILDING_IDS.filter((id: BuildingId) => !settlement.buildings.includes(id)).map(
+                (id: BuildingId) => {
+                  const command: Command = { type: 'build', building: id }
+                  const check = canApply(game, command)
+                  if (!check.ok && check.code === 'unavailableHere') return null
+                  return (
+                    <ActionCard
+                      key={id}
+                      title={BUILDINGS[id].label}
+                      description={BUILDINGS[id].description}
+                      meta={`${BUILDINGS[id].cost} монет · ${BUILDINGS[id].days} сут`}
+                      reason={check.ok ? null : check.message}
+                      onPress={() => dispatch(command)}
+                    />
+                  )
+                },
+              )}
+
+              <ActionCard
+                title="Оставить людей в гарнизоне"
+                description="Пятерых из отряда — держать это место."
+                meta="5 чел."
+                reason={reasonFor({ type: 'station', troop: 'militia', count: 5 })}
+                onPress={() => dispatch({ type: 'station', troop: 'militia', count: 5 })}
+              />
+              <ActionCard
+                title="Забрать людей из гарнизона"
+                meta="5 чел."
+                reason={reasonFor({ type: 'withdraw', troop: 'militia', count: 5 })}
+                onPress={() => dispatch({ type: 'withdraw', troop: 'militia', count: 5 })}
+              />
+            </>
+          )
+        })()}
+      </Section>
+
       <Section title="Служба">
         {(() => {
           const kingdom = kingdomOf(game.world, game.locationId)
@@ -124,6 +236,13 @@ export function LocationScreen({ game }: { game: GameState }) {
                 meta="бой"
                 reason={seekCheck.ok ? null : seekCheck.message}
                 onPress={() => dispatch(seek)}
+              />
+              <ActionCard
+                title="Просить землю за службу"
+                description={`Слава за тобой: ${game.renown}. Нужно три победы.`}
+                meta="лен"
+                reason={reasonFor({ type: 'askForFief' })}
+                onPress={() => dispatch({ type: 'askForFief' })}
               />
               <ActionCard
                 title="Оставить службу"
@@ -160,6 +279,26 @@ export function LocationScreen({ game }: { game: GameState }) {
   )
 }
 
+/** Кто держит место: корона, лорд или ты сам. */
+function ownerName(game: GameState, owner: string | null): string {
+  if (!owner) return 'никто'
+  if (owner === 'player') return 'ты'
+  if (owner.startsWith('crown:')) {
+    return `корона (${game.world.kingdoms[owner.slice('crown:'.length)]?.name ?? '?'})`
+  }
+  const lord = lordById(game.politics, owner)
+  return lord ? `${lord.title} ${lord.name}` : 'неизвестно кто'
+}
+
 const styles = StyleSheet.create({
   content: { padding: spacing.lg, paddingBottom: spacing.xl },
+  holding: {
+    backgroundColor: colors.surface,
+    borderRadius: radius,
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+    padding: spacing.md,
+  },
+  holdingLine: { color: colors.text, fontSize: font.body },
+  holdingDim: { color: colors.dim, fontSize: font.small },
 })

@@ -11,12 +11,12 @@ import { createRng } from './rng'
 import type { GameTime } from './time'
 import { WORLD_START } from './time'
 import type { Politics } from './war'
-import { NO_POLITICS } from './war'
+import { createPolitics } from './war'
 import { defaultStartLocationId, generateWorld } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -55,6 +55,10 @@ export interface GameState {
   readonly politics: Politics
   /** Королевство, которому игрок служит за жалованье. */
   readonly service: string | null
+  /** Идущая осада: место и сколько суток войско стоит под стенами. */
+  readonly siege: { readonly locationId: string; readonly days: number } | null
+  /** Слава: победы, за которые корона может пожаловать землю. */
+  readonly renown: number
   /** Игра кончена: герой погиб. Пермадэт редкий, но настоящий. */
   readonly over: boolean
   readonly log: readonly LogEntry[]
@@ -66,18 +70,22 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
   const world = prebuilt ?? generateWorld(seed)
   const locationId = defaultStartLocationId(world)
   const home = world.locations[locationId]
+  // Землю раздаём сразу: у каждого места есть держатель, иначе отнимать не у кого.
+  const [politics, settlements] = createPolitics(world, createSettlements(world), createRng(seed))
   return {
     schemaVersion: SCHEMA_VERSION,
     time: WORLD_START,
     rng: createRng(seed),
     character,
     world,
-    settlements: createSettlements(world),
+    settlements,
     locationId,
     party: EMPTY_PARTY,
     battle: null,
-    politics: NO_POLITICS,
+    politics,
     service: null,
+    siege: null,
+    renown: 0,
     over: false,
     log: [
       {

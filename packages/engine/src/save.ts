@@ -1,8 +1,9 @@
 import { createSettlements, recruitPool } from './economy'
 import { EMPTY_PARTY } from './party'
+import { createRng } from './rng'
 import type { GameState } from './state'
 import { SCHEMA_VERSION } from './state'
-import { NO_POLITICS } from './war'
+import { NO_POLITICS, createPolitics } from './war'
 import { defaultStartLocationId, generateWorld } from './world/generate'
 import type { World } from './world/types'
 
@@ -39,6 +40,31 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
       settlements: createSettlements(world),
       character: { ...character, inventory: character.inventory ?? {} },
     }
+  },
+  /**
+   * v4 → v5: появились держатели земли, постройки и гарнизоны. Землю
+   * переразбиваем между лордами заново: прежние сейвы про них не знали.
+   */
+  4: (data) => {
+    const world = data.world as World
+    const settlements = (data.settlements ?? {}) as Record<string, Record<string, unknown>>
+    const withHoldings: Record<string, unknown> = {}
+    for (const [id, settlement] of Object.entries(settlements)) {
+      withHoldings[id] = {
+        ...settlement,
+        owner: settlement.owner ?? null,
+        buildings: settlement.buildings ?? [],
+        building: settlement.building ?? null,
+        garrison: settlement.garrison ?? {},
+      }
+    }
+    const rng = data.rng as { state?: number } | undefined
+    const [politics, owned] = createPolitics(
+      world,
+      withHoldings as never,
+      createRng(rng?.state ?? 1),
+    )
+    return { ...data, settlements: owned, politics, siege: null, renown: 0 }
   },
   /**
    * v3 → v4: появились отряды, бои и войны. Поселениям добавляются рекруты и

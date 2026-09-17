@@ -162,6 +162,7 @@ describe('служба', () => {
       ...served,
       party: { units: { spearman: 20, archer: 6 }, morale: 75, hungryDays: 0 },
       politics: {
+        ...served.politics,
         wars: [{ a: 'reEstiz', b: 'boharut', since: 1, reason: 'старые счёты' }],
         lastDay: 1,
       },

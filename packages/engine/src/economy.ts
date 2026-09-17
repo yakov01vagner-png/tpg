@@ -1,3 +1,4 @@
+import type { BuildingId } from './content/buildings'
 import type { GoodId } from './content/goods'
 import {
   ARCHETYPE_SUPPLY,
@@ -6,6 +7,7 @@ import {
   GOOD_IDS,
   TERRAIN_SUPPLY,
 } from './content/goods'
+import type { TroopId } from './content/troops'
 import type { World } from './world/types'
 
 /**
@@ -27,6 +29,14 @@ export interface Settlement {
   readonly recruits: number
   /** Разбой в округе, 0..1. Растёт от голода и разорения, душит подвоз. */
   readonly banditry: number
+  /** Кто держит место: корона, лорд или сам игрок. */
+  readonly owner: string | null
+  /** Что здесь построено. */
+  readonly buildings: readonly BuildingId[]
+  /** Что строится сейчас и когда будет готово. */
+  readonly building: { readonly id: BuildingId; readonly daysLeft: number } | null
+  /** Кто стоит гарнизоном. */
+  readonly garrison: Readonly<Partial<Record<TroopId, number>>>
 }
 
 /** Какая доля населения вообще способна взять оружие и уйти с чужаком. */
@@ -92,6 +102,10 @@ export function createSettlement(world: World, locationId: string): Settlement {
     stock: initialStock(world, locationId, population),
     recruits: recruitPool(population),
     banditry: 0,
+    owner: null,
+    buildings: [],
+    building: null,
+    garrison: {},
   }
 }
 
