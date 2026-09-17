@@ -1,7 +1,7 @@
 import type { GoodId } from './content/goods'
 import { GOOD_IDS } from './content/goods'
 import type { Settlement } from './economy'
-import { targetStock } from './economy'
+import { RECRUIT_RECOVERY, recruitPool, targetStock } from './economy'
 import type { LocationArchetype, Terrain, World } from './world/types'
 
 /**
@@ -207,6 +207,15 @@ function produceAndEat(
       stock[good] = stock[good] + (target - stock[good]) * config.goodsRecovery
     }
 
+    // Голод рождает разбой, сытость его гасит — медленно.
+    const banditry = Math.min(
+      1,
+      Math.max(0, settlement.banditry + (hunger > 0 ? hunger * 0.03 : -0.004)),
+    )
+    // Рекруты возвращаются: подросли, вернулись с отхожих промыслов.
+    const pool = recruitPool(settlement.population)
+    const recruits = Math.min(pool, settlement.recruits + pool * RECRUIT_RECOVERY)
+
     let population = settlement.population
     if (hunger > 0) {
       const deaths = Math.round(population * config.starvationDeaths * hunger)
@@ -226,7 +235,13 @@ function produceAndEat(
       population = 0
     }
 
-    next[id] = { ...settlement, population, stock: clampStock(stock) }
+    next[id] = {
+      ...settlement,
+      population,
+      stock: clampStock(stock),
+      recruits: Math.round(recruits),
+      banditry: Math.round(banditry * 1000) / 1000,
+    }
   }
 
   // Беженцы приходят туда, где есть что есть.
@@ -262,7 +277,9 @@ function share(
       if (!settlement || settlement.population <= 0) continue
       const wanted = settlement.population * config.foodPerPerson * config.daysOfStock
       const have = foodStock(settlement)
-      if (have > wanted * 1.2) donors.push({ id, surplus: (have - wanted * 1.2) * rate })
+      // По опасным дорогам возят осторожнее и меньше.
+      const safety = 1 - settlement.banditry * 0.5
+      if (have > wanted * 1.2) donors.push({ id, surplus: (have - wanted * 1.2) * rate * safety })
       else if (have < wanted) receivers.push({ id, deficit: wanted - have })
     }
     if (donors.length === 0 || receivers.length === 0) continue
@@ -281,10 +298,13 @@ function share(
     for (const receiver of receivers) {
       const settlement = next[receiver.id]
       if (!settlement) continue
-      const get = moved * (receiver.deficit / wanted)
+      const sent = moved * (receiver.deficit / wanted)
+      // Часть обоза до места не доходит: её берут по дороге. Так голод и
+      // разбой начинают кормить друг друга.
+      const delivered = sent * (1 - settlement.banditry * 0.8)
       next[receiver.id] = {
         ...settlement,
-        stock: { ...settlement.stock, grain: settlement.stock.grain + get },
+        stock: { ...settlement.stock, grain: settlement.stock.grain + delivered },
       }
     }
   }

@@ -7,7 +7,7 @@ import {
   canApply,
   carried,
   carriedWeight,
-  carryCapacity,
+  partyCapacity,
   sellPrice,
   skillLevel,
 } from '@tpg/engine'
@@ -31,7 +31,7 @@ export function TradeScreen({ game }: { game: GameState }) {
   const market = game.settlements[game.locationId]
   const tradeSkill = skillLevel(game.character, 'trade')
   const weight = carriedWeight(game.character)
-  const capacity = carryCapacity(game.character)
+  const capacity = partyCapacity(game.character, game.party)
 
   if (!market) {
     return (

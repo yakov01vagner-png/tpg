@@ -1,12 +1,13 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { colors, font, spacing } from '../theme'
 
-export type TabId = 'location' | 'trade' | 'road' | 'character' | 'journal'
+export type TabId = 'location' | 'trade' | 'road' | 'party' | 'character' | 'journal'
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'location', label: 'Дела' },
   { id: 'trade', label: 'Торг' },
-  { id: 'road', label: 'Дорога' },
+  { id: 'road', label: 'Путь' },
+  { id: 'party', label: 'Отряд' },
   { id: 'character', label: 'Герой' },
   { id: 'journal', label: 'Журнал' },
 ]
@@ -37,6 +38,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   tab: { alignItems: 'center', flex: 1, justifyContent: 'center', minHeight: 56 },
-  label: { color: colors.faint, fontSize: font.small },
+  label: { color: colors.faint, fontSize: font.tiny },
   labelActive: { color: colors.gold, fontWeight: '600' },
 })

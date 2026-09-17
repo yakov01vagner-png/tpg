@@ -1,6 +1,8 @@
-import { createSettlements } from './economy'
+import { createSettlements, recruitPool } from './economy'
+import { EMPTY_PARTY } from './party'
 import type { GameState } from './state'
 import { SCHEMA_VERSION } from './state'
+import { NO_POLITICS } from './war'
 import { defaultStartLocationId, generateWorld } from './world/generate'
 import type { World } from './world/types'
 
@@ -36,6 +38,30 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
       ...data,
       settlements: createSettlements(world),
       character: { ...character, inventory: character.inventory ?? {} },
+    }
+  },
+  /**
+   * v3 → v4: появились отряды, бои и войны. Поселениям добавляются рекруты и
+   * спокойная округа, герою — пустой отряд и мирное небо.
+   */
+  3: (data) => {
+    const settlements = (data.settlements ?? {}) as Record<string, Record<string, unknown>>
+    const patched: Record<string, unknown> = {}
+    for (const [id, settlement] of Object.entries(settlements)) {
+      patched[id] = {
+        ...settlement,
+        recruits: settlement.recruits ?? recruitPool(Number(settlement.population ?? 0)),
+        banditry: settlement.banditry ?? 0,
+      }
+    }
+    return {
+      ...data,
+      settlements: patched,
+      party: data.party ?? EMPTY_PARTY,
+      battle: data.battle ?? null,
+      politics: data.politics ?? NO_POLITICS,
+      service: data.service ?? null,
+      over: data.over ?? false,
     }
   },
 }

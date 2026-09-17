@@ -23,6 +23,19 @@ export interface Settlement {
   /** Сколько народу живёт здесь сейчас. Скелет мира хранит лишь начальное число. */
   readonly population: number
   readonly stock: Readonly<Record<GoodId, number>>
+  /** Сколько людей готово пойти в чужой отряд. Кончается и восстанавливается. */
+  readonly recruits: number
+  /** Разбой в округе, 0..1. Растёт от голода и разорения, душит подвоз. */
+  readonly banditry: number
+}
+
+/** Какая доля населения вообще способна взять оружие и уйти с чужаком. */
+export const RECRUIT_SHARE = 0.02
+/** Какую долю от предела рекруты восполняют за сутки. */
+export const RECRUIT_RECOVERY = 0.02
+
+export function recruitPool(population: number): number {
+  return Math.floor(population * RECRUIT_SHARE)
 }
 
 /** Во сколько раз место обеспечено товаром сверх собственной нужды. */
@@ -73,7 +86,13 @@ export function initialStock(
 
 export function createSettlement(world: World, locationId: string): Settlement {
   const population = world.locations[locationId]?.population ?? 0
-  return { locationId, population, stock: initialStock(world, locationId, population) }
+  return {
+    locationId,
+    population,
+    stock: initialStock(world, locationId, population),
+    recruits: recruitPool(population),
+    banditry: 0,
+  }
 }
 
 /** Все поселения мира на момент начала игры. */

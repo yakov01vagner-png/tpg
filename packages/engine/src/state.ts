@@ -1,17 +1,22 @@
+import type { Battle } from './battle'
 import type { Character } from './character'
 import type { Settlement } from './economy'
 import { createSettlements } from './economy'
 import type { GameEvent } from './events'
 import { describeEvent } from './events'
+import type { Party } from './party'
+import { EMPTY_PARTY } from './party'
 import type { Rng } from './rng'
 import { createRng } from './rng'
 import type { GameTime } from './time'
 import { WORLD_START } from './time'
+import type { Politics } from './war'
+import { NO_POLITICS } from './war'
 import { defaultStartLocationId, generateWorld } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -42,6 +47,16 @@ export interface GameState {
   readonly settlements: Readonly<Record<string, Settlement>>
   /** Где сейчас находится игрок. */
   readonly locationId: string
+  /** Люди под началом игрока. */
+  readonly party: Party
+  /** Идущий бой. Пока он есть, мир стоит: время боя своё (DESIGN.md, п.2). */
+  readonly battle: Battle | null
+  /** Кто с кем воюет. */
+  readonly politics: Politics
+  /** Королевство, которому игрок служит за жалованье. */
+  readonly service: string | null
+  /** Игра кончена: герой погиб. Пермадэт редкий, но настоящий. */
+  readonly over: boolean
   readonly log: readonly LogEntry[]
 }
 
@@ -59,6 +74,11 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     world,
     settlements: createSettlements(world),
     locationId,
+    party: EMPTY_PARTY,
+    battle: null,
+    politics: NO_POLITICS,
+    service: null,
+    over: false,
     log: [
       {
         time: WORLD_START,

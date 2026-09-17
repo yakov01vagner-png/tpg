@@ -1,5 +1,7 @@
 import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
+import type { Battle, GroupId, OrderId } from './battle'
+import { fleeBattle, resolveRound, startBattle, unformUp } from './battle'
 import type { Character } from './character'
 import {
   FATIGUE_MAX,
@@ -14,12 +16,26 @@ import type { Availability, Content, Requirements } from './content'
 import { CONTENT } from './content'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
+import type { TroopId } from './content/troops'
+import { TROOPS } from './content/troops'
 import type { Settlement } from './economy'
 import { quoteBuy, quoteSell } from './economy'
 import type { GameEvent } from './events'
 import type { LifeEvent } from './life'
 import { tickDays } from './life'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
+import type { Party } from './party'
+import {
+  DESERTION_MORALE,
+  EDIBLE,
+  dailyFood,
+  dailyWages,
+  partyCapacity,
+  partySize,
+  partyStrength,
+  troopCount,
+  withUnits,
+} from './party'
 import { isAvailableAt } from './place'
 import { PROGRESSION, applyCharacterXp, applySkillXp } from './progression'
 import type { Rng } from './rng'
@@ -40,7 +56,9 @@ import {
   isWithinWindow,
   nextTimeOfDay,
 } from './time'
-import { regionOf, roadsFrom } from './world/queries'
+import type { Politics } from './war'
+import { banditBand, tickPolitics, warband, warsOf } from './war'
+import { kingdomOf, regionOf, roadsFrom } from './world/queries'
 
 /**
  * Команды — единственный способ изменить состояние (п.2 дизайн-документа).
@@ -48,6 +66,14 @@ import { regionOf, roadsFrom } from './world/queries'
  */
 export type Command =
   | { readonly type: 'travel'; readonly toLocationId: string }
+  | { readonly type: 'hire'; readonly troop: TroopId; readonly count: number }
+  | { readonly type: 'disband'; readonly troop: TroopId; readonly count: number }
+  | { readonly type: 'battleOrders'; readonly orders: Readonly<Record<GroupId, OrderId>> }
+  | { readonly type: 'battleFlee' }
+  | { readonly type: 'battleEnd'; readonly prisoners: 'ransom' | 'recruit' | 'release' }
+  | { readonly type: 'takeService'; readonly kingdomId: string }
+  | { readonly type: 'leaveService' }
+  | { readonly type: 'seekEnemy' }
   | { readonly type: 'buy'; readonly good: GoodId; readonly amount: number }
   | { readonly type: 'sell'; readonly good: GoodId; readonly amount: number }
   | { readonly type: 'work'; readonly jobId: string }
@@ -68,6 +94,8 @@ export type FailureCode =
   | 'maxed'
   | 'rankNotEligible'
   | 'unavailableHere'
+  | 'inBattle'
+  | 'noRecruits'
   | 'noGoods'
   | 'overloaded'
   | 'invalid'
@@ -87,9 +115,33 @@ export function applyCommand(
   command: Command,
   content: Content = CONTENT,
 ): CommandResult {
+  // Пока идёт бой, мир стоит: ничем, кроме боя, заняться нельзя.
+  const fighting = state.battle !== null
+  const isBattleCommand =
+    command.type === 'battleOrders' || command.type === 'battleFlee' || command.type === 'battleEnd'
+  if (state.over) return fail('invalid', 'Эта история закончена.')
+  if (fighting && !isBattleCommand) return fail('inBattle', 'Сейчас не до того — идёт бой.')
+  if (!fighting && isBattleCommand) return fail('invalid', 'Боя нет.')
+
   switch (command.type) {
     case 'travel':
       return travel(state, command.toLocationId)
+    case 'hire':
+      return hire(state, command.troop, command.count)
+    case 'disband':
+      return disband(state, command.troop, command.count)
+    case 'battleOrders':
+      return battleOrders(state, command.orders)
+    case 'battleFlee':
+      return battleFlee(state)
+    case 'battleEnd':
+      return battleEnd(state, command.prisoners)
+    case 'takeService':
+      return takeService(state, command.kingdomId)
+    case 'leaveService':
+      return leaveService(state)
+    case 'seekEnemy':
+      return seekEnemy(state)
     case 'buy':
       return buy(state, command.good, command.amount)
     case 'sell':
@@ -163,7 +215,41 @@ function travel(state: GameState, toLocationId: string): CommandResult {
   practice(draft, 'athletics', road.hours * 2.5)
   practice(draft, 'survival', road.hours * 1.5)
   draft.locationId = toLocationId
+  ambush(draft, toLocationId)
   return close(draft)
+}
+
+/**
+ * Встреча на дороге.
+ *
+ * Шайки водятся там, где голодно и разорено, поэтому опасность дороги — прямое
+ * следствие экономики, а не случайное событие по таймеру. Одиночку не убивают,
+ * а обирают: драться с ним незачем.
+ */
+function ambush(draft: Draft, locationId: string): void {
+  const settlement = draft.settlements[locationId]
+  if (!settlement) return
+  const [meets, afterMeet] = rollChance(draft.rng, Math.min(0.45, 0.02 + settlement.banditry * 0.5))
+  draft.rng = afterMeet
+  if (!meets) return
+
+  const terrain = draft.base.world.locations[locationId]?.terrain ?? 'plains'
+  if (partySize(draft.party) >= 3) {
+    const [band, afterBand] = banditBand(settlement.banditry, settlement.population, draft.rng)
+    draft.rng = afterBand
+    draft.battle = startBattle(draft.party, band, terrain)
+    notice(draft, 'На дороге ждали: разбойники.')
+    return
+  }
+
+  const loss = Math.round(draft.character.money * 0.3)
+  if (loss > 0) addMoney(draft, -loss)
+  notice(
+    draft,
+    loss > 0
+      ? `Разбойники вытрясли ${loss} монет и отпустили.`
+      : 'Разбойники обшарили и отпустили: взять нечего.',
+  )
 }
 
 /** Дорога выматывает примерно как работа: три с половиной единицы за час хода. */
@@ -173,6 +259,188 @@ export function travelFatigue(roadHours: number): number {
 
 /** Сколько времени уходит на сделку — торг не бывает мгновенным. */
 export const TRADE_MINUTES = 15
+
+/** Сколько времени уходит на набор людей. */
+export const HIRE_MINUTES = 60
+
+function hire(state: GameState, troop: TroopId, count: number): CommandResult {
+  const def = TROOPS[troop]
+  if (!def) return fail('unknownAction', 'Таких не бывает.')
+  if (!Number.isInteger(count) || count <= 0) return fail('invalid', 'Сколько именно?')
+
+  const here = state.world.locations[state.locationId]
+  const settlement = state.settlements[state.locationId]
+  if (!here || !settlement) return fail('invalid', 'Непонятно, где находится герой.')
+  if (!def.where.includes(here.archetype) || settlement.population < def.minPopulation) {
+    return fail('unavailableHere', `${def.label} здесь не найдёшь.`)
+  }
+  if (settlement.recruits < count) {
+    return fail(
+      'noRecruits',
+      `Столько людей тут не наберёшь: готовых идти всего ${Math.floor(settlement.recruits)}.`,
+    )
+  }
+  const cost = def.hireCost * count
+  if (state.character.money < cost) {
+    return fail('noMoney', `Не хватает денег: нужно ${cost}, есть ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  notice(draft, `Нанято: ${def.label.toLowerCase()} — ${count}, за ${cost}.`)
+  advance(draft, HIRE_MINUTES)
+  addMoney(draft, -cost)
+  draft.party = withUnits(draft.party, troop, count)
+  draft.settlements = {
+    ...draft.settlements,
+    [state.locationId]: { ...settlement, recruits: settlement.recruits - count },
+  }
+  practice(draft, 'command', count * 4)
+  return close(draft)
+}
+
+function disband(state: GameState, troop: TroopId, count: number): CommandResult {
+  if (!TROOPS[troop]) return fail('unknownAction', 'Таких не бывает.')
+  if (!Number.isInteger(count) || count <= 0) return fail('invalid', 'Сколько именно?')
+  if (troopCount(state.party, troop) < count) return fail('invalid', 'Столько у тебя нет.')
+
+  const draft = open(state)
+  notice(draft, `Распущено: ${TROOPS[troop].label.toLowerCase()} — ${count}.`)
+  draft.party = withUnits(draft.party, troop, -count)
+  return close(draft)
+}
+
+function battleOrders(state: GameState, orders: Readonly<Record<GroupId, OrderId>>): CommandResult {
+  const battle = state.battle
+  if (!battle) return fail('invalid', 'Боя нет.')
+  if (battle.outcome !== 'ongoing') return fail('invalid', 'Бой окончен — пора подводить итоги.')
+
+  const draft = open(state)
+  const result = resolveRound(
+    battle,
+    orders,
+    { command: skillLevel(state.character, 'command') },
+    draft.rng,
+  )
+  draft.rng = result.rng
+  draft.battle = result.battle
+  draft.party = {
+    ...draft.party,
+    units: unformUp(result.battle.groups),
+    morale: result.battle.morale,
+  }
+  // Бой идёт по своим часам, но не бесплатно: раунд — это время и силы.
+  advance(draft, 20)
+  addFatigue(draft, 4)
+  practice(draft, 'command', 12)
+  if (result.battle.outcome !== 'ongoing') {
+    notice(draft, result.battle.outcome === 'won' ? 'Бой выигран.' : 'Бой проигран.')
+  }
+  return close(draft)
+}
+
+function battleFlee(state: GameState): CommandResult {
+  const battle = state.battle
+  if (!battle) return fail('invalid', 'Боя нет.')
+  if (battle.outcome !== 'ongoing') return fail('invalid', 'Бой уже окончен.')
+
+  const draft = open(state)
+  const result = fleeBattle(battle, draft.rng)
+  draft.rng = result.rng
+  draft.battle = result.battle
+  draft.party = {
+    ...draft.party,
+    units: unformUp(result.battle.groups),
+    morale: result.battle.morale,
+  }
+  advance(draft, 30)
+  addFatigue(draft, 12)
+  notice(draft, 'Отход.')
+  return close(draft)
+}
+
+/** Итоги боя: добыча, пленные и то, что с ними делать. */
+function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'): CommandResult {
+  const battle = state.battle
+  if (!battle) return fail('invalid', 'Боя нет.')
+  if (battle.outcome === 'ongoing') return fail('invalid', 'Бой ещё идёт.')
+
+  const draft = open(state)
+  draft.battle = null
+
+  if (battle.outcome === 'won') {
+    addMoney(draft, battle.spoils.money)
+    const captured = battle.spoils.prisoners
+    if (captured > 0) {
+      if (prisoners === 'ransom') {
+        addMoney(draft, captured * 8)
+        notice(draft, `Пленных продали за ${captured * 8}.`)
+      } else if (prisoners === 'recruit') {
+        const joined = Math.max(1, Math.round(captured / 2))
+        draft.party = withUnits(draft.party, 'militia', joined)
+        notice(draft, `К отряду пристало ${joined} из пленных.`)
+      } else {
+        draft.party = { ...draft.party, morale: Math.min(100, draft.party.morale + 5) }
+        notice(draft, 'Пленных отпустили восвояси.')
+      }
+    }
+    draft.party = { ...draft.party, morale: Math.min(100, draft.party.morale + 10) }
+  } else if (battle.outcome === 'lost') {
+    const lost = Math.round(draft.character.money * 0.5)
+    addMoney(draft, -lost)
+    addFatigue(draft, 40)
+    notice(draft, `Разбитых обобрали: потеряно ${lost}.`)
+    const [dies, afterDeath] = rollChance(draft.rng, 0.015)
+    draft.rng = afterDeath
+    if (dies) {
+      draft.over = true
+      notice(draft, 'Этот бой стал последним.')
+    }
+  }
+  return close(draft)
+}
+
+function takeService(state: GameState, kingdomId: string): CommandResult {
+  const kingdom = state.world.kingdoms[kingdomId]
+  if (!kingdom) return fail('unknownAction', 'Такого королевства нет.')
+  if (state.service === kingdomId) return fail('invalid', 'Ты уже на этой службе.')
+  const here = kingdomOf(state.world, state.locationId)
+  if (here?.id !== kingdomId) {
+    return fail('unavailableHere', 'На службу нанимают на своей земле, а не по слухам.')
+  }
+
+  const draft = open(state)
+  notice(draft, `Служба принята: ${kingdom.name}.`)
+  advance(draft, hours(2))
+  draft.service = kingdomId
+  return close(draft)
+}
+
+function leaveService(state: GameState): CommandResult {
+  if (!state.service) return fail('invalid', 'Ты никому не служишь.')
+  const draft = open(state)
+  notice(draft, 'Служба оставлена.')
+  draft.service = null
+  return close(draft)
+}
+
+/** Выйти на врага: имеет смысл только на службе и только пока идёт война. */
+function seekEnemy(state: GameState): CommandResult {
+  if (!state.service) return fail('invalid', 'Воевать не за кого: ты никому не служишь.')
+  if (warsOf(state.politics, state.service).length === 0) {
+    return fail('unavailableHere', 'Сейчас твоё королевство ни с кем не воюет.')
+  }
+  if (partySize(state.party) < 3) return fail('invalid', 'С такими силами на войну не ходят.')
+
+  const here = state.world.locations[state.locationId]
+  const draft = open(state)
+  const [enemy, afterEnemy] = warband(partyStrength(state.party) / 24, draft.rng)
+  draft.rng = afterEnemy
+  draft.battle = startBattle(draft.party, enemy, here?.terrain ?? 'plains')
+  notice(draft, 'Впереди чужие знамёна.')
+  advance(draft, hours(4))
+  addFatigue(draft, 10)
+  return close(draft)
+}
 
 function buy(state: GameState, good: GoodId, amount: number): CommandResult {
   const problem = checkTradeRequest(good, amount)
@@ -189,8 +457,9 @@ function buy(state: GameState, good: GoodId, amount: number): CommandResult {
     return fail('noMoney', `Не хватает денег: нужно ${quote.total}, есть ${state.character.money}.`)
   }
   const weight = GOODS[good].weight * amount
-  if (carriedWeight(state.character) + weight > carryCapacity(state.character)) {
-    return fail('overloaded', 'Столько на себе не унести.')
+  // Поклажу несут все: чем больше отряд, тем больше влезает.
+  if (carriedWeight(state.character) + weight > partyCapacity(state.character, state.party)) {
+    return fail('overloaded', 'Столько не унести — ни на себе, ни на людях.')
   }
 
   const draft = open(state)
@@ -475,6 +744,11 @@ interface Draft {
   character: Character
   locationId: string
   settlements: Readonly<Record<string, Settlement>>
+  party: Party
+  battle: Battle | null
+  politics: Politics
+  service: string | null
+  over: boolean
   readonly base: GameState
   readonly events: GameEvent[]
 }
@@ -486,6 +760,11 @@ function open(state: GameState): Draft {
     character: state.character,
     locationId: state.locationId,
     settlements: state.settlements,
+    party: state.party,
+    battle: state.battle,
+    politics: state.politics,
+    service: state.service,
+    over: state.over,
     base: state,
     events: [],
   }
@@ -495,11 +774,25 @@ function close(draft: Draft): CommandResult {
   // Мир живёт вместе с игровым временем: сколько суток прошло, столько поселения
   // и досчитывают. Никаких фоновых таймеров — только детерминированный догон.
   const daysPassed = dayOf(draft.time) - dayOf(draft.base.time)
-  const life =
-    daysPassed > 0
-      ? tickDays(draft.base.world, draft.settlements, daysPassed)
-      : { settlements: draft.settlements, events: [] as readonly LifeEvent[] }
-  const events = [...draft.events, ...worldNews(draft.base, draft.locationId, life.events)]
+  if (daysPassed > 0) {
+    const life = tickDays(draft.base.world, draft.settlements, daysPassed)
+    draft.settlements = life.settlements
+    draft.events.push(...worldNews(draft.base, draft.locationId, life.events))
+
+    const politics = tickPolitics(
+      draft.base.world,
+      draft.politics,
+      draft.settlements,
+      dayOf(draft.time),
+      draft.rng,
+    )
+    draft.rng = politics.rng
+    draft.politics = politics.politics
+    draft.settlements = politics.settlements
+    draft.events.push(...warNews(draft.base, draft.locationId, politics.events))
+
+    payUpkeep(draft, daysPassed)
+  }
 
   const state: GameState = {
     ...draft.base,
@@ -507,10 +800,15 @@ function close(draft: Draft): CommandResult {
     rng: draft.rng,
     character: draft.character,
     locationId: draft.locationId,
-    settlements: life.settlements,
-    log: appendLog(draft.base.log, draft.time, events),
+    settlements: draft.settlements,
+    party: draft.party,
+    battle: draft.battle,
+    politics: draft.politics,
+    service: draft.service,
+    over: draft.over,
+    log: appendLog(draft.base.log, draft.time, draft.events),
   }
-  return { ok: true, state, events }
+  return { ok: true, state, events: draft.events }
 }
 
 /**
@@ -537,6 +835,116 @@ function worldNews(
     })
   }
   return news
+}
+
+/** Война и разорение — новости того же порядка, что голод: слышно по соседству. */
+function warNews(
+  state: GameState,
+  locationId: string,
+  events: readonly import('./war').WarEvent[],
+): readonly GameEvent[] {
+  const news: GameEvent[] = []
+  const hereKingdom = kingdomOf(state.world, locationId)?.id
+  for (const event of events) {
+    if (event.type === 'raid') {
+      if (regionOf(state.world, event.locationId)?.id !== regionOf(state.world, locationId)?.id)
+        continue
+      const name = state.world.locations[event.locationId]?.name ?? 'соседнее селение'
+      news.push({ type: 'notice', text: `${name} разорено: уведено и убито ${event.lost}.` })
+      continue
+    }
+    // О войнах и мире слышно везде, но только про свои и соседские королевства.
+    const involved = event.war.a === hereKingdom || event.war.b === hereKingdom
+    const names = `${state.world.kingdoms[event.war.a]?.name ?? '?'} и ${state.world.kingdoms[event.war.b]?.name ?? '?'}`
+    if (event.type === 'warDeclared') {
+      news.push({
+        type: 'notice',
+        text: involved
+          ? `Война: ${names}. Причина — ${event.war.reason}.`
+          : `Говорят, ${names} схватились: ${event.war.reason}.`,
+      })
+    } else {
+      news.push({ type: 'notice', text: `Мир между ${names}.` })
+    }
+  }
+  return news
+}
+
+/**
+ * Содержание отряда: жалованье и еда каждые сутки.
+ *
+ * Это и есть главный ограничитель войска: нанять дешевле, чем водить. Голодный
+ * и неоплаченный отряд теряет дух и расходится сам — без всяких запретов.
+ */
+function payUpkeep(draft: Draft, days: number): void {
+  if (partySize(draft.party) === 0) return
+
+  let unpaid = 0
+  let unfed = 0
+  let deserted = 0
+
+  for (let day = 0; day < days; day += 1) {
+    if (partySize(draft.party) === 0) break
+    const wages = dailyWages(draft.party)
+    const paid = draft.character.money >= wages
+    if (paid) addMoney(draft, -wages)
+    else unpaid += 1
+
+    const needed = dailyFood(draft.party)
+    const fed = eatFromStores(draft, needed)
+    if (!fed) unfed += 1
+
+    const morale = paid && fed ? draft.party.morale + 2 : draft.party.morale - 12
+    draft.party = {
+      ...draft.party,
+      morale: Math.min(100, Math.max(0, morale)),
+      hungryDays: paid && fed ? 0 : draft.party.hungryDays + 1,
+    }
+
+    if (draft.party.morale < DESERTION_MORALE) {
+      const size = partySize(draft.party)
+      const leaving = Math.max(1, Math.round(size * 0.08))
+      deserted += desert(draft, leaving)
+    }
+  }
+
+  if (unpaid > 0) notice(draft, `Жалованье не плачено ${unpaid} сут. — люди ропщут.`)
+  if (unfed > 0) notice(draft, `Отряд голодал ${unfed} сут.`)
+  if (deserted > 0) notice(draft, `Ушло по-тихому: ${deserted}.`)
+}
+
+/** Накормить отряд из поклажи. Возвращает false, если еды не хватило. */
+function eatFromStores(draft: Draft, needed: number): boolean {
+  let left = needed
+  for (const good of EDIBLE) {
+    if (left <= 0) break
+    const have = draft.character.inventory[good] ?? 0
+    const taken = Math.min(have, left)
+    if (taken > 0) {
+      addGoods(draft, good, -taken)
+      left -= taken
+    }
+  }
+  return left <= 0
+}
+
+/** Уходят первыми те, кому меньше платят: терять им нечего. */
+function desert(draft: Draft, count: number): number {
+  let left = count
+  let gone = 0
+  const order = Object.keys(draft.party.units).sort(
+    (a, b) => TROOPS[a as TroopId].wage - TROOPS[b as TroopId].wage,
+  )
+  for (const id of order) {
+    if (left <= 0) break
+    const troop = id as TroopId
+    const have = troopCount(draft.party, troop)
+    const taken = Math.min(have, left)
+    draft.party = withUnits(draft.party, troop, -taken)
+    left -= taken
+    gone += taken
+  }
+  return gone
 }
 
 function addGoods(draft: Draft, good: GoodId, delta: number): void {

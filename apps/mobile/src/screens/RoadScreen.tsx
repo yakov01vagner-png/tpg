@@ -42,6 +42,11 @@ export function RoadScreen({ game }: { game: GameState }) {
             {people > 0 ? `${formatPopulation(people)} жителей` : 'заброшено'}
           </Text>
           {fed ? <Text style={fed.style}>{fed.label}</Text> : null}
+          {settlement && settlement.banditry > 0.25 ? (
+            <Text style={settlement.banditry > 0.6 ? styles.hungry : styles.lean}>
+              {settlement.banditry > 0.6 ? 'На дорогах разбой' : 'На дорогах пошаливают'}
+            </Text>
+          ) : null}
           <Text style={styles.hereAddress}>{addressOf(game.world, game.locationId)}</Text>
         </View>
       ) : null}

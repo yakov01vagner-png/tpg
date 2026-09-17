@@ -10,6 +10,8 @@ import {
   formatDuration,
   formatWindowShort,
   jobsAt,
+  kingdomOf,
+  warsOf,
 } from '@tpg/engine'
 import { ScrollView, StyleSheet } from 'react-native'
 import { dispatch } from '../game/store'
@@ -88,6 +90,49 @@ export function LocationScreen({ game }: { game: GameState }) {
             />
           )
         })}
+      </Section>
+
+      <Section title="Служба">
+        {(() => {
+          const kingdom = kingdomOf(game.world, game.locationId)
+          if (!kingdom) return <Empty text="Здесь некому служить." />
+          if (game.service === null) {
+            const command: Command = { type: 'takeService', kingdomId: kingdom.id }
+            const check = canApply(game, command)
+            return (
+              <ActionCard
+                title={`Пойти на службу: ${kingdom.name}`}
+                description={kingdom.flavor}
+                meta="жалованье и доля добычи"
+                reason={check.ok ? null : check.message}
+                onPress={() => dispatch(command)}
+              />
+            )
+          }
+          const wars = warsOf(game.politics, game.service)
+          const seek: Command = { type: 'seekEnemy' }
+          const seekCheck = canApply(game, seek)
+          return (
+            <>
+              <ActionCard
+                title="Выйти навстречу врагу"
+                description={
+                  wars.length > 0
+                    ? `Идёт война: ${wars[0]?.reason}.`
+                    : 'Войны нет — воевать не с кем.'
+                }
+                meta="бой"
+                reason={seekCheck.ok ? null : seekCheck.message}
+                onPress={() => dispatch(seek)}
+              />
+              <ActionCard
+                title="Оставить службу"
+                meta=""
+                onPress={() => dispatch({ type: 'leaveService' })}
+              />
+            </>
+          )
+        })()}
       </Section>
 
       <Section title="Отдых">
