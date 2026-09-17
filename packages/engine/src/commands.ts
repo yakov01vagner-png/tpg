@@ -1,7 +1,7 @@
 import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
 import type { Band, BandEvent } from './band'
-import { tickBands } from './band'
+import { bandSize, tickBands } from './band'
 import type { Battle, BattleSide, GroupId, OrderId } from './battle'
 import { fleeBattle, resolveRound, startBattle, unformUp } from './battle'
 import type { Character } from './character'
@@ -101,6 +101,8 @@ export type Command =
   | { readonly type: 'takeService'; readonly kingdomId: string }
   | { readonly type: 'leaveService' }
   | { readonly type: 'seekEnemy' }
+  /** Напасть на войско, стоящее здесь же: война перестаёт быть фоном. */
+  | { readonly type: 'attackBand'; readonly bandId: string }
   | { readonly type: 'build'; readonly building: BuildingId }
   | { readonly type: 'station'; readonly troop: TroopId; readonly count: number }
   | { readonly type: 'withdraw'; readonly troop: TroopId; readonly count: number }
@@ -192,6 +194,8 @@ export function applyCommand(
       return leaveService(state)
     case 'seekEnemy':
       return seekEnemy(state)
+    case 'attackBand':
+      return attackBand(state, command.bandId)
     case 'build':
       return build(state, command.building)
     case 'station':
@@ -1068,6 +1072,45 @@ function seekEnemy(state: GameState): CommandResult {
   notice(draft, 'Впереди чужие знамёна.')
   advance(draft, hours(4))
   addFatigue(draft, 10)
+  return close(draft)
+}
+
+/**
+ * Напасть на чужую дружину.
+ *
+ * До этого война шла мимо игрока: лорды воевали где-то, а он мог только
+ * услышать об этом в журнале. Войско, стоящее в том же месте, — это то, во что
+ * можно вмешаться: разбить осаждающих, перехватить идущих грабить, вступиться
+ * за своего сюзерена. Бой идёт обычным порядком, как со всяким противником.
+ */
+function attackBand(state: GameState, bandId: string): CommandResult {
+  if (state.battle) return fail('invalid', 'Сначала кончи бой, который идёт.')
+  const band = state.bands.find((candidate) => candidate.id === bandId)
+  if (!band) return fail('invalid', 'Этого войска здесь уже нет.')
+  if (band.locationId !== state.locationId || band.travel) {
+    return fail('unavailableHere', 'Это войско не здесь.')
+  }
+  if (partySize(state.party) < 2) {
+    return fail('invalid', 'В одиночку на войско не ходят.')
+  }
+  const size = bandSize(band)
+  if (size <= 0) return fail('invalid', 'Воевать там уже не с кем.')
+
+  const here = state.world.locations[state.locationId]
+  const lord = lordById(state.politics, band.lordId)
+  const name = lord ? `${lord.title} ${lord.name}` : 'Королевская рать'
+  const draft = open(state)
+  draft.battle = startBattle(
+    draft.party,
+    { name, units: band.units, morale: band.morale, fatigue: 0 },
+    here?.terrain ?? 'plains',
+  )
+  // Разбитое войско снимается с карты сразу: исход боя решит, что с ним стало,
+  // но стоять рядом целым, пока его бьют, оно не может.
+  draft.bands = draft.bands.filter((candidate) => candidate.id !== bandId)
+  notice(draft, `${name} принимает бой.`)
+  advance(draft, hours(2))
+  addFatigue(draft, 8)
   return close(draft)
 }
 

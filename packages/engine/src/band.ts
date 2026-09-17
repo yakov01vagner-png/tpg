@@ -972,3 +972,40 @@ function submit(
     events: [{ type: 'lordSubmits', lordId, kingdomId: crown }],
   }
 }
+
+/**
+ * Чья это земля на самом деле.
+ *
+ * Скелет мира говорит, в чьём королевстве место было заведено, — но держателя
+ * меняют осадой и мятежом. Прогон на век показал, что разница огромна: карта
+ * рисовала пять целых королевств, когда большая часть земли уже не подчинялась
+ * никакой короне. Поэтому всё, что показывает владение, спрашивает здесь.
+ */
+export type Holder =
+  | { readonly kind: 'crown'; readonly kingdomId: string }
+  | { readonly kind: 'lord'; readonly lordId: string; readonly kingdomId: string }
+  | { readonly kind: 'rebel'; readonly lordId: string }
+  | { readonly kind: 'player' }
+  | { readonly kind: 'nobody' }
+
+export function holderOf(politics: Politics, owner: string | null, player: string): Holder {
+  if (!owner) return { kind: 'nobody' }
+  if (owner === player) return { kind: 'player' }
+  if (owner.startsWith('crown:')) return { kind: 'crown', kingdomId: owner.slice('crown:'.length) }
+  const lord = politics.lords.find((candidate) => candidate.id === owner)
+  if (!lord) return { kind: 'nobody' }
+  if (lord.kingdomId === null) return { kind: 'rebel', lordId: lord.id }
+  return { kind: 'lord', lordId: lord.id, kingdomId: lord.kingdomId }
+}
+
+/** Королевство держателя, если он вообще кому-то служит. */
+export function holderKingdom(
+  politics: Politics,
+  owner: string | null,
+  player: string,
+): string | null {
+  const holder = holderOf(politics, owner, player)
+  if (holder.kind === 'crown') return holder.kingdomId
+  if (holder.kind === 'lord') return holder.kingdomId
+  return null
+}

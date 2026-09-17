@@ -3,6 +3,8 @@ import {
   type Band,
   bandSize,
   defendersOf,
+  holderKingdom,
+  holderOf,
   musterBands,
   nextHop,
   seatOf,
@@ -15,7 +17,7 @@ import { createRng } from '../src/rng'
 import { createPolitics, isRebel, tickPolitics } from '../src/war'
 import type { Politics } from '../src/war'
 import { generateWorld } from '../src/world/generate'
-import { roadsFrom } from '../src/world/queries'
+import { kingdomOf, roadsFrom } from '../src/world/queries'
 
 const world = generateWorld(1)
 
@@ -139,7 +141,9 @@ describe('война, у которой есть последствия', () => 
     const crowns = new Set(
       politics.lords.map((lord) => lord.kingdomId).filter((id): id is string => id !== null),
     )
-    console.log(`за 20 лет войн: население ${was} → ${now}, живых мест ${alive}, корон ${crowns.size}`)
+    console.log(
+      `за 20 лет войн: население ${was} → ${now}, живых мест ${alive}, корон ${crowns.size}`,
+    )
     expect(now).toBeGreaterThan(was * 0.5)
     expect(alive).toBeGreaterThan(Object.keys(world.locations).length * 0.8)
     expect(crowns.size).toBeGreaterThanOrEqual(3)
@@ -167,5 +171,45 @@ describe('война, у которой есть последствия', () => 
     const second = live(5)
     expect(first.taken).toEqual(second.taken)
     expect(first.politics.lords).toEqual(second.politics.lords)
+  })
+})
+
+describe('чья земля', () => {
+  it('различает корону, лорда, мятежника, игрока и ничью землю', () => {
+    const { politics } = freshWorld()
+    const lord = politics.lords[0]
+    if (!lord) throw new Error('в мире нет лордов')
+    const rebel = { ...lord, id: 'lord:re:9', kingdomId: null }
+    const withRebel: Politics = { ...politics, lords: [...politics.lords, rebel] }
+
+    expect(holderOf(withRebel, `crown:${lord.kingdomId}`, 'player')).toEqual({
+      kind: 'crown',
+      kingdomId: lord.kingdomId,
+    })
+    expect(holderOf(withRebel, lord.id, 'player')).toEqual({
+      kind: 'lord',
+      lordId: lord.id,
+      kingdomId: lord.kingdomId,
+    })
+    expect(holderOf(withRebel, 'lord:re:9', 'player')).toEqual({
+      kind: 'rebel',
+      lordId: 'lord:re:9',
+    })
+    expect(holderOf(withRebel, 'player', 'player')).toEqual({ kind: 'player' })
+    expect(holderOf(withRebel, null, 'player')).toEqual({ kind: 'nobody' })
+  })
+
+  it('к двадцатому году держатель расходится со скелетом мира', () => {
+    // Ради этого и заведён holderOf: карта, покрашенная по скелету, к этому
+    // времени показывает пять целых королевств там, где земля уже поделена иначе.
+    const { settlements, politics } = live(20)
+    let moved = 0
+    for (const [id, settlement] of Object.entries(settlements)) {
+      const skeleton = kingdomOf(world, id)?.id ?? null
+      const actual = holderKingdom(politics, settlement.owner, 'player')
+      if (actual !== skeleton) moved += 1
+    }
+    console.log(`мест, где держатель не совпадает со скелетом: ${moved} из 62`)
+    expect(moved).toBeGreaterThan(0)
   })
 })

@@ -12,6 +12,7 @@ import {
   canApply,
   foodSecurity,
   formatDuration,
+  holderOf,
   hours,
   layoutOf,
   lordById,
@@ -59,6 +60,24 @@ export function MapScreen({ game }: { game: GameState }) {
   const grid = useMemo(() => worldGrid(game.world, MAP_SIZE), [game.world])
   const regionPaint = useMemo(() => regionColors(game.world, grid), [game.world, grid])
 
+  // Чья земля — по держателю, а не по тому, в каком королевстве место было
+  // заведено. Скелет мира не меняется, а владельцы меняются осадой и мятежом.
+  const held = useMemo(() => {
+    const byPlace: Record<string, string> = {}
+    for (const [id, settlement] of Object.entries(game.settlements)) {
+      const holder = holderOf(game.politics, settlement.owner, PLAYER)
+      byPlace[id] =
+        holder.kind === 'crown' || holder.kind === 'lord'
+          ? holder.kingdomId
+          : holder.kind === 'rebel'
+            ? 'rebel'
+            : holder.kind === 'player'
+              ? 'player'
+              : 'nobody'
+    }
+    return byPlace
+  }, [game.settlements, game.politics])
+
   // Одноцветные клетки в строке сливаются в один прямоугольник: рисовать три
   // тысячи квадратов по одному телефон не обязан.
   const bands = useMemo(() => {
@@ -76,7 +95,8 @@ export function MapScreen({ game }: { game: GameState }) {
         })
       }
       for (let column = 0; column < grid.size; column += 1) {
-        const fill = colorOf(grid.cells[row * grid.size + column], mode, regionPaint)
+        const cell = grid.cells[row * grid.size + column]
+        const fill = colorOf(cell, mode, regionPaint, cell ? held[cell.locationId] : undefined)
         if (fill !== running) {
           flush(column)
           running = fill
@@ -86,7 +106,7 @@ export function MapScreen({ game }: { game: GameState }) {
       flush(grid.size)
     }
     return result
-  }, [grid, mode, regionPaint])
+  }, [grid, mode, regionPaint, held])
 
   // Однотонная заливка вблизи превращается в пустое поле: глазу не за что
   // зацепиться. Часть клеток притемняем — тогда земля читается клетками, а
@@ -105,6 +125,25 @@ export function MapScreen({ game }: { game: GameState }) {
   const horizontal = useRef<ScrollView>(null)
   const vertical = useRef<ScrollView>(null)
   const [view, setView] = useState({ width: 0, height: 0 })
+
+  // Войска: где стоят и куда идут. Идущее по дороге показываем в точке, откуда
+  // оно вышло, — на полотне это ближе к правде, чем прятать его до прихода.
+  const hosts = useMemo(() => {
+    const byPlace = new Map<string, { size: number; side: string; marching: boolean }>()
+    for (const band of game.bands) {
+      const at = band.locationId
+      const size = Object.values(band.units).reduce((sum, n) => sum + (n ?? 0), 0)
+      if (size <= 0) continue
+      const side = band.kingdomId ?? 'rebel'
+      const seen = byPlace.get(at)
+      byPlace.set(at, {
+        size: (seen?.size ?? 0) + size,
+        side: seen?.side ?? side,
+        marching: (seen?.marching ?? false) || band.travel !== null,
+      })
+    }
+    return byPlace
+  }, [game.bands])
 
   const here = points[game.locationId]
   const neighbours = useMemo(
@@ -281,6 +320,31 @@ export function MapScreen({ game }: { game: GameState }) {
               })}
             </G>
 
+            <G>
+              {[...hosts].map(([placeId, host]) => {
+                const point = points[placeId]
+                if (!point) return null
+                const side =
+                  host.side === 'rebel' ? REBEL_COLOR : (KINGDOM_COLORS[host.side] ?? '#8a8172')
+                // Войско — копьё рядом с местом: узкая метка, которая не спорит
+                // с квадратом поселения и растёт от числа людей.
+                const height = Math.min(26, 8 + host.size * 0.22) * mark
+                return (
+                  <G key={`host:${placeId}`}>
+                    <Rect
+                      x={point.x + 7 * mark}
+                      y={point.y - height / 2}
+                      width={4 * mark}
+                      height={height}
+                      fill={side}
+                      stroke={host.marching ? '#efe6d6' : '#17140f'}
+                      strokeWidth={0.8 * mark}
+                    />
+                  </G>
+                )
+              })}
+            </G>
+
             {here ? (
               <Rect
                 x={here.x - 11 * mark}
@@ -323,6 +387,30 @@ export function MapScreen({ game }: { game: GameState }) {
             {TERRAIN_LABELS[chosen.terrain]} · {foodWord(foodSecurity(chosenSettlement))}
             {chosenSettlement.banditry > 0.3 ? ' · неспокойно' : ''}
           </Text>
+          {hosts.get(chosen.id) ? (
+            <Text style={styles.host}>
+              {`Войско: ${hosts.get(chosen.id)?.size ?? 0} чел.${
+                hosts.get(chosen.id)?.marching ? ' (в походе)' : ''
+              }`}
+            </Text>
+          ) : null}
+          {chosen.id === game.locationId
+            ? game.bands
+                .filter((band) => band.locationId === game.locationId && !band.travel)
+                .map((band) => {
+                  const command: Command = { type: 'attackBand', bandId: band.id }
+                  const size = Object.values(band.units).reduce((sum, n) => sum + (n ?? 0), 0)
+                  if (size <= 0 || !canApply(game, command).ok) return null
+                  const lord = lordById(game.politics, band.lordId)
+                  return (
+                    <Button
+                      key={band.id}
+                      label={`Напасть: ${lord ? `${lord.title} ${lord.name}` : 'рать короны'} (${size})`}
+                      onPress={() => dispatch(command)}
+                    />
+                  )
+                })
+            : null}
           {road ? (
             <Button
               label={`Идти сюда — ${formatDuration(hours(road.hours))}`}
@@ -344,15 +432,24 @@ export function MapScreen({ game }: { game: GameState }) {
 }
 
 /** Чем красить клетку: в этом вся разница между режимами карты. */
+/** Мятежник и сам игрок — такие же силы на карте, как короны. */
+const REBEL_COLOR = '#8c5a3c'
+const PLAYER_COLOR = '#c9a227'
+const NOBODY_COLOR = '#4a453e'
+
 function colorOf(
   cell: GridCell | null | undefined,
   mode: ModeId,
   regionPaint: Readonly<Record<string, string>>,
+  holder: string | undefined,
 ): string | null {
   if (!cell) return null
   if (mode === 'land') return TERRAIN_COLORS[cell.terrain]
   if (mode === 'regions') return regionPaint[cell.regionId] ?? '#6b6257'
-  return KINGDOM_COLORS[cell.kingdomId] ?? '#6b6257'
+  if (holder === 'rebel') return REBEL_COLOR
+  if (holder === 'player') return PLAYER_COLOR
+  if (holder === 'nobody') return NOBODY_COLOR
+  return KINGDOM_COLORS[holder ?? cell.kingdomId] ?? '#6b6257'
 }
 
 function sizeFor(archetype: string): number {
@@ -424,4 +521,5 @@ const styles = StyleSheet.create({
   name: { color: colors.text, fontSize: font.heading },
   dim: { color: colors.dim, fontSize: font.small },
   here: { color: colors.gold, fontSize: font.small },
+  host: { color: '#d8cdbb', fontSize: font.small },
 })
