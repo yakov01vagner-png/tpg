@@ -1,5 +1,7 @@
 import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
+import type { Band, BandEvent } from './band'
+import { tickBands } from './band'
 import type { Battle, BattleSide, GroupId, OrderId } from './battle'
 import { fleeBattle, resolveRound, startBattle, unformUp } from './battle'
 import type { Character } from './character'
@@ -1380,6 +1382,7 @@ interface Draft {
   party: Party
   battle: Battle | null
   politics: Politics
+  bands: readonly Band[]
   service: string | null
   siege: { locationId: string; days: number } | null
   renown: number
@@ -1401,6 +1404,7 @@ function open(state: GameState): Draft {
     party: state.party,
     battle: state.battle,
     politics: state.politics,
+    bands: state.bands,
     service: state.service,
     siege: state.siege,
     renown: state.renown,
@@ -1434,6 +1438,23 @@ function close(draft: Draft): CommandResult {
     draft.settlements = politics.settlements
     draft.events.push(...warNews(draft.base, draft.locationId, politics.events))
 
+    // Дружины ходят по тем же суткам. Дней может пройти много — считаем каждый:
+    // войско, прошедшее полстраны за один такт, — это опять телепорт.
+    for (let i = 0; i < daysPassed; i += 1) {
+      const march = tickBands(
+        draft.base.world,
+        draft.politics,
+        draft.settlements,
+        draft.bands,
+        draft.rng,
+      )
+      draft.bands = march.bands
+      draft.settlements = march.settlements
+      draft.politics = march.politics
+      draft.rng = march.rng
+      draft.events.push(...bandNews(draft.base, draft.locationId, march.events))
+    }
+
     payUpkeep(draft, daysPassed)
     expireQuests(draft)
   }
@@ -1448,6 +1469,7 @@ function close(draft: Draft): CommandResult {
     party: draft.party,
     battle: draft.battle,
     politics: draft.politics,
+    bands: draft.bands,
     service: draft.service,
     siege: draft.siege,
     renown: draft.renown,
@@ -1487,6 +1509,64 @@ function worldNews(
 }
 
 /** Война и разорение — новости того же порядка, что голод: слышно по соседству. */
+/**
+ * Что из походов лордов доходит до игрока.
+ *
+ * Мир большой, и вываливать в журнал каждый шаг каждой дружины — значит
+ * похоронить в нём всё остальное. Слышно то, что случилось в своей области,
+ * и то, что меняет карту: взятые места и конец мятежа.
+ */
+function bandNews(
+  state: GameState,
+  locationId: string,
+  events: readonly BandEvent[],
+): readonly GameEvent[] {
+  const news: GameEvent[] = []
+  const here = regionOf(state.world, locationId)?.id
+  const near = (id: string) => regionOf(state.world, id)?.id === here
+  const placeName = (id: string) => state.world.locations[id]?.name ?? 'соседнее селение'
+  const lordName = (id: string) => {
+    const lord = lordById(state.politics, id)
+    return lord ? `${lord.title} ${lord.name}` : 'неизвестный владетель'
+  }
+
+  for (const event of events) {
+    if (event.type === 'bandRaid') {
+      if (!near(event.locationId)) continue
+      news.push({
+        type: 'notice',
+        text: `${placeName(event.locationId)} разорено: уведено и убито ${event.lost}.`,
+      })
+    } else if (event.type === 'bandSiege') {
+      if (!near(event.locationId)) continue
+      news.push({ type: 'notice', text: `${placeName(event.locationId)} обложено войском.` })
+    } else if (event.type === 'bandTook') {
+      news.push({
+        type: 'notice',
+        text: `${placeName(event.locationId)} взято: место перешло к ${lordName(
+          state.bands.find((band) => band.id === event.bandId)?.lordId ?? '',
+        )}.`,
+      })
+    } else if (event.type === 'bandClash') {
+      if (!near(event.locationId)) continue
+      news.push({
+        type: 'notice',
+        text: `Под ${placeName(event.locationId)} сошлись дружины: ${lordName(
+          event.winner,
+        )} одолел, полегло ${event.fallen}.`,
+      })
+    } else if (event.type === 'lordSubmits') {
+      news.push({
+        type: 'notice',
+        text: `${lordName(event.lordId)} разбит и снова присягнул короне.`,
+      })
+    } else if (event.type === 'lordFell') {
+      news.push({ type: 'notice', text: `${lordName(event.lordId)} пал, и род его пресёкся.` })
+    }
+  }
+  return news
+}
+
 function warNews(
   state: GameState,
   locationId: string,
@@ -1498,15 +1578,6 @@ function warNews(
     state.world.kingdoms[id]?.name ?? lordById(state.politics, id)?.name ?? 'неизвестные'
 
   for (const event of events) {
-    if (event.type === 'raid') {
-      if (regionOf(state.world, event.locationId)?.id !== regionOf(state.world, locationId)?.id) {
-        continue
-      }
-      const name = state.world.locations[event.locationId]?.name ?? 'соседнее селение'
-      news.push({ type: 'notice', text: `${name} разорено: уведено и убито ${event.lost}.` })
-      continue
-    }
-
     if (event.type === 'rebellion') {
       const lord = lordById(state.politics, event.lordId)
       news.push({

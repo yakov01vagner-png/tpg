@@ -1,3 +1,5 @@
+import type { Band } from './band'
+import { musterBands } from './band'
 import type { Battle } from './battle'
 import type { Character } from './character'
 import type { Settlement } from './economy'
@@ -19,7 +21,7 @@ import { defaultStartLocationId, generateWorld } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -56,6 +58,11 @@ export interface GameState {
   readonly battle: Battle | null
   /** Кто с кем воюет. */
   readonly politics: Politics
+  /**
+   * Дружины лордов на карте. Войну ведут они: пока никто не дошёл до места,
+   * объявленная война остаётся бумагой (band.ts).
+   */
+  readonly bands: readonly Band[]
   /** Королевство, которому игрок служит за жалованье. */
   readonly service: string | null
   /** Идущая осада: место и сколько суток войско стоит под стенами. */
@@ -81,6 +88,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
   const home = world.locations[locationId]
   // Землю раздаём сразу: у каждого места есть держатель, иначе отнимать не у кого.
   const [politics, settlements] = createPolitics(world, createSettlements(world), createRng(seed))
+  const [bands] = musterBands(politics, settlements, createRng(seed + 7))
   return {
     schemaVersion: SCHEMA_VERSION,
     time: WORLD_START,
@@ -92,6 +100,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     party: EMPTY_PARTY,
     battle: null,
     politics,
+    bands,
     service: null,
     siege: null,
     renown: 0,

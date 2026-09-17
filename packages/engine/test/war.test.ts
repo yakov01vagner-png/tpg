@@ -42,20 +42,15 @@ describe('политика', () => {
     }
   })
 
-  it('разорение уводит людей, выгребает хлеб и плодит разбой', () => {
+  it('объявленная война сама по себе никого не разоряет', () => {
+    // Раньше разорение бросал кубик, и за сто лет набеги убивали больше людей,
+    // чем живёт в мире, ничего при этом не меняя. Теперь разорять должен тот,
+    // кто дошёл до места (band.ts), а война на бумаге остаётся бумагой.
     const result = tickPolitics(world, NO_POLITICS, start, 1200, createRng(11))
-    const raids = result.events.filter((event) => event.type === 'raid')
-    expect(raids.length).toBeGreaterThan(0)
-
-    const raid = raids[0]
-    if (!raid || raid.type !== 'raid') return
-    const before = start[raid.locationId]
-    const after = result.settlements[raid.locationId]
-    console.log(
-      `разорено ${world.locations[raid.locationId]?.name}: людей ${before?.population} → ${after?.population}, ` +
-        `разбой ${before?.banditry} → ${after?.banditry}`,
-    )
-    expect(after?.banditry ?? 0).toBeGreaterThan(before?.banditry ?? 0)
+    expect(result.events.some((event) => event.type === 'warDeclared')).toBe(true)
+    for (const [id, settlement] of Object.entries(result.settlements)) {
+      expect(settlement.population).toBe(start[id]?.population)
+    }
   })
 })
 

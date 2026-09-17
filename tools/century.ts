@@ -8,7 +8,9 @@
  *
  * Запуск: npx tsx tools/century.ts [лет] [зёрна через запятую]
  */
-import { createSettlements, priceOf, recruitPool } from '../packages/engine/src/economy'
+import { musterBands, tickBands } from '../packages/engine/src/band'
+import type { Band } from '../packages/engine/src/band'
+import { createSettlements, priceOf } from '../packages/engine/src/economy'
 import type { Settlement } from '../packages/engine/src/economy'
 import { foodSecurity, tickDays } from '../packages/engine/src/life'
 import { createRng } from '../packages/engine/src/rng'
@@ -60,6 +62,16 @@ interface Run {
   readonly lordsAtEnd: number
   readonly placesUnderRebels: number
   readonly rebelWarsAtEnd: number
+  readonly taken: number
+  readonly clashes: number
+  readonly clashFallen: number
+  readonly submitted: number
+  readonly lordsFell: number
+  readonly bandsAtEnd: number
+  readonly warriorsAtEnd: number
+  readonly landStart: ReadonlyMap<string, number>
+  readonly landEnd: ReadonlyMap<string, number>
+  readonly changedHands: number
 }
 
 function population(settlements: Settlements): number {
@@ -79,6 +91,9 @@ function run(seed: number, years: number): Run {
   settlements = owned
   let politics: Politics = politicsStart
   let rng = createRng(seed + 1000)
+  const [initial, afterMuster] = musterBands(politicsStart, settlements, createRng(seed + 7))
+  let bands: readonly Band[] = initial
+  rng = afterMuster
 
   const village = pick(world, 'village')
   const city = pick(world, 'capital')
@@ -97,6 +112,28 @@ function run(seed: number, years: number): Run {
     byArchetype.set(archetype, archetypeRow)
   }
 
+  // Чья земля: по держателю, а не по скелету мира. Ради этого блок и затеян —
+  // если за век числа не сдвинулись, значит войска ходят впустую.
+  const landOf = (): Map<string, number> => {
+    const tally = new Map<string, number>()
+    for (const settlement of Object.values(settlements)) {
+      if (settlement.population <= 0 || !settlement.owner) continue
+      const side = sideOfOwner(settlement.owner)
+      tally.set(side, (tally.get(side) ?? 0) + 1)
+    }
+    return tally
+  }
+  const sideOfOwner = (owner: string): string => {
+    if (owner.startsWith('crown:')) return owner.slice('crown:'.length)
+    const lord = politics.lords.find((candidate) => candidate.id === owner)
+    if (!lord) return 'ничьи'
+    return lord.kingdomId ?? 'мятежники'
+  }
+  const landStart = landOf()
+  const ownerAtStart = new Map(
+    Object.entries(settlements).map(([id, settlement]) => [id, settlement.owner]),
+  )
+
   const snapshots: Snapshot[] = []
   const warPairs = new Map<string, number>()
   const archmageDays: Record<string, number> = { free: 0, busy: 0, refused: 0 }
@@ -114,6 +151,11 @@ function run(seed: number, years: number): Run {
   let rebellions = 0
   let warDays = 0
   let longestWar = 0
+  let taken = 0
+  let clashes = 0
+  let clashFallen = 0
+  let submitted = 0
+  let lordsFell = 0
 
   const began = Date.now()
   for (let day = 1; day <= years * 365; day += 1) {
@@ -132,6 +174,27 @@ function run(seed: number, years: number): Run {
     politics = turn.politics
     settlements = turn.settlements
     rng = turn.rng
+
+    const march = tickBands(world, politics, settlements, bands, rng)
+    bands = march.bands
+    settlements = march.settlements
+    politics = march.politics
+    rng = march.rng
+    for (const event of march.events) {
+      if (event.type === 'bandRaid') {
+        raids += 1
+        raidLosses += event.lost
+      } else if (event.type === 'bandTook') {
+        taken += 1
+      } else if (event.type === 'bandClash') {
+        clashes += 1
+        clashFallen += event.fallen
+      } else if (event.type === 'lordSubmits') {
+        submitted += 1
+      } else if (event.type === 'lordFell') {
+        lordsFell += 1
+      }
+    }
     for (const event of turn.events) {
       if (event.type === 'warDeclared') {
         warsDeclared += 1
@@ -221,6 +284,21 @@ function run(seed: number, years: number): Run {
     lordsAtEnd: politics.lords.length,
     placesUnderRebels,
     rebelWarsAtEnd,
+    taken,
+    clashes,
+    clashFallen,
+    submitted,
+    lordsFell,
+    landStart,
+    landEnd: landOf(),
+    changedHands: Object.entries(settlements).filter(
+      ([id, settlement]) => ownerAtStart.get(id) !== settlement.owner,
+    ).length,
+    bandsAtEnd: bands.length,
+    warriorsAtEnd: bands.reduce(
+      (sum, band) => sum + Object.values(band.units).reduce((a, b) => a + (b ?? 0), 0),
+      0,
+    ),
   }
 }
 
@@ -296,8 +374,26 @@ console.log(
     .join(', ')}`,
 )
 console.log(
+  `Дружины:        ${first.clashes} стычек (${first.clashFallen} полегло), ` +
+    `${first.taken} мест взято осадой, ${first.submitted} мятежников присягнули заново, ` +
+    `${first.lordsFell} лордов пало`,
+)
+console.log(`К концу:        ${first.bandsAtEnd} дружин, ${first.warriorsAtEnd} человек под ружьём`)
+console.log(
   `Время счёта:    ${first.ms} мс на ${years} лет (${(first.ms / years).toFixed(1)} мс/год)`,
 )
+
+console.log(`\nЗемля по держателю (мест из ${Object.keys(world.locations).length}):`)
+for (const side of new Set([...first.landStart.keys(), ...first.landEnd.keys()])) {
+  const name = world.kingdoms[side]?.name ?? side
+  const was = first.landStart.get(side) ?? 0
+  const now = first.landEnd.get(side) ?? 0
+  const arrow = now > was ? '↑' : now < was ? '↓' : '='
+  console.log(
+    `  ${name.padEnd(30)} ${String(was).padStart(3)} → ${String(now).padStart(3)}  ${arrow}`,
+  )
+}
+console.log(`  за век сменили хозяина: ${first.changedHands} мест`)
 
 console.log('\nПо королевствам:')
 for (const [id, row] of first.byKingdom) {

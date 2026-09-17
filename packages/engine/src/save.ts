@@ -1,9 +1,12 @@
+import { musterBands } from './band'
 import { createSettlements, recruitPool } from './economy'
+import type { Settlement } from './economy'
 import { EMPTY_PARTY } from './party'
 import { NO_REPUTATION } from './reputation'
 import { createRng } from './rng'
 import type { GameState } from './state'
 import { SCHEMA_VERSION } from './state'
+import type { Politics } from './war'
 import { NO_POLITICS, createPolitics } from './war'
 import { defaultStartLocationId, generateWorld } from './world/generate'
 import type { World } from './world/types'
@@ -57,6 +60,18 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
       realm: data.realm ?? null,
       quests: data.quests ?? [],
     }
+  },
+  /**
+   * v6 → v7: у лордов появились дружины. Войско собирается заново из их силы и
+   * встаёт по домам: где именно оно стояло в старом сейве, знать неоткуда —
+   * там его просто не было.
+   */
+  6: (data) => {
+    const politics = data.politics as Politics
+    const settlements = (data.settlements ?? {}) as Record<string, Settlement>
+    const rng = data.rng as { state?: number } | undefined
+    const [bands] = musterBands(politics, settlements, createRng((rng?.state ?? 1) + 7))
+    return { ...data, bands }
   },
   /**
    * v4 → v5: появились держатели земли, постройки и гарнизоны. Землю

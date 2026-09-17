@@ -175,7 +175,6 @@ export function enemyOf(war: War, kingdomId: string): string {
 export type WarEvent =
   | { readonly type: 'warDeclared'; readonly war: War }
   | { readonly type: 'peace'; readonly war: War }
-  | { readonly type: 'raid'; readonly locationId: string; readonly lost: number }
   | { readonly type: 'rebellion'; readonly lordId: string }
   | { readonly type: 'archmage'; readonly kingdomId: string; readonly state: Archmage['state'] }
 
@@ -190,8 +189,6 @@ export interface PoliticsResult {
 const DECLARE_CHANCE = 0.004
 /** Шанс, что за сутки война закончится миром. */
 const PEACE_CHANCE = 0.006
-/** Шанс, что за сутки враг разорит одно поселение противника. */
-const RAID_CHANCE = 0.12
 
 export function tickPolitics(
   world: World,
@@ -202,7 +199,7 @@ export function tickPolitics(
 ): PoliticsResult {
   let generator = rng
   let wars = [...politics.wars]
-  let current = settlements
+  const current = settlements
   const events: WarEvent[] = []
   const kingdomIds = Object.keys(world.kingdoms)
   const days = Math.max(0, day - politics.lastDay)
@@ -241,19 +238,8 @@ export function tickPolitics(
       }
     }
 
-    // Пока идёт война — разоряют.
-    for (const war of wars) {
-      const [raids, afterRaid] = rollChance(generator, RAID_CHANCE)
-      generator = afterRaid
-      if (!raids) continue
-      const [attacker, afterSide] = rollChance(generator, 0.5)
-      generator = afterSide
-      const victimKingdom = attacker ? war.b : war.a
-      const [result, afterPick] = raid(world, current, victimKingdom, generator)
-      generator = afterPick
-      current = result.settlements
-      if (result.event) events.push(result.event)
-    }
+    // Разоряет не кубик, а войско: см. band.ts. Пока никто не дошёл до места,
+    // война остаётся бумагой — и это правильно.
   }
 
   const afterLords = tickLords(
@@ -265,7 +251,7 @@ export function tickPolitics(
   )
   return {
     politics: afterLords.politics,
-    settlements: current,
+    settlements: afterLords.settlements,
     rng: afterLords.rng,
     events: [...events, ...afterLords.events],
   }
@@ -285,12 +271,18 @@ function tickLords(
   settlements: Readonly<Record<string, Settlement>>,
   days: number,
   rng: Rng,
-): { politics: Politics; rng: Rng; events: readonly WarEvent[] } {
-  if (days <= 0) return { politics, rng, events: [] }
+): {
+  politics: Politics
+  settlements: Readonly<Record<string, Settlement>>
+  rng: Rng
+  events: readonly WarEvent[]
+} {
+  if (days <= 0) return { politics, settlements, rng, events: [] }
   let generator = rng
   const events: WarEvent[] = []
   const archmages: Record<string, Archmage> = { ...politics.archmages }
   let wars = [...politics.wars]
+  let places = settlements
 
   // Архимаг то занят своими делами, то снова свободен.
   for (const kingdomId of Object.keys(archmages)) {
@@ -305,11 +297,50 @@ function tickLords(
     archmages[kingdomId] = { kingdomId, state, untilDay: politics.lastDay + days + span }
   }
 
+  // Кто чем владеет — один проход по миру на такт, а не по проходу на лорда.
+  const ownedBy = new Map<string, string[]>()
+  for (const [id, settlement] of Object.entries(places)) {
+    if (!settlement.owner || settlement.population <= 0) continue
+    const list = ownedBy.get(settlement.owner) ?? []
+    list.push(id)
+    ownedBy.set(settlement.owner, list)
+  }
+  const smallestOf = (owner: string): string | null => {
+    let pick: string | null = null
+    let least = Number.POSITIVE_INFINITY
+    for (const id of ownedBy.get(owner) ?? []) {
+      const people = places[id]?.population ?? 0
+      if (people < least) {
+        least = people
+        pick = id
+      }
+    }
+    return pick
+  }
+
   const lords: Lord[] = []
   for (const lord of politics.lords) {
     if (lord.kingdomId === null) {
       lords.push(lord)
       continue
+    }
+
+    // Безземельный лорд — не лорд: ни дружины, ни причин служить. Корона
+    // жалует ему место из домена (DESIGN.md, п.3.2), а если жаловать нечего —
+    // род уходит в тень. Без этого знать вымирала: за век оставалось семь
+    // владетелей из шестнадцати, и воевать становилось некому.
+    if ((ownedBy.get(lord.id)?.length ?? 0) === 0) {
+      const crown = `crown:${lord.kingdomId}`
+      const granted = smallestOf(crown)
+      if (!granted) continue
+      const settlement = places[granted]
+      if (!settlement) continue
+      places = { ...places, [granted]: { ...settlement, owner: lord.id } }
+      ownedBy.set(lord.id, [granted])
+      ownedBy.set(
+        crown,
+        (ownedBy.get(crown) ?? []).filter((id) => id !== granted),
+      )
     }
     const holdings = Object.values(settlements).filter((settlement) => settlement.owner === lord.id)
     const hunger =
@@ -320,16 +351,32 @@ function tickLords(
       holdings.length > 0 ? holdings.reduce((sum, s) => sum + s.banditry, 0) / holdings.length : 0
     const kingdomAtWar = warsOf({ ...politics, wars }, lord.kingdomId).length > 0
 
+    // Причины недовольства — голод и разбой на своей земле: за них лорд винит
+    // корону справедливо. Сама по себе война теперь идёт почти всегда (дружины
+    // ходят по-настоящему), и прежняя пеня за неё сводила верность к нулю всем
+    // подряд — мятеж становился нормой, а не событием.
     let drift = 0.02
-    if (hunger < 0.5) drift -= 0.12
-    if (unrest > 0.3) drift -= 0.1
-    if (kingdomAtWar) drift -= 0.05
+    // Сытость 0.5 — это не голод, а обычная жизнь: амбар редко бывает полон, и
+    // ниже половины сидит большинство мест во все времена (замерено: 50 из 62 к
+    // пятнадцатому году). При прежнем пороге недовольство было включено всегда,
+    // верность съезжала к нулю у всех подряд, и мятеж становился судьбой, а не
+    // выбором. Голод — это 0.3, как и написано игроку на экране.
+    // Держится год кряду — лорд дозреет до мятежа; пережитый неурожай или
+    // прошедшая мимо шайка его не поднимут. Копится медленнее, чем восстанавливается
+    // за спокойные годы, иначе мятеж снова станет судьбой всякого владетеля.
+    if (hunger < 0.3) drift -= 0.08
+    if (unrest > 0.3) drift -= 0.04
+    if (kingdomAtWar) drift -= 0.015
     const loyalty = Math.max(0, Math.min(100, lord.loyalty + drift * days))
 
     // Момент для мятежа: верности нет, а архимаг короны занят своим.
+    // Мятеж — событие, а не погода. Пока война считалась кубиком, лорды
+    // бунтовали редко; с живыми дружинами голод и разбой стали постоянными, и
+    // при прежних числах за век бунтовала сотня владетелей — к концу корон не
+    // оставалось вовсе. Порог ниже, бросок реже: восстают единицы и по делу.
     const crownMage = archmages[lord.kingdomId]?.state ?? 'free'
-    if (loyalty < 20 && crownMage !== 'free') {
-      const [rebels, afterRebel] = rollChance(generator, 0.04 * days)
+    if (loyalty < 12 && crownMage !== 'free') {
+      const [rebels, afterRebel] = rollChance(generator, 0.004 * days)
       generator = afterRebel
       if (rebels) {
         const war: War = {
@@ -341,6 +388,28 @@ function tickLords(
         wars = [...wars, war]
         events.push({ type: 'rebellion', lordId: lord.id })
         events.push({ type: 'warDeclared', war })
+
+        // С мятежником уходит его гнездо, а не вся провинция: держатели
+        // помельче остаются при короне. Когда уходило всё, каждый мятеж
+        // отрезал от королевства кусок навсегда — за век короны теряли всю
+        // землю, вместе с нею рать, и унимать мятеж становилось некому.
+        let nest: string | null = null
+        let biggest = -1
+        for (const [id, settlement] of Object.entries(places)) {
+          if (settlement.owner !== lord.id) continue
+          if (settlement.population > biggest) {
+            biggest = settlement.population
+            nest = id
+          }
+        }
+        const reverted: Record<string, Settlement> = { ...places }
+        for (const [id, settlement] of Object.entries(reverted)) {
+          if (settlement.owner === lord.id && id !== nest) {
+            reverted[id] = { ...settlement, owner: `crown:${lord.kingdomId}` }
+          }
+        }
+        places = reverted
+
         lords.push({ ...lord, kingdomId: null, loyalty: 0 })
         continue
       }
@@ -348,53 +417,54 @@ function tickLords(
     lords.push({ ...lord, loyalty })
   }
 
-  return { politics: { wars, lastDay: politics.lastDay, lords, archmages }, rng: generator, events }
+  // Корона, у которой земли много, а вассалов мало, сажает нового человека.
+  // Иначе после большой войны королевство остаётся доменом без знати — землю
+  // держать некому, дружин нет, и мир замирает во второй раз.
+  for (const kingdomId of Object.keys(archmages)) {
+    const crown = `crown:${kingdomId}`
+    const vassals = lords.filter((lord) => lord.kingdomId === kingdomId).length
+    const demesne = (ownedBy.get(crown) ?? []).filter((id) => (places[id]?.population ?? 0) > 0)
+    if (vassals >= 3 || demesne.length < 4) continue
+    // Не каждый день: жалование лена — дело месяцев, а не утра. Без броска
+    // корона сажала нового человека ежедневно, и за век мир видел сотни
+    // наспех посаженных владетелей.
+    const [grants, afterGrant] = rollChance(generator, 0.02 * days)
+    generator = afterGrant
+    if (!grants) continue
+    const granted = smallestOf(crown)
+    if (!granted) continue
+    const settlement = places[granted]
+    if (!settlement) continue
+    const [nameIndex, afterName] = nextInt(generator, 0, LORD_NAMES.length - 1)
+    generator = afterName
+    const titles = LORD_TITLES[kingdomId] ?? LORD_TITLES.reEstiz ?? ['барон']
+    const id = `lord:${kingdomId}:n${politics.lastDay + days}`
+    places = { ...places, [granted]: { ...settlement, owner: id } }
+    ownedBy.set(id, [granted])
+    ownedBy.set(
+      crown,
+      demesne.filter((held) => held !== granted),
+    )
+    lords.push({
+      id,
+      name: LORD_NAMES[nameIndex] ?? 'Безымянный',
+      title: titles[0] ?? 'барон',
+      kingdomId,
+      loyalty: 65,
+      strength: Math.max(8, Math.round(settlement.population / 60)),
+    })
+  }
+
+  return {
+    politics: { wars, lastDay: politics.lastDay, lords, archmages },
+    settlements: places,
+    rng: generator,
+    events,
+  }
 }
 
 function sameWar(war: War, a: string, b: string): boolean {
   return (war.a === a && war.b === b) || (war.a === b && war.b === a)
-}
-
-/** Разорение: у поселения уводят хлеб и людей, а по округе расходятся шайки. */
-function raid(
-  world: World,
-  settlements: Readonly<Record<string, Settlement>>,
-  kingdomId: string,
-  rng: Rng,
-): [{ settlements: Readonly<Record<string, Settlement>>; event: WarEvent | null }, Rng] {
-  const kingdom = world.kingdoms[kingdomId]
-  if (!kingdom) return [{ settlements, event: null }, rng]
-
-  const targets = kingdom.regionIds
-    .flatMap((regionId) => world.regions[regionId]?.provinceIds ?? [])
-    .flatMap((provinceId) => world.provinces[provinceId]?.locationIds ?? [])
-    .filter((id) => (settlements[id]?.population ?? 0) > 0)
-  if (targets.length === 0) return [{ settlements, event: null }, rng]
-
-  const [index, afterIndex] = nextInt(rng, 0, targets.length - 1)
-  const locationId = targets[index]
-  const victim = locationId ? settlements[locationId] : undefined
-  if (!locationId || !victim) return [{ settlements, event: null }, afterIndex]
-
-  const [severity, afterSeverity] = nextFloat(afterIndex)
-  const lost = Math.round(victim.population * (0.01 + severity * 0.03))
-  const next: Settlement = {
-    ...victim,
-    population: Math.max(0, victim.population - lost),
-    banditry: Math.min(1, victim.banditry + 0.15 + severity * 0.2),
-    stock: {
-      ...victim.stock,
-      grain: Math.round(victim.stock.grain * 0.5),
-      fish: Math.round(victim.stock.fish * 0.6),
-    },
-  }
-  return [
-    {
-      settlements: { ...settlements, [locationId]: next },
-      event: { type: 'raid', locationId, lost },
-    },
-    afterSeverity,
-  ]
 }
 
 /**
