@@ -48,6 +48,7 @@ import type { GameTime } from './time'
 import type { TimeWindow } from './time'
 import {
   DAY_WINDOW,
+  MINUTES_PER_DAY,
   MINUTES_PER_HOUR,
   dayOf,
   formatDuration,
@@ -65,6 +66,8 @@ import { kingdomOf, regionOf, roadsFrom } from './world/queries'
  * UI не мутирует состояние сам: он отправляет команду и получает новое.
  */
 export type Command =
+  /** Просто идущее время: мир живёт, пока игрок стоит и смотрит. */
+  | { readonly type: 'tick'; readonly minutes: number }
   | { readonly type: 'travel'; readonly toLocationId: string }
   | { readonly type: 'hire'; readonly troop: TroopId; readonly count: number }
   | { readonly type: 'disband'; readonly troop: TroopId; readonly count: number }
@@ -124,6 +127,8 @@ export function applyCommand(
   if (!fighting && isBattleCommand) return fail('invalid', 'Боя нет.')
 
   switch (command.type) {
+    case 'tick':
+      return tick(state, command.minutes)
     case 'travel':
       return travel(state, command.toLocationId)
     case 'hire':
@@ -255,6 +260,23 @@ function ambush(draft: Draft, locationId: string): void {
 /** Дорога выматывает примерно как работа: три с половиной единицы за час хода. */
 export function travelFatigue(roadHours: number): number {
   return Math.round(roadHours * 3.5)
+}
+
+/**
+ * Ход времени сам по себе.
+ *
+ * Отдельная команда, а не часть каждой другой: мир должен идти и тогда, когда
+ * игрок ничего не делает. Стоять — не то же самое, что отдыхать: усталость
+ * сходит вдвое медленнее, чем на привале.
+ */
+function tick(state: GameState, minutes: number): CommandResult {
+  if (!Number.isFinite(minutes) || minutes <= 0 || minutes > MINUTES_PER_DAY) {
+    return fail('invalid', 'Столько времени за раз не проходит.')
+  }
+  const draft = open(state)
+  advance(draft, Math.round(minutes))
+  addFatigue(draft, (-REST_RECOVERY_PER_HOUR / 2) * (minutes / MINUTES_PER_HOUR))
+  return close(draft)
 }
 
 /** Сколько времени уходит на сделку — торг не бывает мгновенным. */

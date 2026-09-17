@@ -46,7 +46,7 @@ export default function App() {
 
         {state.phase === 'play' && !state.game.over && state.game.battle ? (
           <>
-            <Header game={state.game} />
+            <Header game={state.game} speed={state.speed} />
             <View style={styles.body}>
               <BattleScreen game={state.game} />
             </View>
@@ -60,7 +60,7 @@ export default function App() {
 
         {state.phase === 'play' && !state.game.over && !state.game.battle ? (
           <>
-            <Header game={state.game} />
+            <Header game={state.game} speed={state.speed} />
             <View style={styles.body}>
               {tab === 'location' ? <LocationScreen game={state.game} /> : null}
               {tab === 'trade' ? <TradeScreen game={state.game} /> : null}

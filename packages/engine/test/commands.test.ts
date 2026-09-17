@@ -5,7 +5,7 @@ import type { CommandResult } from '../src/commands'
 import { applyCommand, canApply, examChance } from '../src/commands'
 import type { GameState } from '../src/state'
 import { createGame } from '../src/state'
-import { WORLD_START, hourOf, hours } from '../src/time'
+import { WORLD_START, dayOf, hourOf, hours } from '../src/time'
 import { generateWorld } from '../src/world/generate'
 import { roadsFrom } from '../src/world/queries'
 
@@ -309,5 +309,31 @@ describe('дорога', () => {
     const night: GameState = { ...home(), time: WORLD_START + hours(17) }
     const result = applyCommand(night, { type: 'travel', toLocationId: neighbourOf(night).to })
     expect(result.ok).toBe(true)
+  })
+})
+
+describe('мир идёт сам', () => {
+  it('тик двигает часы и потихоньку снимает усталость', () => {
+    const before = game({ fatigue: 40 })
+    const after = ok(applyCommand(before, { type: 'tick', minutes: 60 }))
+    expect(after.time).toBe(before.time + 60)
+    expect(after.character.fatigue).toBeLessThan(40)
+    // Просто стоять — не то же самое, что отдыхать на привале.
+    const rested = ok(applyCommand(before, { type: 'rest', hours: 1 }))
+    expect(after.character.fatigue).toBeGreaterThan(rested.character.fatigue)
+  })
+
+  it('за долгий тик мир успевает прожить сутки', () => {
+    const before = game()
+    const after = ok(applyCommand(before, { type: 'tick', minutes: hours(20) }))
+    expect(dayOf(after.time)).toBeGreaterThan(dayOf(before.time))
+    // Поселения пересчитались: запасы уже не те, что были.
+    expect(after.settlements).not.toEqual(before.settlements)
+  })
+
+  it('не принимает бессмыслицу', () => {
+    expect(applyCommand(game(), { type: 'tick', minutes: 0 }).ok).toBe(false)
+    expect(applyCommand(game(), { type: 'tick', minutes: -5 }).ok).toBe(false)
+    expect(applyCommand(game(), { type: 'tick', minutes: 10_000 }).ok).toBe(false)
   })
 })

@@ -94,3 +94,51 @@ export function formatWindowShort(window: TimeWindow): string {
   const pad = (hour: number) => `${String(hour % 24).padStart(2, '0')}:00`
   return `${pad(window.fromHour)}–${pad(window.toHour)}`
 }
+
+/**
+ * Время суток.
+ *
+ * Игроку нужно не «14:30», а понимание, что сейчас за пора: половина дел
+ * привязана к часам, и это должно читаться с одного взгляда.
+ */
+export type TimeOfDay = 'night' | 'dawn' | 'morning' | 'noon' | 'evening' | 'dusk'
+
+export const TIME_OF_DAY_LABELS: Record<TimeOfDay, string> = {
+  night: 'ночь',
+  dawn: 'рассвет',
+  morning: 'утро',
+  noon: 'полдень',
+  evening: 'вечер',
+  dusk: 'сумерки',
+}
+
+export function timeOfDay(time: GameTime): TimeOfDay {
+  const hour = hourOf(time)
+  if (hour < 5) return 'night'
+  if (hour < 7) return 'dawn'
+  if (hour < 11) return 'morning'
+  if (hour < 16) return 'noon'
+  if (hour < 20) return 'evening'
+  if (hour < 22) return 'dusk'
+  return 'night'
+}
+
+/**
+ * Скорости хода времени: сколько игровых минут проходит за реальную секунду.
+ * Обычная скорость — сутки примерно за четыре минуты.
+ */
+export const CLOCK_SPEEDS = {
+  paused: 0,
+  slow: 3,
+  normal: 6,
+  fast: 20,
+} as const
+
+export type ClockSpeed = keyof typeof CLOCK_SPEEDS
+
+export const CLOCK_SPEED_LABELS: Record<ClockSpeed, string> = {
+  paused: 'Пауза',
+  slow: 'Медленно',
+  normal: 'Обычно',
+  fast: 'Быстро',
+}

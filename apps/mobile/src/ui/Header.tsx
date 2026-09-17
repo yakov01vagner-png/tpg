@@ -1,9 +1,10 @@
-import { FATIGUE_MAX, type GameState, addressOf, formatTime } from '@tpg/engine'
+import { type ClockSpeed, FATIGUE_MAX, type GameState, addressOf } from '@tpg/engine'
 import { StyleSheet, Text, View } from 'react-native'
 import { colors, font, spacing } from '../theme'
+import { ClockBar } from './ClockBar'
 import { Meter } from './atoms'
 
-export function Header({ game }: { game: GameState }) {
+export function Header({ game, speed }: { game: GameState; speed: ClockSpeed }) {
   const hero = game.character
   const points = hero.unspentSkillPoints + hero.unspentAttributePoints
   const here = game.world.locations[game.locationId]
@@ -19,16 +20,16 @@ export function Header({ game }: { game: GameState }) {
           </Text>
         </View>
       ) : null}
+      <ClockBar game={game} speed={speed} />
       <View style={styles.row}>
-        <Text style={styles.time}>{formatTime(game.time)}</Text>
         <Text style={styles.money}>{hero.money} монет</Text>
-      </View>
-      <View style={styles.row}>
-        <Meter value={hero.fatigue} max={FATIGUE_MAX} label="Усталость" />
         <Text style={styles.level}>
           Уровень {hero.level}
           {points > 0 ? `  ·  +${points}` : ''}
         </Text>
+      </View>
+      <View style={styles.row}>
+        <Meter value={hero.fatigue} max={FATIGUE_MAX} label="Усталость" />
       </View>
     </View>
   )

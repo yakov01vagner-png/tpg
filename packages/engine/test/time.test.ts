@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CLOCK_SPEEDS,
   MINUTES_PER_DAY,
+  TIME_OF_DAY_LABELS,
   WORLD_START,
   dayOf,
   formatDuration,
@@ -9,6 +11,7 @@ import {
   hours,
   isNight,
   nextTimeOfDay,
+  timeOfDay,
 } from '../src/time'
 
 describe('игровое время', () => {
@@ -45,5 +48,28 @@ describe('игровое время', () => {
     expect(formatDuration(30)).toBe('30 мин')
     expect(formatDuration(480)).toBe('8 ч')
     expect(formatDuration(90)).toBe('1 ч 30 мин')
+  })
+})
+
+describe('время суток', () => {
+  it('называет пору словом', () => {
+    expect(timeOfDay(WORLD_START)).toBe('dawn')
+    expect(TIME_OF_DAY_LABELS[timeOfDay(WORLD_START + hours(3))]).toBe('утро')
+    expect(TIME_OF_DAY_LABELS[timeOfDay(WORLD_START + hours(7))]).toBe('полдень')
+    expect(TIME_OF_DAY_LABELS[timeOfDay(WORLD_START + hours(12))]).toBe('вечер')
+    expect(TIME_OF_DAY_LABELS[timeOfDay(WORLD_START + hours(17))]).toBe('ночь')
+  })
+
+  it('на обычной скорости сутки проходят за несколько минут', () => {
+    const secondsPerDay = MINUTES_PER_DAY / CLOCK_SPEEDS.normal
+    console.log(
+      `сутки на обычной скорости: ${(secondsPerDay / 60).toFixed(1)} мин реального времени`,
+    )
+    expect(secondsPerDay / 60).toBeGreaterThan(2)
+    expect(secondsPerDay / 60).toBeLessThan(6)
+    // Пауза действительно останавливает время.
+    expect(CLOCK_SPEEDS.paused).toBe(0)
+    expect(CLOCK_SPEEDS.slow).toBeLessThan(CLOCK_SPEEDS.normal)
+    expect(CLOCK_SPEEDS.fast).toBeGreaterThan(CLOCK_SPEEDS.normal)
   })
 })
