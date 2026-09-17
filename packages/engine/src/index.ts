@@ -7,6 +7,7 @@
  * (п.2 дизайн-документа) придётся писать заново.
  */
 export * from './attributes'
+export * from './biography'
 export * from './character'
 export * from './commands'
 export * from './content'

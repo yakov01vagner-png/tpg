@@ -53,6 +53,20 @@ export const COURSES: readonly CourseDef[] = [
     fatigue: 5,
   },
   {
+    id: 'streetCharms',
+    label: 'Наговоры за медяки',
+    description:
+      'Полоумная старуха с окраины берёт дёшево и учит опасно. Школа такого не признаёт.',
+    skill: 'magic',
+    durationMinutes: hours(3),
+    cost: 3,
+    xp: 45,
+    teacherCap: 12,
+    fatigue: 15,
+    // Улица выводит на таких людей; выросшему при дворе их просто не покажут.
+    requires: { tags: ['street_smart'] },
+  },
+  {
     id: 'magicIntro',
     label: 'Школа магии: вводный курс',
     description: 'За стенами школы учат тому, за что на улице сожгли бы.',

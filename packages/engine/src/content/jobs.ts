@@ -72,6 +72,17 @@ export const JOBS: readonly JobDef[] = [
     requires: { skills: { scholarship: 5 } },
   },
   {
+    id: 'serveAtSchool',
+    label: 'Прислуживать в школе магии',
+    description: 'Платят гроши, но ты внутри стен, и до чужих занятий два шага.',
+    durationMinutes: hours(6),
+    pay: 6,
+    practice: { concentration: 14, scholarship: 10 },
+    fatigue: 15,
+    // Со стороны в школу не берут: нужен кто-то, кто тебя там уже знает.
+    requires: { tags: ['school_known'] },
+  },
+  {
     id: 'guardCaravan',
     label: 'Охранять караван',
     description: 'Сутки при оружии на дороге. Лучшая плата из доступных новичку.',
