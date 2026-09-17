@@ -2,22 +2,26 @@ import {
   ARCHETYPE_LABELS,
   type Command,
   type GameState,
+  type GridCell,
   KINGDOM_COLORS,
   MAP_SIZE,
   PLAYER,
+  TERRAIN_COLORS,
+  TERRAIN_LABELS,
   addressOf,
   canApply,
   foodSecurity,
   formatDuration,
   hours,
-  kingdomOf,
   layoutOf,
   lordById,
+  regionColors,
   roadsFrom,
+  worldGrid,
 } from '@tpg/engine'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
-import Svg, { Circle, G, Line, Text as SvgText } from 'react-native-svg'
+import Svg, { G, Rect, Text as SvgText } from 'react-native-svg'
 import { dispatch } from '../game/store'
 import { colors, font, radius, spacing } from '../theme'
 import { Button } from '../ui/atoms'
@@ -25,58 +29,103 @@ import { Button } from '../ui/atoms'
 /**
  * Карта мира.
  *
- * Положение мест вычисляется из скелета (см. `world/layout.ts`), а не хранится:
- * география — часть неизменной геометрии мира. Карта показывает то, что важно
- * решать глазами: кто где, где голодно, где твоё и куда отсюда есть дорога.
+ * Земля рисуется клетками (см. `world/grid.ts`), а не схемой связей: клетка
+ * принадлежит тому, чьё поселение к ней ближе. Поэтому одно и то же полотно
+ * читается по-разному — короны, рельеф, области, — меняется только то, чем
+ * красить клетку. Ни сетка, ни положение мест в сейве не лежат: и то и другое
+ * выводится из неизменного скелета мира.
  */
+const MODES = [
+  { id: 'crowns', label: 'Короны' },
+  { id: 'land', label: 'Земля' },
+  { id: 'regions', label: 'Области' },
+] as const
+
 const ZOOMS = [
   { id: 'world', label: 'Мир' },
   { id: 'realm', label: 'Край' },
   { id: 'near', label: 'Вблизи' },
 ] as const
 
+type ModeId = (typeof MODES)[number]['id']
 type ZoomId = (typeof ZOOMS)[number]['id']
 
 export function MapScreen({ game }: { game: GameState }) {
+  const [mode, setMode] = useState<ModeId>('crowns')
   const [level, setLevel] = useState<ZoomId>('realm')
   const [selected, setSelected] = useState<string | null>(game.locationId)
-  const points = useMemo(() => layoutOf(game.world), [game.world])
 
-  const roads = useMemo(() => {
-    const seen = new Set<string>()
-    const lines: { from: string; to: string }[] = []
-    for (const [id, list] of Object.entries(game.world.roads)) {
-      for (const road of list) {
-        const key = [id, road.to].sort().join('|')
-        if (seen.has(key)) continue
-        seen.add(key)
-        lines.push({ from: id, to: road.to })
+  const points = useMemo(() => layoutOf(game.world), [game.world])
+  const grid = useMemo(() => worldGrid(game.world, MAP_SIZE), [game.world])
+  const regionPaint = useMemo(() => regionColors(game.world, grid), [game.world, grid])
+
+  // Одноцветные клетки в строке сливаются в один прямоугольник: рисовать три
+  // тысячи квадратов по одному телефон не обязан.
+  const bands = useMemo(() => {
+    const result: { x: number; y: number; width: number; fill: string }[] = []
+    for (let row = 0; row < grid.size; row += 1) {
+      let startColumn = 0
+      let running: string | null = null
+      const flush = (endColumn: number) => {
+        if (running === null) return
+        result.push({
+          x: startColumn * grid.cell,
+          y: row * grid.cell,
+          width: (endColumn - startColumn) * grid.cell,
+          fill: running,
+        })
+      }
+      for (let column = 0; column < grid.size; column += 1) {
+        const fill = colorOf(grid.cells[row * grid.size + column], mode, regionPaint)
+        if (fill !== running) {
+          flush(column)
+          running = fill
+          startColumn = column
+        }
+      }
+      flush(grid.size)
+    }
+    return result
+  }, [grid, mode, regionPaint])
+
+  // Однотонная заливка вблизи превращается в пустое поле: глазу не за что
+  // зацепиться. Часть клеток притемняем — тогда земля читается клетками, а
+  // издали, где клетка мельче значка, текстура только мешала бы.
+  const texture = useMemo(() => {
+    const out: { x: number; y: number }[] = []
+    for (let row = 0; row < grid.size; row += 1) {
+      for (let column = 0; column < grid.size; column += 1) {
+        if (!grid.cells[row * grid.size + column]) continue
+        if (speckle(column, row) > 0.62) out.push({ x: column * grid.cell, y: row * grid.cell })
       }
     }
-    return lines
-  }, [game.world])
+    return out
+  }, [grid])
 
   const horizontal = useRef<ScrollView>(null)
   const vertical = useRef<ScrollView>(null)
   const [view, setView] = useState({ width: 0, height: 0 })
 
   const here = points[game.locationId]
+  const neighbours = useMemo(
+    () => new Set(roadsFrom(game.world, game.locationId).map((road) => road.to)),
+    [game.world, game.locationId],
+  )
   const chosen = selected ? game.world.locations[selected] : null
   const chosenSettlement = selected ? game.settlements[selected] : null
   const road = selected
     ? roadsFrom(game.world, game.locationId).find((candidate) => candidate.to === selected)
     : undefined
+
   // «Мир» — это всё полотно целиком в окне, поэтому масштаб считается от окна, а
   // не назначается числом: на узком телефоне и на широком он разный.
   const fit = view.width > 0 ? Math.min(view.width, view.height) / MAP_SIZE : 0.3
-  const zoom = level === 'world' ? fit : level === 'realm' ? 1 : 2.2
+  const zoom = level === 'world' ? fit : level === 'realm' ? 1 : 1.7
   const size = MAP_SIZE * zoom
   // Чем дальше отодвинут мир, тем крупнее должны быть значки: иначе на общем
   // виде поселения превращаются в пыль.
   const mark = Math.max(1, 0.85 / zoom)
 
-  // Карта открывается на герое, а не на пустом углу полотна: первым делом надо
-  // видеть себя и соседей, а уже потом идти смотреть чужие края.
   const centerOn = (point: { x: number; y: number } | undefined) => {
     if (!point || view.width === 0) return
     horizontal.current?.scrollTo({ x: point.x * zoom - view.width / 2, animated: false })
@@ -92,19 +141,32 @@ export function MapScreen({ game }: { game: GameState }) {
   return (
     <View style={styles.wrap}>
       <View style={styles.controls}>
-        {ZOOMS.map((option) => (
+        {MODES.map((option) => (
           <Pressable
             key={option.id}
-            onPress={() => setLevel(option.id)}
-            style={[styles.zoom, option.id === level && styles.zoomActive]}
+            onPress={() => setMode(option.id)}
+            style={[styles.chip, option.id === mode && styles.chipActive]}
           >
-            <Text style={[styles.zoomLabel, option.id === level && styles.zoomLabelActive]}>
+            <Text style={[styles.chipLabel, option.id === mode && styles.chipLabelActive]}>
               {option.label}
             </Text>
           </Pressable>
         ))}
-        <Pressable onPress={() => centerOn(here)} style={styles.zoom}>
-          <Text style={styles.zoomLabel}>К себе</Text>
+      </View>
+      <View style={styles.controls}>
+        {ZOOMS.map((option) => (
+          <Pressable
+            key={option.id}
+            onPress={() => setLevel(option.id)}
+            style={[styles.chip, option.id === level && styles.chipActive]}
+          >
+            <Text style={[styles.chipLabel, option.id === level && styles.chipLabelActive]}>
+              {option.label}
+            </Text>
+          </Pressable>
+        ))}
+        <Pressable onPress={() => centerOn(here)} style={styles.chip}>
+          <Text style={styles.chipLabel}>К себе</Text>
         </Pressable>
       </View>
 
@@ -122,66 +184,94 @@ export function MapScreen({ game }: { game: GameState }) {
         <ScrollView ref={vertical} contentContainerStyle={styles.canvas}>
           <Svg width={size} height={size} viewBox={`0 0 ${MAP_SIZE} ${MAP_SIZE}`}>
             <G>
-              {roads.map((line) => {
-                const from = points[line.from]
-                const to = points[line.to]
-                if (!from || !to) return null
-                return (
-                  <Line
-                    key={`${line.from}|${line.to}`}
-                    x1={from.x}
-                    y1={from.y}
-                    x2={to.x}
-                    y2={to.y}
-                    stroke="#3a332c"
-                    strokeWidth={1.6 * mark}
-                  />
-                )
-              })}
+              {bands.map((band) => (
+                <Rect
+                  key={`${band.x}|${band.y}`}
+                  x={band.x}
+                  y={band.y}
+                  width={band.width}
+                  height={grid.cell}
+                  fill={band.fill}
+                />
+              ))}
+            </G>
 
+            {level === 'world' ? null : (
+              <G opacity={0.14}>
+                {texture.map((spot) => (
+                  <Rect
+                    key={`t${spot.x}|${spot.y}`}
+                    x={spot.x}
+                    y={spot.y}
+                    width={grid.cell}
+                    height={grid.cell}
+                    fill="#000000"
+                  />
+                ))}
+              </G>
+            )}
+
+            <G>
               {Object.values(game.world.locations).map((location) => {
                 const point = points[location.id]
                 const settlement = game.settlements[location.id]
                 if (!point || !settlement) return null
-                const kingdom = kingdomOf(game.world, location.id)
                 const mine = settlement.owner === PLAYER
                 const dead = settlement.population <= 0
                 const starving = foodSecurity(settlement) < 0.3
+                const isHere = location.id === game.locationId
                 // На общем виде мелкие деревни сливаются в кашу — показываем то,
                 // по чему мир читается: города, крепости и своё.
-                if (level === 'world' && !notable(location.archetype) && !mine) return null
-                const r = radiusFor(location.archetype) * mark
+                if (level === 'world' && !notable(location.archetype) && !mine && !isHere) {
+                  return null
+                }
+                const half = (sizeFor(location.archetype) * mark) / 2
+                const outline = mine
+                  ? '#c9a227'
+                  : starving
+                    ? '#c0533a'
+                    : neighbours.has(location.id)
+                      ? '#d8cdbb'
+                      : '#17140f'
                 return (
                   <G key={location.id}>
-                    <Circle
-                      cx={point.x}
-                      cy={point.y}
-                      r={r}
-                      fill={dead ? '#2b2620' : (KINGDOM_COLORS[kingdom?.id ?? ''] ?? '#6b6257')}
-                      stroke={mine ? '#c9a227' : starving ? '#a8422f' : '#1b1815'}
-                      strokeWidth={(mine || starving ? 2.2 : 1) * mark}
+                    <Rect
+                      x={point.x - half}
+                      y={point.y - half}
+                      width={half * 2}
+                      height={half * 2}
+                      fill={dead ? '#2b2620' : '#efe6d6'}
+                      stroke={outline}
+                      strokeWidth={(mine || starving || neighbours.has(location.id) ? 2 : 1) * mark}
                     />
                     {labelled(location.archetype, level) ? (
-                      // У правого края подпись уходит за полотно — разворачиваем её внутрь.
+                      // Вблизи подписей много, и сбоку они наезжают друг на друга —
+                      // там имя идёт под значком. Издали их единицы: сбоку компактнее,
+                      // а у правого края подпись разворачивается внутрь полотна.
                       <SvgText
                         x={
-                          point.x > MAP_SIZE * 0.78
-                            ? point.x - r - 3 * mark
-                            : point.x + r + 3 * mark
+                          level === 'near'
+                            ? point.x
+                            : point.x > MAP_SIZE * 0.78
+                              ? point.x - half - 3 * mark
+                              : point.x + half + 3 * mark
                         }
-                        y={point.y + 3 * mark}
-                        fill="#9a8f80"
+                        y={level === 'near' ? point.y + half + 10 * mark : point.y + 3 * mark}
+                        fill="#efe6d6"
                         fontSize={9 * mark}
-                        textAnchor={point.x > MAP_SIZE * 0.78 ? 'end' : 'start'}
+                        textAnchor={
+                          level === 'near' ? 'middle' : point.x > MAP_SIZE * 0.78 ? 'end' : 'start'
+                        }
                       >
                         {location.name}
                       </SvgText>
                     ) : null}
-                    {/* Палец толще значка: мишень для нажатия шире кружка и лежит поверх. */}
-                    <Circle
-                      cx={point.x}
-                      cy={point.y}
-                      r={Math.max(r + 6 * mark, 13 * mark)}
+                    {/* Палец толще значка: мишень для нажатия шире квадрата и лежит поверх. */}
+                    <Rect
+                      x={point.x - Math.max(half + 5 * mark, 13 * mark)}
+                      y={point.y - Math.max(half + 5 * mark, 13 * mark)}
+                      width={Math.max(half + 5 * mark, 13 * mark) * 2}
+                      height={Math.max(half + 5 * mark, 13 * mark) * 2}
                       fill="transparent"
                       onPress={() => setSelected(location.id)}
                       onPressIn={() => setSelected(location.id)}
@@ -189,32 +279,31 @@ export function MapScreen({ game }: { game: GameState }) {
                   </G>
                 )
               })}
-
-              {here ? (
-                <G>
-                  <Circle
-                    cx={here.x}
-                    cy={here.y}
-                    r={11 * mark}
-                    fill="none"
-                    stroke="#e8e0d4"
-                    strokeWidth={2 * mark}
-                  />
-                  <Circle cx={here.x} cy={here.y} r={3 * mark} fill="#e8e0d4" />
-                </G>
-              ) : null}
-
-              {selected && points[selected] ? (
-                <Circle
-                  cx={points[selected]?.x}
-                  cy={points[selected]?.y}
-                  r={14 * mark}
-                  fill="none"
-                  stroke="#c9a227"
-                  strokeWidth={1.5 * mark}
-                />
-              ) : null}
             </G>
+
+            {here ? (
+              <Rect
+                x={here.x - 11 * mark}
+                y={here.y - 11 * mark}
+                width={22 * mark}
+                height={22 * mark}
+                fill="none"
+                stroke="#ffffff"
+                strokeWidth={2 * mark}
+              />
+            ) : null}
+
+            {selected && points[selected] ? (
+              <Rect
+                x={(points[selected]?.x ?? 0) - 15 * mark}
+                y={(points[selected]?.y ?? 0) - 15 * mark}
+                width={30 * mark}
+                height={30 * mark}
+                fill="none"
+                stroke="#c9a227"
+                strokeWidth={1.5 * mark}
+              />
+            ) : null}
           </Svg>
         </ScrollView>
       </ScrollView>
@@ -231,7 +320,7 @@ export function MapScreen({ game }: { game: GameState }) {
               : 'заброшено'}
           </Text>
           <Text style={styles.dim}>
-            {foodWord(foodSecurity(chosenSettlement))}
+            {TERRAIN_LABELS[chosen.terrain]} · {foodWord(foodSecurity(chosenSettlement))}
             {chosenSettlement.banditry > 0.3 ? ' · неспокойно' : ''}
           </Text>
           {road ? (
@@ -254,12 +343,24 @@ export function MapScreen({ game }: { game: GameState }) {
   )
 }
 
-function radiusFor(archetype: string): number {
-  if (archetype === 'capital') return 8
-  if (archetype === 'city') return 6
-  if (archetype === 'port' || archetype === 'town') return 5
-  if (archetype === 'fortress' || archetype === 'mine') return 4
-  return 3.2
+/** Чем красить клетку: в этом вся разница между режимами карты. */
+function colorOf(
+  cell: GridCell | null | undefined,
+  mode: ModeId,
+  regionPaint: Readonly<Record<string, string>>,
+): string | null {
+  if (!cell) return null
+  if (mode === 'land') return TERRAIN_COLORS[cell.terrain]
+  if (mode === 'regions') return regionPaint[cell.regionId] ?? '#6b6257'
+  return KINGDOM_COLORS[cell.kingdomId] ?? '#6b6257'
+}
+
+function sizeFor(archetype: string): number {
+  if (archetype === 'capital') return 13
+  if (archetype === 'city') return 10
+  if (archetype === 'port' || archetype === 'town') return 8
+  if (archetype === 'fortress' || archetype === 'mine') return 7
+  return 5.5
 }
 
 /** Что видно на общем виде мира: по этим местам он и читается. */
@@ -269,7 +370,16 @@ function notable(archetype: string): boolean {
 
 function labelled(archetype: string, level: ZoomId): boolean {
   if (level === 'world') return archetype === 'capital'
+  if (level === 'near') return true
   return archetype === 'capital' || archetype === 'city'
+}
+
+/** Устойчивая крапина: одна и та же клетка всегда одного оттенка. */
+function speckle(x: number, y: number): number {
+  let hash = 2166136261
+  hash = Math.imul(hash ^ (x + 17), 16777619)
+  hash = Math.imul(hash ^ (y + 31), 16777619)
+  return ((hash >>> 11) % 1000) / 1000
 }
 
 function ownerWord(game: GameState, owner: string | null): string {
@@ -291,7 +401,7 @@ function foodWord(security: number): string {
 const styles = StyleSheet.create({
   wrap: { flex: 1 },
   controls: { flexDirection: 'row', gap: spacing.sm, paddingBottom: spacing.sm },
-  zoom: {
+  chip: {
     backgroundColor: colors.surface,
     borderColor: colors.line,
     borderRadius: radius,
@@ -300,9 +410,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
   },
-  zoomActive: { backgroundColor: colors.surfaceAlt, borderColor: colors.gold },
-  zoomLabel: { color: colors.dim, fontSize: font.small },
-  zoomLabelActive: { color: colors.gold },
+  chipActive: { backgroundColor: colors.surfaceAlt, borderColor: colors.gold },
+  chipLabel: { color: colors.dim, fontSize: font.small },
+  chipLabelActive: { color: colors.gold },
   canvas: { backgroundColor: '#15120f' },
   panel: {
     backgroundColor: colors.surface,
