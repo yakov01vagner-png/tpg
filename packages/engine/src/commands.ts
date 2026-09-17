@@ -16,12 +16,15 @@ import type { Availability, Content, Requirements } from './content'
 import { CONTENT } from './content'
 import type { BuildingId } from './content/buildings'
 import { BUILDINGS } from './content/buildings'
+import type { SlotId } from './content/equipment'
+import { ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import type { TroopId } from './content/troops'
 import { TROOPS, TROOP_FOOD_PER_DAY } from './content/troops'
 import type { Settlement } from './economy'
 import { quoteBuy, quoteSell } from './economy'
+import { gearBonus, horseCarry, repairCost, withItem } from './equipment'
 import type { GameEvent } from './events'
 import {
   PLAYER,
@@ -43,6 +46,7 @@ import {
   EDIBLE,
   dailyFood,
   dailyWages,
+  gearFactor,
   partyCapacity,
   partySize,
   partyStrength,
@@ -51,6 +55,10 @@ import {
 } from './party'
 import { isAvailableAt } from './place'
 import { PROGRESSION, applyCharacterXp, applySkillXp } from './progression'
+import { describeQuest, isComplete, offersAt } from './quest'
+import type { Quest } from './quest'
+import { isShunned, lordRep, placeRep, priceFactor, withLordRep, withPlaceRep } from './reputation'
+import type { Reputation } from './reputation'
 import type { Rng } from './rng'
 import { rollChance } from './rng'
 import type { SkillId } from './skills'
@@ -99,6 +107,16 @@ export type Command =
   | { readonly type: 'siegeAssault' }
   | { readonly type: 'siegeLift' }
   | { readonly type: 'askForFief' }
+  | { readonly type: 'buyItem'; readonly itemId: string }
+  | { readonly type: 'craftItem'; readonly itemId: string }
+  | { readonly type: 'repairItem'; readonly slot: SlotId }
+  | { readonly type: 'outfitParty'; readonly weapons: number }
+  | { readonly type: 'giveFood'; readonly amount: number }
+  | { readonly type: 'takeQuest'; readonly questId: string }
+  | { readonly type: 'finishQuest'; readonly questId: string }
+  | { readonly type: 'abandonQuest'; readonly questId: string }
+  | { readonly type: 'proclaimRealm'; readonly name: string }
+  | { readonly type: 'inviteLord'; readonly lordId: string }
   | { readonly type: 'buy'; readonly good: GoodId; readonly amount: number }
   | { readonly type: 'sell'; readonly good: GoodId; readonly amount: number }
   | { readonly type: 'work'; readonly jobId: string }
@@ -122,6 +140,7 @@ export type FailureCode =
   | 'inBattle'
   | 'noRecruits'
   | 'notYours'
+  | 'shunned'
   | 'noRoom'
   | 'noGoods'
   | 'overloaded'
@@ -187,6 +206,26 @@ export function applyCommand(
       return siegeLift(state)
     case 'askForFief':
       return askForFief(state)
+    case 'buyItem':
+      return buyItem(state, command.itemId)
+    case 'craftItem':
+      return craftItem(state, command.itemId)
+    case 'repairItem':
+      return repairItem(state, command.slot)
+    case 'outfitParty':
+      return outfitParty(state, command.weapons)
+    case 'giveFood':
+      return giveFood(state, command.amount)
+    case 'takeQuest':
+      return takeQuest(state, command.questId)
+    case 'finishQuest':
+      return finishQuest(state, command.questId)
+    case 'abandonQuest':
+      return abandonQuest(state, command.questId)
+    case 'proclaimRealm':
+      return proclaimRealm(state, command.name)
+    case 'inviteLord':
+      return inviteLord(state, command.lordId)
     case 'buy':
       return buy(state, command.good, command.amount)
     case 'sell':
@@ -377,12 +416,17 @@ function battleOrders(state: GameState, orders: Readonly<Record<GroupId, OrderId
   if (battle.outcome !== 'ongoing') return fail('invalid', 'Бой окончен — пора подводить итоги.')
 
   const draft = open(state)
+  const hero = gearBonus(state.character)
   const result = resolveRound(
     battle,
     orders,
     {
       command: skillLevel(state.character, 'command'),
       magic: skillLevel(state.character, 'magic'),
+      // Снаряжение отряда множит силу строя, железо героя прибавляет своё.
+      gear: gearFactor(state.party),
+      heroAttack: hero.attack,
+      heroDefense: hero.defense,
     },
     draft.rng,
   )
@@ -393,10 +437,11 @@ function battleOrders(state: GameState, orders: Readonly<Record<GroupId, OrderId
     units: unformUp(result.battle.groups),
     morale: result.battle.morale,
   }
-  // Бой идёт по своим часам, но не бесплатно: раунд — это время и силы.
+  // Бой идёт по своим часам, но не бесплатно: раунд — это время, силы и железо.
   advance(draft, 20)
   addFatigue(draft, 4)
   practice(draft, 'command', 12)
+  wearGear(draft)
   if (result.battle.outcome !== 'ongoing') {
     notice(draft, result.battle.outcome === 'won' ? 'Бой выигран.' : 'Бой проигран.')
   }
@@ -436,6 +481,18 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
     addMoney(draft, battle.spoils.money)
     draft.renown += 1
 
+    // Побитая шайка — это меньше разбоя в округе и доброе слово в месте.
+    if (!battle.stake) {
+      const settlement = draft.settlements[state.locationId]
+      if (settlement && settlement.banditry > 0) {
+        draft.settlements = {
+          ...draft.settlements,
+          [state.locationId]: { ...settlement, banditry: Math.max(0, settlement.banditry - 0.25) },
+        }
+        draft.reputation = withPlaceRep(draft.reputation, state.locationId, 6)
+      }
+    }
+
     // Взятие: место меняет хозяина и надолго это запоминает.
     if (battle.stake?.type === 'siege') {
       const taken = draft.settlements[battle.stake.locationId]
@@ -453,6 +510,10 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
           },
         }
         notice(draft, `${name} взят. Людей поубавилось, и они это запомнят.`)
+        draft.reputation = withPlaceRep(draft.reputation, battle.stake.locationId, -45)
+        if (taken.owner && !taken.owner.startsWith('crown:') && taken.owner !== PLAYER) {
+          draft.reputation = withLordRep(draft.reputation, taken.owner, -25)
+        }
       }
       draft.siege = null
     }
@@ -700,6 +761,271 @@ function hostileTo(state: GameState, settlement: Settlement): boolean {
   return atWar(state.politics, side, ownerSide)
 }
 
+/**
+ * Снаряжение (этап 6, блок E).
+ *
+ * Купленное надевается сразу, прежнее уходит за полцены: возиться со складом на
+ * телефоне незачем. Вещь не по силам и не по выучке помогает хуже — это
+ * считается числом, а не запрещается.
+ */
+function buyItem(state: GameState, itemId: string): CommandResult {
+  const item = ITEMS_BY_ID[itemId]
+  if (!item) return fail('unknownAction', 'Такого не продают.')
+  const here = state.world.locations[state.locationId]
+  if (!here) return fail('invalid', 'Непонятно, где находится герой.')
+  if (!item.where.includes(here.archetype)) {
+    return fail('unavailableHere', 'Здесь такого не делают и не возят.')
+  }
+  const shunned = checkWelcome(state)
+  if (shunned) return shunned
+
+  const price = Math.round(item.price * priceFactor(placeRep(state.reputation, state.locationId)))
+  if (state.character.money < price) {
+    return fail('noMoney', `Не хватает денег: нужно ${price}, есть ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  const old = state.character.equipment[item.slot]
+  const oldItem = old ? ITEMS_BY_ID[old.id] : null
+  notice(draft, `Куплено: ${item.label.toLowerCase()} за ${price}.`)
+  advance(draft, TRADE_MINUTES)
+  addMoney(draft, -price)
+  if (oldItem && old) {
+    const resale = Math.round((oldItem.price * old.condition) / 100 / 2)
+    addMoney(draft, resale)
+    notice(draft, `Прежнее сдано за ${resale}.`)
+  }
+  patch(draft, {
+    equipment: withItem(draft.character.equipment, item.slot, { id: item.id, condition: 100 }),
+  })
+  practice(draft, 'trade', 6)
+  return close(draft)
+}
+
+/** Ковка: из железа и инструментов, купленных там, где они дёшевы. */
+function craftItem(state: GameState, itemId: string): CommandResult {
+  const item = ITEMS_BY_ID[itemId]
+  if (!item?.craft) return fail('unknownAction', 'Это не выковать.')
+  const settlement = state.settlements[state.locationId]
+  const here = state.world.locations[state.locationId]
+  if (!settlement || !here) return fail('invalid', 'Непонятно, где находится герой.')
+  const canForge =
+    hasBuilding(settlement, 'smithy') || here.archetype === 'city' || here.archetype === 'capital'
+  if (!canForge) return fail('unavailableHere', 'Здесь нет кузницы.')
+
+  const skill = skillLevel(state.character, 'engineering')
+  if (skill < item.craft.engineering) {
+    return fail('requirements', `Нужна «Инженерия» ${item.craft.engineering} (есть ${skill}).`)
+  }
+  if ((state.character.inventory.iron ?? 0) < item.craft.iron) {
+    return fail('noGoods', `Нужно железа: ${item.craft.iron}.`)
+  }
+  if ((state.character.inventory.tools ?? 0) < item.craft.tools) {
+    return fail('noGoods', `Нужно инструментов: ${item.craft.tools}.`)
+  }
+
+  const draft = open(state)
+  notice(draft, `Выковано: ${item.label.toLowerCase()}.`)
+  advance(draft, hours(10))
+  addFatigue(draft, 25)
+  addGoods(draft, 'iron', -item.craft.iron)
+  addGoods(draft, 'tools', -item.craft.tools)
+  patch(draft, {
+    equipment: withItem(draft.character.equipment, item.slot, { id: item.id, condition: 100 }),
+  })
+  practice(draft, 'engineering', 45)
+  return close(draft)
+}
+
+function repairItem(state: GameState, slot: SlotId): CommandResult {
+  const worn = state.character.equipment[slot]
+  const item = worn ? ITEMS_BY_ID[worn.id] : null
+  if (!worn || !item) return fail('invalid', 'Тут нечего чинить.')
+  if (worn.condition >= 100) return fail('invalid', 'Вещь и так цела.')
+  const cost = repairCost(item, worn.condition)
+  if (state.character.money < cost) {
+    return fail('noMoney', `Починка стоит ${cost}, есть ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  notice(draft, `Починено: ${item.label.toLowerCase()} за ${cost}.`)
+  advance(draft, hours(3))
+  addMoney(draft, -cost)
+  patch(draft, {
+    equipment: withItem(draft.character.equipment, slot, { id: worn.id, condition: 100 }),
+  })
+  return close(draft)
+}
+
+/** Снарядить отряд: оружие из поклажи идёт людям, а не на рынок. */
+function outfitParty(state: GameState, weapons: number): CommandResult {
+  if (!Number.isInteger(weapons) || weapons <= 0) return fail('invalid', 'Сколько именно?')
+  if ((state.character.inventory.weapons ?? 0) < weapons) {
+    return fail('noGoods', `Оружия столько нет: есть ${state.character.inventory.weapons ?? 0}.`)
+  }
+  const size = partySize(state.party)
+  if (size === 0) return fail('invalid', 'Снаряжать некого.')
+
+  const draft = open(state)
+  const gain = Math.min(1 - draft.party.gear, weapons / size / 2)
+  if (gain <= 0.001) return fail('invalid', 'Отряд и так одет во всё, что нашлось.')
+  addGoods(draft, 'weapons', -weapons)
+  draft.party = { ...draft.party, gear: Math.min(1, draft.party.gear + gain) }
+  notice(draft, `Отряд снаряжён лучше: ${Math.round(draft.party.gear * 100)}%.`)
+  advance(draft, hours(2))
+  return close(draft)
+}
+
+/**
+ * Привезти хлеб.
+ *
+ * Самое прямое доброе дело в этой игре: у тебя есть зерно, здесь голодают.
+ * Это же и самый честный источник хорошего имени.
+ */
+function giveFood(state: GameState, amount: number): CommandResult {
+  if (!Number.isInteger(amount) || amount <= 0) return fail('invalid', 'Сколько именно?')
+  if ((state.character.inventory.grain ?? 0) < amount) {
+    return fail('noGoods', `Зерна столько нет: есть ${state.character.inventory.grain ?? 0}.`)
+  }
+  const settlement = state.settlements[state.locationId]
+  if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
+
+  const draft = open(state)
+  const hungry = foodSecurity(settlement) < 0.6
+  addGoods(draft, 'grain', -amount)
+  draft.settlements = {
+    ...draft.settlements,
+    [state.locationId]: {
+      ...settlement,
+      stock: { ...settlement.stock, grain: settlement.stock.grain + amount },
+    },
+  }
+  // За хлеб в голод благодарны втрое: сытому городу подарок — просто товар.
+  const gain = Math.round((amount / 20) * (hungry ? 3 : 1))
+  draft.reputation = withPlaceRep(draft.reputation, state.locationId, gain)
+  const owner = settlement.owner
+  if (owner && !owner.startsWith('crown:') && owner !== PLAYER) {
+    draft.reputation = withLordRep(draft.reputation, owner, Math.round(gain / 2))
+  }
+  draft.quests = draft.quests.map((quest) =>
+    quest.type === 'bringFood' && quest.targetLocationId === state.locationId
+      ? { ...quest, progress: quest.progress + amount }
+      : quest,
+  )
+  notice(draft, hungry ? `Хлеб роздан. Здесь это запомнят.` : 'Хлеб оставлен в амбаре.')
+  advance(draft, hours(2))
+  return close(draft)
+}
+
+// --- поручения --------------------------------------------------------------
+
+function takeQuest(state: GameState, questId: string): CommandResult {
+  if (state.quests.some((quest) => quest.id === questId)) {
+    return fail('invalid', 'Это уже на тебе.')
+  }
+  const offer = offersAt(state).find((quest) => quest.id === questId)
+  if (!offer) return fail('unknownAction', 'Такого здесь не просят.')
+
+  const draft = open(state)
+  notice(draft, `Взято: ${describeQuest(state, offer).toLowerCase()}.`)
+  draft.quests = [...draft.quests, offer]
+  advance(draft, 30)
+  return close(draft)
+}
+
+function finishQuest(state: GameState, questId: string): CommandResult {
+  const quest = state.quests.find((candidate) => candidate.id === questId)
+  if (!quest) return fail('unknownAction', 'Ты такого не брал.')
+  if (state.locationId !== quest.issuerLocationId) {
+    return fail('unavailableHere', 'За наградой идут к тому, кто просил.')
+  }
+  if (!isComplete(state, quest)) return fail('requirements', 'Дело ещё не сделано.')
+
+  const draft = open(state)
+  notice(draft, `Награда за дело: ${quest.reward}.`)
+  addMoney(draft, quest.reward)
+  draft.reputation = withPlaceRep(draft.reputation, quest.issuerLocationId, 10)
+  const owner = state.settlements[quest.issuerLocationId]?.owner
+  if (owner && !owner.startsWith('crown:') && owner !== PLAYER) {
+    draft.reputation = withLordRep(draft.reputation, owner, 8)
+  }
+  draft.renown += 1
+  draft.quests = draft.quests.filter((candidate) => candidate.id !== questId)
+  advance(draft, 30)
+  return close(draft)
+}
+
+function abandonQuest(state: GameState, questId: string): CommandResult {
+  const quest = state.quests.find((candidate) => candidate.id === questId)
+  if (!quest) return fail('unknownAction', 'Ты такого не брал.')
+  const draft = open(state)
+  notice(draft, 'Дело брошено. Об этом узнают.')
+  draft.reputation = withPlaceRep(draft.reputation, quest.issuerLocationId, -8)
+  draft.quests = draft.quests.filter((candidate) => candidate.id !== questId)
+  return close(draft)
+}
+
+// --- своё имя на карте ------------------------------------------------------
+
+/** Провозгласить своё владение: шестая сила на карте (DESIGN.md, п.9). */
+function proclaimRealm(state: GameState, name: string): CommandResult {
+  if (state.realm) return fail('invalid', 'Твоё имя уже на карте.')
+  const holdings = holdingsOf(state.settlements, PLAYER)
+  if (holdings.length < 2) {
+    return fail('requirements', `Мало земли: нужно два владения, есть ${holdings.length}.`)
+  }
+  const title = name.trim() === '' ? 'Вольное владение' : name.trim()
+
+  const draft = open(state)
+  notice(draft, `Провозглашено: ${title}. Соседи это заметят.`)
+  draft.realm = { name: title }
+  // Тот, чью землю ты держишь, воспримет это как мятеж.
+  const former = state.service
+  if (former) {
+    draft.service = null
+    draft.politics = {
+      ...draft.politics,
+      wars: [
+        ...draft.politics.wars,
+        { a: former, b: PLAYER, since: dayOf(state.time), reason: 'самозванство и захват земель' },
+      ],
+    }
+    notice(draft, 'Прежний сюзерен объявил тебя мятежником.')
+  }
+  advance(draft, hours(4))
+  return close(draft)
+}
+
+/** Принять лорда под свою руку: уходят к тому, кому верят больше, чем короне. */
+function inviteLord(state: GameState, lordId: string): CommandResult {
+  if (!state.realm) return fail('requirements', 'Под чью руку? У тебя нет своего имени.')
+  const lord = lordById(state.politics, lordId)
+  if (!lord) return fail('unknownAction', 'Такого лорда нет.')
+  if (lord.kingdomId === PLAYER) return fail('invalid', 'Он и так твой.')
+  if (lord.loyalty > 35) return fail('requirements', 'Он слишком верен своей короне.')
+  if (lordRep(state.reputation, lordId) < 30) {
+    return fail('requirements', 'Он тебя недостаточно знает, чтобы idти под твою руку.')
+  }
+
+  const draft = open(state)
+  notice(draft, `${lord.title} ${lord.name} пошёл под твою руку.`)
+  draft.politics = {
+    ...draft.politics,
+    lords: draft.politics.lords.map((candidate) =>
+      candidate.id === lordId ? { ...candidate, kingdomId: PLAYER, loyalty: 55 } : candidate,
+    ),
+  }
+  advance(draft, hours(3))
+  return close(draft)
+}
+
+/** Не пускают ли тебя на порог: разорённые города помнят. */
+function checkWelcome(state: GameState): CommandResult | null {
+  return isShunned(placeRep(state.reputation, state.locationId))
+    ? fail('shunned', 'Тебя тут помнят и не ждут.')
+    : null
+}
+
 function takeService(state: GameState, kingdomId: string): CommandResult {
   const kingdom = state.world.kingdoms[kingdomId]
   if (!kingdom) return fail('unknownAction', 'Такого королевства нет.')
@@ -750,23 +1076,27 @@ function buy(state: GameState, good: GoodId, amount: number): CommandResult {
   if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
 
   const tradeSkill = skillLevel(state.character, 'trade')
+  // Своим уступают, чужих обдирают.
+  const welcome = priceFactor(placeRep(state.reputation, state.locationId))
   const quote = quoteBuy(state.world, settlement, good, amount, tradeSkill)
   if (quote.amount < amount) {
     return fail('noGoods', `Столько тут не купить: ${GOODS[good].label.toLowerCase()} в обрез.`)
   }
-  if (state.character.money < quote.total) {
-    return fail('noMoney', `Не хватает денег: нужно ${quote.total}, есть ${state.character.money}.`)
+  const total = Math.round(quote.total * welcome)
+  if (state.character.money < total) {
+    return fail('noMoney', `Не хватает денег: нужно ${total}, есть ${state.character.money}.`)
   }
   const weight = GOODS[good].weight * amount
-  // Поклажу несут все: чем больше отряд, тем больше влезает.
-  if (carriedWeight(state.character) + weight > partyCapacity(state.character, state.party)) {
+  // Поклажу несут все: отряд, конь и своя спина.
+  const capacity = partyCapacity(state.character, state.party) + horseCarry(state.character)
+  if (carriedWeight(state.character) + weight > capacity) {
     return fail('overloaded', 'Столько не унести — ни на себе, ни на людях.')
   }
 
   const draft = open(state)
-  notice(draft, `Куплено: ${GOODS[good].label.toLowerCase()}, ${amount} — за ${quote.total}.`)
+  notice(draft, `Куплено: ${GOODS[good].label.toLowerCase()}, ${amount} — за ${total}.`)
   advance(draft, TRADE_MINUTES)
-  addMoney(draft, -quote.total)
+  addMoney(draft, -total)
   addGoods(draft, good, amount)
   draft.settlements = { ...draft.settlements, [state.locationId]: quote.settlement }
   practice(draft, 'trade', Math.min(30, quote.total * 0.12))
@@ -805,6 +1135,7 @@ function work(state: GameState, jobId: string, content: Content): CommandResult 
   const job = content.jobs[jobId]
   if (!job) return fail('unknownAction', 'Такой работы здесь нет.')
   const blocked =
+    checkWelcome(state) ??
     checkPlace(state, job.where, 'Здесь такой работы нет.') ??
     checkWindow(state.time, job.window, 'На эту работу нанимают') ??
     checkRequirements(state.character, job.requires) ??
@@ -827,6 +1158,7 @@ function study(state: GameState, courseId: string, content: Content): CommandRes
   const course = content.courses[courseId]
   if (!course) return fail('unknownAction', 'Такого наставника здесь нет.')
   const blocked =
+    checkWelcome(state) ??
     checkPlace(state, course.where, 'Такому здесь учить некому.') ??
     checkWindow(state.time, course.window, 'Занятия идут') ??
     checkRequirements(state.character, course.requires) ??
@@ -1051,6 +1383,9 @@ interface Draft {
   service: string | null
   siege: { locationId: string; days: number } | null
   renown: number
+  reputation: Reputation
+  realm: { name: string } | null
+  quests: readonly Quest[]
   over: boolean
   readonly base: GameState
   readonly events: GameEvent[]
@@ -1069,6 +1404,9 @@ function open(state: GameState): Draft {
     service: state.service,
     siege: state.siege,
     renown: state.renown,
+    reputation: state.reputation,
+    realm: state.realm,
+    quests: state.quests,
     over: state.over,
     base: state,
     events: [],
@@ -1097,6 +1435,7 @@ function close(draft: Draft): CommandResult {
     draft.events.push(...warNews(draft.base, draft.locationId, politics.events))
 
     payUpkeep(draft, daysPassed)
+    expireQuests(draft)
   }
 
   const state: GameState = {
@@ -1112,6 +1451,9 @@ function close(draft: Draft): CommandResult {
     service: draft.service,
     siege: draft.siege,
     renown: draft.renown,
+    reputation: draft.reputation,
+    realm: draft.realm,
+    quests: draft.quests,
     over: draft.over,
     log: appendLog(draft.base.log, draft.time, draft.events),
   }
@@ -1283,6 +1625,31 @@ function collectHoldings(draft: Draft, days: number): void {
   if (net !== 0) addMoney(draft, net)
   if (net < 0) notice(draft, `Земля не окупает гарнизон: ушло ${Math.abs(net)}.`)
   else if (net > 0) notice(draft, `Подати с владений: ${net}.`)
+}
+
+/** Просроченное дело не прощают: сгорает само и портит имя. */
+function expireQuests(draft: Draft): void {
+  const today = dayOf(draft.time)
+  const expired = draft.quests.filter((quest) => today > quest.deadlineDay)
+  if (expired.length === 0) return
+  for (const quest of expired) {
+    draft.reputation = withPlaceRep(draft.reputation, quest.issuerLocationId, -10)
+    notice(draft, 'Срок вышел: дело не сделано.')
+  }
+  draft.quests = draft.quests.filter((quest) => today <= quest.deadlineDay)
+}
+
+/** Железо снашивается в бою: каждая схватка — минус состояние. */
+function wearGear(draft: Draft): void {
+  const equipment = { ...draft.character.equipment }
+  let changed = false
+  for (const slot of SLOT_IDS) {
+    const worn = equipment[slot]
+    if (!worn) continue
+    equipment[slot] = { ...worn, condition: Math.max(0, worn.condition - 2) }
+    changed = true
+  }
+  if (changed) patch(draft, { equipment })
 }
 
 /** Накормить отряд из поклажи. Возвращает false, если еды не хватило. */

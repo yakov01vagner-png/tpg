@@ -103,7 +103,11 @@ describe('дорога', () => {
   it('в разбойной округе отряд нарывается на засаду', () => {
     let ambushed = false
     for (let seed = 1; seed <= 12 && !ambushed; seed += 1) {
-      const state = traveller({ units: { militia: 8 }, morale: 70, hungryDays: 0 }, 0.9, seed)
+      const state = traveller(
+        { units: { militia: 8 }, morale: 70, hungryDays: 0, gear: 0 },
+        0.9,
+        seed,
+      )
       const after = ok(applyCommand(state, { type: 'travel', toLocationId: firstRoad(state) }))
       if (after.battle) ambushed = true
     }
@@ -113,7 +117,11 @@ describe('дорога', () => {
   it('на спокойных дорогах обычно тихо', () => {
     let ambushes = 0
     for (let seed = 1; seed <= 12; seed += 1) {
-      const state = traveller({ units: { militia: 8 }, morale: 70, hungryDays: 0 }, 0, seed)
+      const state = traveller(
+        { units: { militia: 8 }, morale: 70, hungryDays: 0, gear: 0 },
+        0,
+        seed,
+      )
       const after = ok(applyCommand(state, { type: 'travel', toLocationId: firstRoad(state) }))
       if (after.battle) ambushes += 1
     }
@@ -124,7 +132,7 @@ describe('дорога', () => {
   it('одиночку не бьют, а обирают', () => {
     let robbed = false
     for (let seed = 1; seed <= 12 && !robbed; seed += 1) {
-      const state = traveller({ units: {}, morale: 60, hungryDays: 0 }, 0.9, seed)
+      const state = traveller({ units: {}, morale: 60, hungryDays: 0, gear: 0 }, 0.9, seed)
       const after = ok(applyCommand(state, { type: 'travel', toLocationId: firstRoad(state) }))
       if (after.character.money < state.character.money) {
         robbed = true
@@ -151,7 +159,10 @@ describe('служба', () => {
 
   it('без войны воевать не с кем', () => {
     const served = ok(applyCommand(inCapital(), { type: 'takeService', kingdomId: 'reEstiz' }))
-    const withParty = { ...served, party: { units: { militia: 8 }, morale: 70, hungryDays: 0 } }
+    const withParty = {
+      ...served,
+      party: { units: { militia: 8 }, morale: 70, hungryDays: 0, gear: 0 },
+    }
     const result = applyCommand(withParty, { type: 'seekEnemy' })
     expect(result.ok).toBe(false)
   })
@@ -160,7 +171,7 @@ describe('служба', () => {
     const served = ok(applyCommand(inCapital(), { type: 'takeService', kingdomId: 'reEstiz' }))
     const atWarState: GameState = {
       ...served,
-      party: { units: { spearman: 20, archer: 6 }, morale: 75, hungryDays: 0 },
+      party: { units: { spearman: 20, archer: 6 }, morale: 75, hungryDays: 0, gear: 0 },
       politics: {
         ...served.politics,
         wars: [{ a: 'reEstiz', b: 'boharut', since: 1, reason: 'старые счёты' }],

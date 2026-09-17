@@ -21,7 +21,12 @@ import { generateWorld } from '../src/world/generate'
 const world = generateWorld(1)
 const capital = world.kingdoms.reEstiz?.capitalId ?? ''
 
-const party = (units: Party['units'], morale = 70): Party => ({ units, morale, hungryDays: 0 })
+const party = (units: Party['units'], morale = 70): Party => ({
+  units,
+  morale,
+  hungryDays: 0,
+  gear: 0,
+})
 
 const bandits = (size: number): BattleSide => ({
   name: 'Разбойники',

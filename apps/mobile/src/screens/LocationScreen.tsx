@@ -10,6 +10,7 @@ import {
   canApply,
   coursesAt,
   dailyTax,
+  describeQuest,
   examsAt,
   foodSecurity,
   formatDuration,
@@ -17,10 +18,12 @@ import {
   freeSlots,
   garrisonLimit,
   garrisonSize,
+  isComplete,
   isOwnedByPlayer,
   jobsAt,
   kingdomOf,
   lordById,
+  offersAt,
   warsOf,
 } from '@tpg/engine'
 import { ScrollView, StyleSheet, Text, View } from 'react-native'
@@ -238,6 +241,20 @@ export function LocationScreen({ game }: { game: GameState }) {
                 onPress={() => dispatch(seek)}
               />
               <ActionCard
+                title="Раздать хлеб"
+                description="Двадцать мер из поклажи тем, кому нечего есть."
+                meta="20 мер"
+                reason={reasonFor({ type: 'giveFood', amount: 20 })}
+                onPress={() => dispatch({ type: 'giveFood', amount: 20 })}
+              />
+              <ActionCard
+                title="Провозгласить своё владение"
+                description="Два своих места — уже основание назваться. Прежний сюзерен это так не оставит."
+                meta="своё имя"
+                reason={reasonFor({ type: 'proclaimRealm', name: 'Вольное владение' })}
+                onPress={() => dispatch({ type: 'proclaimRealm', name: 'Вольное владение' })}
+              />
+              <ActionCard
                 title="Просить землю за службу"
                 description={`Слава за тобой: ${game.renown}. Нужно три победы.`}
                 meta="лен"
@@ -249,6 +266,49 @@ export function LocationScreen({ game }: { game: GameState }) {
                 meta=""
                 onPress={() => dispatch({ type: 'leaveService' })}
               />
+            </>
+          )
+        })()}
+      </Section>
+
+      <Section title="Поручения">
+        {(() => {
+          const taken = game.quests
+          const offers = offersAt(game)
+          if (taken.length === 0 && offers.length === 0) {
+            return <Empty text="Дел для тебя здесь нет." />
+          }
+          return (
+            <>
+              {taken.map((quest) => {
+                const done = isComplete(game, quest)
+                return (
+                  <ActionCard
+                    key={quest.id}
+                    title={describeQuest(game, quest)}
+                    description={
+                      done
+                        ? 'Сделано. Пора за наградой.'
+                        : quest.type === 'bringFood'
+                          ? `Привезено ${quest.progress} из ${quest.amount}.`
+                          : 'Ещё не сделано.'
+                    }
+                    meta={`${quest.reward} · до ${quest.deadlineDay} дня`}
+                    reason={reasonFor({ type: 'finishQuest', questId: quest.id })}
+                    onPress={() => dispatch({ type: 'finishQuest', questId: quest.id })}
+                  />
+                )
+              })}
+              {offers.map((quest) => (
+                <ActionCard
+                  key={quest.id}
+                  title={describeQuest(game, quest)}
+                  description="Просят здесь. Срок ограничен."
+                  meta={`${quest.reward} монет`}
+                  reason={reasonFor({ type: 'takeQuest', questId: quest.id })}
+                  onPress={() => dispatch({ type: 'takeQuest', questId: quest.id })}
+                />
+              ))}
             </>
           )
         })()}

@@ -23,7 +23,7 @@ const ok = (result: ReturnType<typeof applyCommand>): GameState => {
   return result.state
 }
 
-const party = (units: Party['units']): Party => ({ units, morale: 75, hungryDays: 0 })
+const party = (units: Party['units']): Party => ({ units, morale: 75, hungryDays: 0, gear: 0 })
 
 function battle(units: Party['units'], enemy = 40): GameState {
   const own = party(units)

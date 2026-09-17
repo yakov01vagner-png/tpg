@@ -3,9 +3,13 @@ import {
   ATTRIBUTE_LABELS,
   type AttributeId,
   type GameState,
+  ITEMS_BY_ID,
   MAGIC_RANKS,
+  SLOT_IDS,
+  SLOT_LABELS,
   type SkillId,
   eligibleRank,
+  gearBonus,
   skillXpToNext,
   skillsOfAttribute,
   unrecognizedGap,
@@ -83,6 +87,24 @@ export function CharacterScreen({ game }: { game: GameState }) {
             })}
           </View>
         ))}
+      </Section>
+
+      <Section title="Снаряжение">
+        {SLOT_IDS.map((slot) => {
+          const worn = hero.equipment[slot]
+          const item = worn ? ITEMS_BY_ID[worn.id] : null
+          return (
+            <View key={slot} style={styles.row}>
+              <Text style={styles.rowLabel}>{SLOT_LABELS[slot]}</Text>
+              <Text style={item ? styles.rowValue : styles.rowProgress}>
+                {item ? `${item.label} · ${worn?.condition}%` : 'пусто'}
+              </Text>
+            </View>
+          )
+        })}
+        <Text style={styles.tags}>
+          От железа: +{gearBonus(hero).attack} к удару, +{gearBonus(hero).defense} к обороне
+        </Text>
       </Section>
 
       {hero.tags.length > 0 ? (

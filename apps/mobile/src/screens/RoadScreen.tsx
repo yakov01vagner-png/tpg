@@ -11,11 +11,13 @@ import {
   roadsFrom,
   travelFatigue,
 } from '@tpg/engine'
-import { ScrollView, StyleSheet, Text, View } from 'react-native'
+import { useState } from 'react'
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { dispatch } from '../game/store'
 import { colors, font, radius, spacing } from '../theme'
 import { ActionCard } from '../ui/ActionCard'
 import { Empty, Section } from '../ui/atoms'
+import { WorldScreen } from './WorldScreen'
 
 /**
  * Дорога: где ты и куда отсюда можно уйти.
@@ -25,6 +27,7 @@ import { Empty, Section } from '../ui/atoms'
  * карты с зумом (DESIGN.md, п.10).
  */
 export function RoadScreen({ game }: { game: GameState }) {
+  const [view, setView] = useState<'roads' | 'world'>('roads')
   const here = game.world.locations[game.locationId]
   const settlement = game.settlements[game.locationId]
   const roads = roadsFrom(game.world, game.locationId)
@@ -32,8 +35,18 @@ export function RoadScreen({ game }: { game: GameState }) {
   const people = settlement?.population ?? here?.population ?? 0
   const fed = settlement ? wellFed(foodSecurity(settlement)) : null
 
+  if (view === 'world') {
+    return (
+      <View style={styles.wrap}>
+        <Switcher view={view} onChange={setView} />
+        <WorldScreen game={game} />
+      </View>
+    )
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.content}>
+      <Switcher view={view} onChange={setView} />
       {here ? (
         <View style={styles.here}>
           <Text style={styles.hereName}>{here.name}</Text>
@@ -90,8 +103,47 @@ function formatPopulation(value: number): string {
   return value.toLocaleString('ru-RU').replace(/ /g, ' ')
 }
 
+/** Переключатель между дорогами под ногами и картой всего мира. */
+function Switcher({
+  view,
+  onChange,
+}: {
+  view: 'roads' | 'world'
+  onChange: (next: 'roads' | 'world') => void
+}) {
+  return (
+    <View style={styles.switcher}>
+      {(['roads', 'world'] as const).map((option) => (
+        <Pressable
+          key={option}
+          onPress={() => onChange(option)}
+          style={[styles.switch, option === view && styles.switchActive]}
+        >
+          <Text style={[styles.switchLabel, option === view && styles.switchLabelActive]}>
+            {option === 'roads' ? 'Дороги' : 'Мир'}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  )
+}
+
 const styles = StyleSheet.create({
   content: { padding: spacing.lg, paddingBottom: spacing.xl },
+  wrap: { flex: 1, paddingHorizontal: spacing.lg, paddingTop: spacing.lg },
+  switcher: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg },
+  switch: {
+    backgroundColor: colors.surface,
+    borderColor: colors.line,
+    borderRadius: radius,
+    borderWidth: 1,
+    flex: 1,
+    minHeight: 40,
+    justifyContent: 'center',
+  },
+  switchActive: { backgroundColor: colors.surfaceAlt, borderColor: colors.gold },
+  switchLabel: { color: colors.dim, fontSize: font.small, textAlign: 'center' },
+  switchLabelActive: { color: colors.gold },
   here: {
     backgroundColor: colors.surface,
     borderRadius: radius,

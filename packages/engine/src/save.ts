@@ -1,5 +1,6 @@
 import { createSettlements, recruitPool } from './economy'
 import { EMPTY_PARTY } from './party'
+import { NO_REPUTATION } from './reputation'
 import { createRng } from './rng'
 import type { GameState } from './state'
 import { SCHEMA_VERSION } from './state'
@@ -39,6 +40,22 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
       ...data,
       settlements: createSettlements(world),
       character: { ...character, inventory: character.inventory ?? {} },
+    }
+  },
+  /**
+   * v5 → v6: появились снаряжение, имя и поручения. Герой при этом остаётся
+   * гол как сокол, а мир его ещё не знает — это честнее, чем раздавать вещи.
+   */
+  5: (data) => {
+    const character = (data.character ?? {}) as Record<string, unknown>
+    const party = (data.party ?? {}) as Record<string, unknown>
+    return {
+      ...data,
+      character: { ...character, equipment: character.equipment ?? {} },
+      party: { ...party, gear: party.gear ?? 0 },
+      reputation: data.reputation ?? NO_REPUTATION,
+      realm: data.realm ?? null,
+      quests: data.quests ?? [],
     }
   },
   /**

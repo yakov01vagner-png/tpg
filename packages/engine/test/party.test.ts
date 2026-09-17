@@ -107,8 +107,8 @@ describe('содержание отряда', () => {
   })
 
   it('сила отряда растёт с выучкой, а не только с числом', () => {
-    const rabble = { units: { militia: 10 }, morale: 60, hungryDays: 0 }
-    const veterans = { units: { manAtArms: 10 }, morale: 60, hungryDays: 0 }
+    const rabble = { units: { militia: 10 }, morale: 60, hungryDays: 0, gear: 0 }
+    const veterans = { units: { manAtArms: 10 }, morale: 60, hungryDays: 0, gear: 0 }
     expect(partyStrength(veterans)).toBeGreaterThan(partyStrength(rabble) * 2)
   })
 

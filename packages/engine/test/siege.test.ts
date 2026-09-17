@@ -36,7 +36,12 @@ function besieger(locationId: string): GameState {
     ...base,
     locationId,
     service: 'reEstiz',
-    party: { units: { spearman: 30, archer: 10, manAtArms: 6 }, morale: 80, hungryDays: 0 },
+    party: {
+      units: { spearman: 30, archer: 10, manAtArms: 6 },
+      morale: 80,
+      hungryDays: 0,
+      gear: 0,
+    },
     politics: {
       ...base.politics,
       wars: [{ a: 'reEstiz', b: ownerKingdom, since: 1, reason: 'претензии на землю' }],

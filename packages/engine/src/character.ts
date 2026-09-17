@@ -1,5 +1,6 @@
 import type { AttributeId, Attributes } from './attributes'
 import { baseAttributes, clampAttribute } from './attributes'
+import type { Equipment } from './content/equipment'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import type { MagicRankId } from './magic'
@@ -25,6 +26,8 @@ export interface Character {
   readonly tags: readonly string[]
   /** Что несёшь на себе. Отсутствие товара в списке означает ноль. */
   readonly inventory: Readonly<Partial<Record<GoodId, number>>>
+  /** Что надето: оружие, щит, доспех, шлем, конь. */
+  readonly equipment: Equipment
 }
 
 export const FATIGUE_MAX = 100
@@ -69,6 +72,7 @@ export function createCharacter(draft: CharacterDraft): Character {
     magicRank: null,
     tags: [...(draft.tags ?? [])],
     inventory: {},
+    equipment: {},
   }
 }
 

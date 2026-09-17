@@ -1,8 +1,12 @@
 import {
+  type Command,
   GOODS,
   GOOD_IDS,
   type GameState,
   type GoodId,
+  ITEMS,
+  SLOT_IDS,
+  SLOT_LABELS,
   buyPrice,
   canApply,
   carried,
@@ -15,6 +19,7 @@ import { useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { dispatch } from '../game/store'
 import { colors, font, radius, spacing } from '../theme'
+import { ActionCard } from '../ui/ActionCard'
 import { Empty, Section } from '../ui/atoms'
 
 const LOTS = [1, 5, 20] as const
@@ -61,6 +66,43 @@ export function TradeScreen({ game }: { game: GameState }) {
           </Pressable>
         ))}
       </View>
+
+      <Section title="Снаряжение">
+        {ITEMS.filter((item) => {
+          const here = game.world.locations[game.locationId]
+          return here ? item.where.includes(here.archetype) : false
+        }).map((item) => {
+          const command: Command = { type: 'buyItem', itemId: item.id }
+          const check = canApply(game, command)
+          const worn = game.character.equipment[item.slot]?.id === item.id
+          return (
+            <ActionCard
+              key={item.id}
+              title={`${item.label}${worn ? ' · надето' : ''}`}
+              description={item.description}
+              meta={`${item.price} · ${SLOT_LABELS[item.slot]}`}
+              reason={check.ok ? null : check.message}
+              onPress={() => dispatch(command)}
+            />
+          )
+        })}
+        {SLOT_IDS.filter((slot) => (game.character.equipment[slot]?.condition ?? 100) < 100).map(
+          (slot) => {
+            const command: Command = { type: 'repairItem', slot }
+            const check = canApply(game, command)
+            return (
+              <ActionCard
+                key={`repair-${slot}`}
+                title={`Починить: ${SLOT_LABELS[slot].toLowerCase()}`}
+                description={`Состояние ${game.character.equipment[slot]?.condition}%.`}
+                meta="починка"
+                reason={check.ok ? null : check.message}
+                onPress={() => dispatch(command)}
+              />
+            )
+          },
+        )}
+      </Section>
 
       <Section title="Товары">
         {GOOD_IDS.map((good: GoodId) => {

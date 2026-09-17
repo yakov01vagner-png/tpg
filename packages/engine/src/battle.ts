@@ -172,6 +172,11 @@ export interface RoundContext {
   readonly command: number
   /** Навык «Магия» героя: сам он тоже чего-то стоит на поле. */
   readonly magic: number
+  /** Снаряжение отряда как множитель силы. */
+  readonly gear?: number
+  /** Что герой прибавляет лично — своим железом. */
+  readonly heroAttack?: number
+  readonly heroDefense?: number
 }
 
 export interface RoundResult {
@@ -250,8 +255,15 @@ export function resolveRound(
   const commandBonus = 1 + context.command / 120
   const fatiguePenalty = 1 - battle.fatigue / 250
   const moraleFactor = 0.6 + battle.morale / 250
-  attack *= commandBonus * fatiguePenalty * moraleFactor
-  defense *= commandBonus * fatiguePenalty * moraleFactor * wardBonus
+  const gear = context.gear ?? 1
+  attack =
+    (attack * gear + (context.heroAttack ?? 0)) * commandBonus * fatiguePenalty * moraleFactor
+  defense =
+    (defense * gear + (context.heroDefense ?? 0)) *
+    commandBonus *
+    fatiguePenalty *
+    moraleFactor *
+    wardBonus
 
   // Враг: простой выбор — сильный лезет вперёд, слабый держится, разбитый пятится.
   const enemyOrder = chooseEnemyOrder(battle)

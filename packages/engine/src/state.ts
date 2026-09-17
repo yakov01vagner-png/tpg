@@ -6,6 +6,9 @@ import type { GameEvent } from './events'
 import { describeEvent } from './events'
 import type { Party } from './party'
 import { EMPTY_PARTY } from './party'
+import type { Quest } from './quest'
+import type { Reputation } from './reputation'
+import { NO_REPUTATION } from './reputation'
 import type { Rng } from './rng'
 import { createRng } from './rng'
 import type { GameTime } from './time'
@@ -16,7 +19,7 @@ import { defaultStartLocationId, generateWorld } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -59,6 +62,12 @@ export interface GameState {
   readonly siege: { readonly locationId: string; readonly days: number } | null
   /** Слава: победы, за которые корона может пожаловать землю. */
   readonly renown: number
+  /** Что о тебе помнят места и лорды. */
+  readonly reputation: Reputation
+  /** Своё владение, если провозглашено. */
+  readonly realm: { readonly name: string } | null
+  /** Взятые поручения. */
+  readonly quests: readonly Quest[]
   /** Игра кончена: герой погиб. Пермадэт редкий, но настоящий. */
   readonly over: boolean
   readonly log: readonly LogEntry[]
@@ -86,6 +95,9 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     service: null,
     siege: null,
     renown: 0,
+    reputation: NO_REPUTATION,
+    realm: null,
+    quests: [],
     over: false,
     log: [
       {

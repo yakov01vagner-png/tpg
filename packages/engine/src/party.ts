@@ -16,9 +16,14 @@ export interface Party {
   readonly morale: number
   /** Сколько суток подряд людям не платили или не кормили. */
   readonly hungryDays: number
+  /**
+   * Во что снаряжён отряд, 0..1. Оружие и инструменты из экономики идут сюда:
+   * латник в тряпье и латник в броне — разные латники.
+   */
+  readonly gear: number
 }
 
-export const EMPTY_PARTY: Party = { units: {}, morale: 60, hungryDays: 0 }
+export const EMPTY_PARTY: Party = { units: {}, morale: 60, hungryDays: 0, gear: 0 }
 
 export const MORALE_MAX = 100
 /** Ниже этого начинают уходить по ночам. */
@@ -70,7 +75,12 @@ export function partyStrength(party: Party): number {
     const def = TROOPS[troop as TroopId]
     strength += (def.attack + def.defense + def.ranged * 0.8) * (count ?? 0)
   }
-  return Math.round(strength * (0.5 + party.morale / 200))
+  return Math.round(strength * (0.5 + party.morale / 200) * gearFactor(party))
+}
+
+/** Снаряжение отряда: от лохмотьев до полного железа — плюс до трети силы. */
+export function gearFactor(party: Party): number {
+  return 1 + party.gear * 0.35
 }
 
 /** Еда, которой отряд может кормиться: что съедобно, то и съедят. */
