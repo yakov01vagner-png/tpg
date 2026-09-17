@@ -1,0 +1,11 @@
+{
+  "name": "@tpg/engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ядро симуляции. Чистый TypeScript: никаких импортов React/React Native и обращений к платформенным API.",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
