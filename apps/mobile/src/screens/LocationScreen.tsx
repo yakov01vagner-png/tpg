@@ -1,21 +1,21 @@
 import {
-  COURSES,
   type Command,
-  EXAMS,
   type GameState,
-  JOBS,
   MAGIC_RANKS,
   SKILLS,
   type TimeWindow,
   canApply,
+  coursesAt,
+  examsAt,
   formatDuration,
   formatWindowShort,
+  jobsAt,
 } from '@tpg/engine'
 import { ScrollView, StyleSheet } from 'react-native'
 import { dispatch } from '../game/store'
 import { spacing } from '../theme'
 import { ActionCard } from '../ui/ActionCard'
-import { Section } from '../ui/atoms'
+import { Empty, Section } from '../ui/atoms'
 
 /**
  * Экран города: списки дел вместо карты (DESIGN.md, п.10).
@@ -30,10 +30,16 @@ export function LocationScreen({ game }: { game: GameState }) {
   // Расписание показываем только там, где оно не дневное, — иначе шум.
   const schedule = (window?: TimeWindow) => (window ? ` · ${formatWindowShort(window)}` : '')
 
+  // Список дел — не весь контент игры, а то, что водится именно здесь.
+  const jobs = jobsAt(game.world, game.locationId)
+  const courses = coursesAt(game.world, game.locationId)
+  const exams = examsAt(game.world, game.locationId)
+
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <Section title="Работа">
-        {JOBS.map((job) => {
+        {jobs.length === 0 ? <Empty text="Здесь работы для чужака нет." /> : null}
+        {jobs.map((job) => {
           const command: Command = { type: 'work', jobId: job.id }
           return (
             <ActionCard
@@ -49,7 +55,8 @@ export function LocationScreen({ game }: { game: GameState }) {
       </Section>
 
       <Section title="Наставники">
-        {COURSES.map((course) => {
+        {courses.length === 0 ? <Empty text="Учиться здесь не у кого — это не то место." /> : null}
+        {courses.map((course) => {
           const command: Command = { type: 'study', courseId: course.id }
           return (
             <ActionCard
@@ -65,7 +72,10 @@ export function LocationScreen({ game }: { game: GameState }) {
       </Section>
 
       <Section title="Испытания">
-        {EXAMS.map((exam) => {
+        {exams.length === 0 ? (
+          <Empty text="Ранги присваивают там, где есть школа. Здесь её нет." />
+        ) : null}
+        {exams.map((exam) => {
           const command: Command = { type: 'takeExam', examId: exam.id }
           return (
             <ActionCard

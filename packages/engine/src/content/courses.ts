@@ -1,6 +1,8 @@
 import type { SkillId } from '../skills'
 import type { TimeWindow } from '../time'
 import { hours } from '../time'
+import type { Availability } from './availability'
+import { BIG_PLACES, TOWNS } from './availability'
 import type { Requirements } from './jobs'
 
 export interface CourseDef {
@@ -19,11 +21,14 @@ export interface CourseDef {
   readonly requires?: Requirements
   /** Часы, в которые дело можно начать. По умолчанию — дневные. */
   readonly window?: TimeWindow
+  /** Где это вообще бывает. Без указания — везде. */
+  readonly where?: Availability
 }
 
 export const COURSES: readonly CourseDef[] = [
   {
     id: 'lettersBasics',
+    where: { archetypes: ['town', 'city', 'capital', 'monastery'] },
     label: 'Уроки грамоты',
     description: 'Писец берёт учеников по утрам. Читать, писать, считать долги.',
     skill: 'scholarship',
@@ -35,6 +40,7 @@ export const COURSES: readonly CourseDef[] = [
   },
   {
     id: 'swordDrill',
+    where: { archetypes: ['town', 'city', 'capital', 'fortress'] },
     label: 'Занятия с мечом',
     description: 'Отставной наёмник гоняет по кругу во дворе. Синяки в стоимость входят.',
     skill: 'lightWeapons',
@@ -46,6 +52,7 @@ export const COURSES: readonly CourseDef[] = [
   },
   {
     id: 'meditation',
+    where: { archetypes: ['monastery', 'city', 'capital'] },
     label: 'Дыхание и сосредоточение',
     description: 'Скучно, дорого и без видимого результата. Без этого магия не даётся.',
     skill: 'concentration',
@@ -57,6 +64,7 @@ export const COURSES: readonly CourseDef[] = [
   },
   {
     id: 'streetCharms',
+    where: { archetypes: ['village', 'town', 'port'] },
     label: 'Наговоры за медяки',
     description:
       'Полоумная старуха с окраины берёт дёшево и учит опасно. Школа такого не признаёт.',
@@ -71,6 +79,7 @@ export const COURSES: readonly CourseDef[] = [
   },
   {
     id: 'magicIntro',
+    where: { archetypes: ['capital', 'city'] },
     label: 'Школа магии: вводный курс',
     description: 'За стенами школы учат тому, за что на улице сожгли бы.',
     skill: 'magic',
@@ -83,6 +92,7 @@ export const COURSES: readonly CourseDef[] = [
   },
   {
     id: 'archeryRange',
+    where: { archetypes: ['fortress', 'town', 'city', 'capital'] },
     label: 'Стрельбище у стены',
     description: 'Сотня выстрелов в день и мозоли, которые потом уже не сойдут.',
     skill: 'archery',
@@ -94,6 +104,7 @@ export const COURSES: readonly CourseDef[] = [
   },
   {
     id: 'ridingSchool',
+    where: { archetypes: ['town', 'city', 'capital'] },
     label: 'Выездка',
     description: 'Конюший берёт за час столько, сколько конюх получает за день.',
     skill: 'riding',
@@ -105,6 +116,7 @@ export const COURSES: readonly CourseDef[] = [
   },
   {
     id: 'shopApprentice',
+    where: { archetypes: TOWNS },
     label: 'При лавке',
     description: 'Хозяин показывает, где в счёте прячется прибыль, и берёт за это долю.',
     skill: 'trade',
@@ -116,6 +128,7 @@ export const COURSES: readonly CourseDef[] = [
   },
   {
     id: 'bonesetter',
+    where: { archetypes: ['town', 'city', 'capital', 'monastery'] },
     label: 'У костоправа',
     description: 'Кровь, крик и руки, которые перестают дрожать к третьему разу.',
     skill: 'healing',
@@ -127,6 +140,7 @@ export const COURSES: readonly CourseDef[] = [
   },
   {
     id: 'lawAndNumbers',
+    where: { archetypes: BIG_PLACES },
     label: 'Законы и счёт',
     description: 'Городской стряпчий берёт дорого и смотрит на тебя как на мебель.',
     skill: 'scholarship',
@@ -139,6 +153,7 @@ export const COURSES: readonly CourseDef[] = [
   },
   {
     id: 'bladeMaster',
+    where: { archetypes: BIG_PLACES },
     label: 'Мастер клинка',
     description: 'Берёт только тех, кто уже умеет. Учит тому, что убивает, а не тому, что красиво.',
     skill: 'lightWeapons',
@@ -151,6 +166,7 @@ export const COURSES: readonly CourseDef[] = [
   },
   {
     id: 'magicAdeptCourse',
+    where: { archetypes: ['capital'] },
     label: 'Школа магии: курс адепта',
     description: 'Настоящее обучение начинается здесь — и стоит настоящих денег.',
     skill: 'magic',

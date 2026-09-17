@@ -1,6 +1,7 @@
 import type { MagicRankId } from '../magic'
 import type { TimeWindow } from '../time'
 import { hours } from '../time'
+import type { Availability } from './availability'
 import type { Requirements } from './jobs'
 
 /**
@@ -23,11 +24,14 @@ export interface ExamDef {
   readonly requires?: Requirements
   /** Часы, в которые дело можно начать. По умолчанию — дневные. */
   readonly window?: TimeWindow
+  /** Где это вообще бывает. Без указания — везде. */
+  readonly where?: Availability
 }
 
 export const EXAMS: readonly ExamDef[] = [
   {
     id: 'examNeophyte',
+    where: { archetypes: ['capital', 'city'] },
     label: 'Испытание на Неофита',
     description: 'Формальность, но без неё в школе с тобой не разговаривают.',
     rank: 'neophyte',
@@ -38,6 +42,7 @@ export const EXAMS: readonly ExamDef[] = [
   },
   {
     id: 'examAdept',
+    where: { archetypes: ['capital'] },
     label: 'Испытание на Адепта',
     description: 'Первый ранг, который что-то значит за пределами школьного двора.',
     rank: 'adept',
@@ -48,6 +53,7 @@ export const EXAMS: readonly ExamDef[] = [
   },
   {
     id: 'examStudent',
+    where: { archetypes: ['capital'] },
     label: 'Испытание на Ученика',
     description: 'Здесь спрашивают не слова, а работу. Провалившихся запоминают надолго.',
     rank: 'student',
@@ -58,6 +64,7 @@ export const EXAMS: readonly ExamDef[] = [
   },
   {
     id: 'examJourneyman',
+    where: { archetypes: ['capital'] },
     label: 'Испытание на Подмастерье',
     description: 'Ранг, после которого тебя нанимают, а не гоняют. Цена соответствует.',
     rank: 'journeyman',

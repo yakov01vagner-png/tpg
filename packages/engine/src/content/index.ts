@@ -8,6 +8,8 @@ import type { JobDef } from './jobs'
 import { JOBS, JOBS_BY_ID } from './jobs'
 
 export type { JobDef, Requirements } from './jobs'
+export type { Availability } from './availability'
+export { TOWNS, BIG_PLACES } from './availability'
 export type { CourseDef } from './courses'
 export type { ExamDef } from './exams'
 export { JOBS, COURSES, EXAMS, BIOGRAPHY }

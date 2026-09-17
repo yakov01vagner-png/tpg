@@ -5,6 +5,7 @@ import { type Command, applyCommand, canApply } from '../src/commands'
 import type { GameState } from '../src/state'
 import { createGame } from '../src/state'
 import { dayOf } from '../src/time'
+import { generateWorld } from '../src/world/generate'
 
 /**
  * Прогон баланса.
@@ -79,8 +80,18 @@ interface Run {
   readonly reached: boolean
 }
 
+// Темп меряем в столице: дорога — предмет отдельного блока, здесь она только
+// зашумила бы числа.
+const WORLD = generateWorld(1)
+const CAPITAL = WORLD.kingdoms.reEstiz?.capitalId ?? ''
+
+function newGame(seed: number): GameState {
+  const state = createGame(createCharacter({ name: 'Подопытный', money: 20 }), seed, WORLD)
+  return { ...state, locationId: CAPITAL }
+}
+
 function play(strategy: Strategy, seed: number, maxActions = 6000): Run {
-  let state = createGame(createCharacter({ name: 'Подопытный', money: 20 }), seed)
+  let state = newGame(seed)
   for (let actions = 1; actions <= maxActions; actions += 1) {
     if (strategy.goal(state)) {
       return { days: dayOf(state.time), actions, state, reached: true }
@@ -124,7 +135,7 @@ describe('темп прогрессии', () => {
 
   it('сессия из десятка действий даёт видимый шаг', () => {
     // Десять действий — это примерно три-пять минут в телефоне.
-    let state = createGame(createCharacter({ name: 'Подопытный', money: 20 }), 3)
+    let state = newGame(3)
     const before = state.character
     for (let i = 0; i < 10; i += 1) {
       const command =

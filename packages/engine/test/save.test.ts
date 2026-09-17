@@ -3,9 +3,13 @@ import { createCharacter } from '../src/character'
 import { applyCommand } from '../src/commands'
 import { deserialize, serialize } from '../src/save'
 import { SCHEMA_VERSION, createGame } from '../src/state'
+import { generateWorld } from '../src/world/generate'
 
 function played() {
-  const start = createGame(createCharacter({ name: 'Тест', money: 30 }), 7)
+  const world = generateWorld(7)
+  const base = createGame(createCharacter({ name: 'Тест', money: 30 }), 7, world)
+  // Разгрузка телег водится в городах, поэтому начинаем со столицы.
+  const start = { ...base, locationId: world.kingdoms.reEstiz?.capitalId ?? base.locationId }
   const result = applyCommand(start, { type: 'work', jobId: 'unloadCarts' })
   if (!result.ok) throw new Error(result.message)
   return result.state
@@ -24,8 +28,8 @@ describe('сохранение', () => {
     const loaded = deserialize(serialize(state))
     if (!loaded.ok) throw new Error(loaded.error)
 
-    const direct = applyCommand(state, { type: 'work', jobId: 'gatherHerbs' })
-    const resumed = applyCommand(loaded.state, { type: 'work', jobId: 'gatherHerbs' })
+    const direct = applyCommand(state, { type: 'work', jobId: 'runErrands' })
+    const resumed = applyCommand(loaded.state, { type: 'work', jobId: 'runErrands' })
     expect(direct.ok && resumed.ok).toBe(true)
     if (direct.ok && resumed.ok) expect(resumed.state).toEqual(direct.state)
   })

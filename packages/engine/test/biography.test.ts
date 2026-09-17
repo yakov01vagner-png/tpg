@@ -11,6 +11,7 @@ import { createCharacter } from '../src/character'
 import { applyCommand } from '../src/commands'
 import { BIOGRAPHY } from '../src/content/biography'
 import { createGame } from '../src/state'
+import { generateWorld } from '../src/world/generate'
 
 /** Все полные пути по биографии — контент маленький, перебор честный. */
 function allPaths(biography: Biography): string[][] {
@@ -170,10 +171,15 @@ describe('сборка персонажа', () => {
 })
 
 describe('теги работают в игре', () => {
+  // Школа магии и уличные наставники водятся в столице, туда и ставим героя.
+  const world = generateWorld(1)
+  const capital = world.kingdoms.reEstiz?.capitalId ?? ''
+
   const gameFrom = (templateId: string) => {
     const optionIds = templateOptionIds(BIOGRAPHY, templateId)
     if (!optionIds) throw new Error(`нет шаблона ${templateId}`)
-    return createGame(createCharacter(draftOf(optionIds)), 1)
+    const state = createGame(createCharacter(draftOf(optionIds)), 1, world)
+    return { ...state, locationId: capital }
   }
 
   it('в школу магии берут только своих', () => {
@@ -191,11 +197,16 @@ describe('теги работают в игре', () => {
   })
 
   it('уличное прошлое открывает дешёвую и кривую магию', () => {
-    const streetRat = applyCommand(gameFrom('cutpurse'), {
+    // Полоумная старуха сидит на окраине городка, а не в столице.
+    const townId =
+      Object.values(world.locations).find((location) => location.archetype === 'town')?.id ?? ''
+    const inTown = (templateId: string) => ({ ...gameFrom(templateId), locationId: townId })
+
+    const streetRat = applyCommand(inTown('cutpurse'), {
       type: 'study',
       courseId: 'streetCharms',
     })
-    const noble = applyCommand(gameFrom('fallenNoble'), {
+    const noble = applyCommand(inTown('fallenNoble'), {
       type: 'study',
       courseId: 'streetCharms',
     })

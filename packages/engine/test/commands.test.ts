@@ -11,10 +11,12 @@ import { roadsFrom } from '../src/world/queries'
 
 // Один мир на весь файл: генерировать семьдесят локаций в каждом тесте незачем.
 const WORLD = generateWorld(1)
+/** Столица: там водится почти весь контент, поэтому проверки правил живут в ней. */
+const CAPITAL = WORLD.kingdoms.reEstiz?.capitalId ?? ''
 
 function game(overrides: Partial<Character> = {}, seed = 1): GameState {
   const character = { ...createCharacter({ name: 'Тест', money: 50 }), ...overrides }
-  return createGame(character, seed, WORLD)
+  return { ...createGame(character, seed, WORLD), locationId: CAPITAL }
 }
 
 /** Развернуть удачный результат или упасть с внятным сообщением. */
@@ -214,7 +216,7 @@ describe('испытание на ранг', () => {
   it('с хорошим запасом ранг присваивают, и он остаётся в персонаже', () => {
     let granted = false
     for (let seed = 1; seed <= 5 && !granted; seed += 1) {
-      const state = createGame(magician(20).character, seed)
+      const state = { ...createGame(magician(20).character, seed, WORLD), locationId: CAPITAL }
       const after = ok(applyCommand(state, { type: 'takeExam', examId: 'examNeophyte' }))
       expect(after.character.money).toBe(90)
       if (after.character.magicRank === 'neophyte') granted = true
@@ -223,18 +225,12 @@ describe('испытание на ранг', () => {
   })
 
   it('результат воспроизводится из того же зерна', () => {
-    const first = ok(
-      applyCommand(createGame(magician(6).character, 12345), {
-        type: 'takeExam',
-        examId: 'examNeophyte',
-      }),
-    )
-    const second = ok(
-      applyCommand(createGame(magician(6).character, 12345), {
-        type: 'takeExam',
-        examId: 'examNeophyte',
-      }),
-    )
+    const atSchool = (seed: number): GameState => ({
+      ...createGame(magician(6).character, seed, WORLD),
+      locationId: CAPITAL,
+    })
+    const first = ok(applyCommand(atSchool(12345), { type: 'takeExam', examId: 'examNeophyte' }))
+    const second = ok(applyCommand(atSchool(12345), { type: 'takeExam', examId: 'examNeophyte' }))
     expect(first.character.magicRank).toBe(second.character.magicRank)
     expect(first.rng).toEqual(second.rng)
   })
@@ -269,6 +265,10 @@ describe('предпросмотр доступности', () => {
 })
 
 describe('дорога', () => {
+  // Дорогу проверяем от родной деревни, а не из столицы.
+  const home = (overrides: Partial<Character> = {}): GameState =>
+    createGame({ ...createCharacter({ name: 'Тест', money: 50 }), ...overrides }, 1, WORLD)
+
   const neighbourOf = (state: GameState) => {
     const road = roadsFrom(state.world, state.locationId)[0]
     if (!road) throw new Error('стартовая локация без дорог')
@@ -276,7 +276,7 @@ describe('дорога', () => {
   }
 
   it('переносит в соседнее место и берёт за это время и силы', () => {
-    const before = game()
+    const before = home()
     const road = neighbourOf(before)
     const after = ok(applyCommand(before, { type: 'travel', toLocationId: road.to }))
 
@@ -287,7 +287,7 @@ describe('дорога', () => {
   })
 
   it('не пускает туда, куда нет дороги', () => {
-    const state = game()
+    const state = home()
     const neighbours = new Set(roadsFrom(state.world, state.locationId).map((road) => road.to))
     const far = Object.keys(state.world.locations).find(
       (id) => id !== state.locationId && !neighbours.has(id),
@@ -299,14 +299,14 @@ describe('дорога', () => {
   })
 
   it('не отправляет в путь вымотанного', () => {
-    const state = game({ fatigue: 95 })
+    const state = home({ fatigue: 95 })
     const result = applyCommand(state, { type: 'travel', toLocationId: neighbourOf(state).to })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('exhausted')
   })
 
   it('ходит и ночью: дорога не спрашивает расписания', () => {
-    const night: GameState = { ...game(), time: WORLD_START + hours(17) }
+    const night: GameState = { ...home(), time: WORLD_START + hours(17) }
     const result = applyCommand(night, { type: 'travel', toLocationId: neighbourOf(night).to })
     expect(result.ok).toBe(true)
   })

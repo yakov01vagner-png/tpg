@@ -2,10 +2,11 @@ import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
 import type { Character } from './character'
 import { FATIGUE_MAX, attributeForSkill, fatigueFactor, skillLevel } from './character'
-import type { Content, Requirements } from './content'
+import type { Availability, Content, Requirements } from './content'
 import { CONTENT } from './content'
 import type { GameEvent } from './events'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
+import { isAvailableAt } from './place'
 import { PROGRESSION, applyCharacterXp, applySkillXp } from './progression'
 import type { Rng } from './rng'
 import { rollChance } from './rng'
@@ -49,6 +50,7 @@ export type FailureCode =
   | 'noPoints'
   | 'maxed'
   | 'rankNotEligible'
+  | 'unavailableHere'
   | 'invalid'
 
 export type CommandResult =
@@ -150,6 +152,7 @@ function work(state: GameState, jobId: string, content: Content): CommandResult 
   const job = content.jobs[jobId]
   if (!job) return fail('unknownAction', 'Такой работы здесь нет.')
   const blocked =
+    checkPlace(state, job.where, 'Здесь такой работы нет.') ??
     checkWindow(state.time, job.window, 'На эту работу нанимают') ??
     checkRequirements(state.character, job.requires) ??
     checkFatigue(state.character, job.fatigue)
@@ -171,6 +174,7 @@ function study(state: GameState, courseId: string, content: Content): CommandRes
   const course = content.courses[courseId]
   if (!course) return fail('unknownAction', 'Такого наставника здесь нет.')
   const blocked =
+    checkPlace(state, course.where, 'Такому здесь учить некому.') ??
     checkWindow(state.time, course.window, 'Занятия идут') ??
     checkRequirements(state.character, course.requires) ??
     checkMoney(state.character, course.cost) ??
@@ -213,6 +217,7 @@ function takeExam(state: GameState, examId: string, content: Content): CommandRe
     )
   }
   const blocked =
+    checkPlace(state, exam.where, 'Здесь некому принимать испытание.') ??
     checkWindow(state.time, exam.window, 'Испытания проводят') ??
     checkRequirements(character, exam.requires) ??
     checkMoney(character, exam.cost) ??
@@ -316,6 +321,20 @@ function spendAttributePoint(state: GameState, attributeId: AttributeId): Comman
  * Дело можно начать только в своё окно. У большинства оно дневное, но есть
  * ночная работа — поэтому проверка не «сейчас ночь», а «сейчас не их часы».
  */
+/**
+ * Дело должно водиться в этом месте. Это и есть смысл дороги: за наставником,
+ * за испытанием и за хорошей платой приходится идти туда, где они есть.
+ */
+function checkPlace(
+  state: GameState,
+  where: Availability | undefined,
+  message: string,
+): CommandResult | null {
+  const here = state.world.locations[state.locationId]
+  if (!here) return fail('invalid', 'Непонятно, где находится герой.')
+  return isAvailableAt(where, here) ? null : fail('unavailableHere', message)
+}
+
 function checkWindow(
   time: GameTime,
   window: TimeWindow | undefined,
