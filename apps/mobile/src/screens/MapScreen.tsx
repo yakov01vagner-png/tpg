@@ -1,12 +1,14 @@
 import {
   CARAVAN_COST,
   type Command,
+  FRONTIER,
   GOODS,
   GOOD_IDS,
   type GameState,
   type GoodId,
   type GridCell,
   KINGDOM_COLORS,
+  KINGDOM_SHORT,
   MAP_SIZE,
   PLACE_LABELS,
   PLAYER,
@@ -143,28 +145,55 @@ export function MapScreen({ game }: { game: GameState }) {
     return out
   }, [grid])
 
-  // Подпись провинции ставится в середину её земли, а не в геометрический
-  // центр: так она стоит там, где земля и правда есть, и не спорит с именами мест.
-  const provinceLabels = useMemo(() => {
-    const sums = new Map<string, { x: number; y: number; n: number }>()
-    for (let row = 0; row < grid.size; row += 1) {
-      for (let column = 0; column < grid.size; column += 1) {
-        const cell = grid.cells[row * grid.size + column]
-        if (!cell) continue
-        const sum = sums.get(cell.provinceId) ?? { x: 0, y: 0, n: 0 }
-        sum.x += (column + 0.5) * grid.cell
-        sum.y += (row + 0.5) * grid.cell
-        sum.n += 1
-        sums.set(cell.provinceId, sum)
+  // Подпись ставится в середину земли, а не в геометрический центр: так она
+  // стоит там, где земля и правда есть, и не спорит с именами мест. Вблизи
+  // подписаны провинции, издали — области: при двух сотнях мест провинции на
+  // общем виде слипаются в кашу, а области читаются.
+  const labels = useMemo(() => {
+    const gather = (by: (cell: GridCell) => string) => {
+      const sums = new Map<string, { x: number; y: number; n: number }>()
+      for (let row = 0; row < grid.size; row += 1) {
+        for (let column = 0; column < grid.size; column += 1) {
+          const cell = grid.cells[row * grid.size + column]
+          if (!cell) continue
+          const key = by(cell)
+          const sum = sums.get(key) ?? { x: 0, y: 0, n: 0 }
+          sum.x += (column + 0.5) * grid.cell
+          sum.y += (row + 0.5) * grid.cell
+          sum.n += 1
+          sums.set(key, sum)
+        }
       }
+      return sums
     }
-    const out: { id: string; name: string; x: number; y: number }[] = []
-    for (const [provinceId, sum] of sums) {
-      const province = game.world.provinces[provinceId]
-      if (!province || sum.n === 0) continue
-      out.push({ id: provinceId, name: province.name, x: sum.x / sum.n, y: sum.y / sum.n })
+    const named = (
+      sums: Map<string, { x: number; y: number; n: number }>,
+      name: (id: string) => string | undefined,
+    ) => {
+      const out: { id: string; name: string; x: number; y: number }[] = []
+      for (const [id, sum] of sums) {
+        const label = name(id)
+        if (!label || sum.n === 0) continue
+        out.push({ id, name: label, x: sum.x / sum.n, y: sum.y / sum.n })
+      }
+      return out
     }
-    return out
+    return {
+      provinces: named(
+        gather((cell) => cell.provinceId),
+        (id) => game.world.provinces[id]?.name,
+      ),
+      regions: named(
+        gather((cell) => cell.regionId),
+        (id) => game.world.regions[id]?.name,
+      ),
+      // Издали подписаны короны и марки: двадцать имён областей на общем виде
+      // слипаются в кашу, а десять держав и пограничий читаются.
+      crowns: named(
+        gather((cell) => (cell.kingdomId === FRONTIER ? cell.regionId : cell.kingdomId)),
+        (id) => KINGDOM_SHORT[id] ?? game.world.kingdoms[id]?.name ?? game.world.regions[id]?.name,
+      ),
+    }
   }, [grid, game.world])
 
   const horizontal = useRef<ScrollView>(null)
@@ -355,23 +384,26 @@ export function MapScreen({ game }: { game: GameState }) {
                 </G>
               )}
 
-              {level === 'world' ? null : (
-                <G>
-                  {provinceLabels.map((label) => (
-                    <SvgText
-                      key={label.id}
-                      x={label.x}
-                      y={label.y}
-                      fill="#efe6d6"
-                      fillOpacity={0.32}
-                      fontSize={13 * mark}
-                      textAnchor="middle"
-                    >
-                      {label.name.toUpperCase()}
-                    </SvgText>
-                  ))}
-                </G>
-              )}
+              <G>
+                {(level === 'world'
+                  ? labels.crowns
+                  : level === 'realm'
+                    ? labels.regions
+                    : labels.provinces
+                ).map((label) => (
+                  <SvgText
+                    key={label.id}
+                    x={label.x}
+                    y={label.y}
+                    fill="#efe6d6"
+                    fillOpacity={level === 'world' ? 0.5 : 0.32}
+                    fontSize={(level === 'world' ? 19 : 13) * mark}
+                    textAnchor="middle"
+                  >
+                    {label.name.toUpperCase()}
+                  </SvgText>
+                ))}
+              </G>
 
               {level === 'world' ? null : (
                 <G>

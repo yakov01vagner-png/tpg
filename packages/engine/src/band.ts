@@ -235,12 +235,23 @@ export function nextHop(world: World, fromId: string, toId: string): string | nu
 }
 
 /** Сколько переходов до каждого места. Один обход на решение, а не по обходу на цель. */
-function distancesFrom(world: World, fromId: string): Map<string, number> {
+/**
+ * Докуда войско вообще смотрит.
+ *
+ * Обходить весь мир незачем и дорого: дружина не ходит за добычей через
+ * материк, и это уже записано в выборе цели. Предел в переходах держит счёт
+ * суток в бюджете — мир версии 0.3 вдвое больше прежнего, и полный обход
+ * дорожал вместе с ним.
+ */
+const MAX_MARCH = 12
+
+function distancesFrom(world: World, fromId: string, limit = MAX_MARCH): Map<string, number> {
   const distance = new Map<string, number>([[fromId, 0]])
   const queue = [fromId]
   while (queue.length > 0) {
     const current = queue.shift() as string
     const step = (distance.get(current) ?? 0) + 1
+    if (step > limit) continue
     for (const road of roadsFrom(world, current)) {
       if (distance.has(road.to)) continue
       distance.set(road.to, step)

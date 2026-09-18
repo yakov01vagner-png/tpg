@@ -36,8 +36,9 @@ describe('генерация мира', () => {
       `мир: ${Object.keys(world.kingdoms).length} королевств, ${counts.regions} областей, ` +
         `${counts.provinces} провинций, ${counts.locations} локаций`,
     )
-    // Десять областей корон плюс пять марок пограничья, которых не держит никто.
-    expect(counts.regions).toBe(10 + MARCHES.length)
+    // Пятнадцать областей корон плюс пять марок пограничья.
+    const crownRegions = KINGDOM_BLUEPRINTS.reduce((sum, one) => sum + one.regions.length, 0)
+    expect(counts.regions).toBe(crownRegions + MARCHES.length)
     expect(
       Object.values(world.regions).filter((region) => region.kingdomId === FRONTIER).length,
     ).toBe(MARCHES.length)

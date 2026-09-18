@@ -71,9 +71,7 @@ describe('ночёвка под небом', () => {
 
 describe('работа земли', () => {
   it('восемь работ живут только там, где не живут люди', () => {
-    const wild = JOBS.filter((job) =>
-      job.where?.archetypes?.some((kind) => !isSettlement(kind)),
-    )
+    const wild = JOBS.filter((job) => job.where?.archetypes?.some((kind) => !isSettlement(kind)))
     expect(wild.length).toBeGreaterThanOrEqual(8)
     for (const job of wild) {
       for (const kind of job.where?.archetypes ?? []) {

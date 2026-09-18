@@ -34,6 +34,7 @@ export const KINGDOM_BLUEPRINTS: readonly KingdomBlueprint[] = [
     regions: [
       { name: 'Северная область', terrain: 'forest', provinces: [2, 3] },
       { name: 'Южная область', terrain: 'plains', provinces: [2, 3] },
+      { name: 'Западный Край', terrain: 'hills', provinces: [2, 3] },
     ],
     terrains: ['plains', 'forest', 'hills', 'marsh'],
   },
@@ -46,6 +47,7 @@ export const KINGDOM_BLUEPRINTS: readonly KingdomBlueprint[] = [
     regions: [
       { name: 'Пресвятая область', terrain: 'plains', provinces: [2, 3] },
       { name: 'Западный Предел', terrain: 'coast', provinces: [2, 2] },
+      { name: 'Полуденные Земли', terrain: 'hills', provinces: [2, 3] },
     ],
     terrains: ['plains', 'coast', 'hills'],
   },
@@ -58,6 +60,7 @@ export const KINGDOM_BLUEPRINTS: readonly KingdomBlueprint[] = [
     regions: [
       { name: 'Внутренние земли', terrain: 'plains', provinces: [2, 3] },
       { name: 'Восточные провинции', terrain: 'steppe', provinces: [2, 3] },
+      { name: 'Приморские Владения', terrain: 'coast', provinces: [2, 2] },
     ],
     terrains: ['plains', 'steppe', 'hills', 'coast'],
   },
@@ -69,6 +72,7 @@ export const KINGDOM_BLUEPRINTS: readonly KingdomBlueprint[] = [
     regions: [
       { name: 'Верхние чертоги', terrain: 'mountains', provinces: [2, 2] },
       { name: 'Нижние штольни', terrain: 'mountains', provinces: [2, 2] },
+      { name: 'Внешние Отроги', terrain: 'hills', provinces: [2, 3] },
     ],
     terrains: ['mountains', 'hills'],
   },
@@ -80,6 +84,7 @@ export const KINGDOM_BLUEPRINTS: readonly KingdomBlueprint[] = [
     regions: [
       { name: 'Великая степь', terrain: 'steppe', provinces: [2, 3] },
       { name: 'Дальние кочевья', terrain: 'forest', provinces: [2, 2] },
+      { name: 'Речные Кочевья', terrain: 'marsh', provinces: [2, 3] },
     ],
     terrains: ['steppe', 'forest', 'marsh', 'hills'],
   },
@@ -364,6 +369,18 @@ export const MARCHES: readonly MarchBlueprint[] = [
     freeTown: 'Колодезь',
   },
 ]
+
+/**
+ * Короткие имена корон: для карты. Полное имя на общем виде не помещается и
+ * уезжает за край полотна, а «Ре-Эстиз» читается с одного взгляда.
+ */
+export const KINGDOM_SHORT: Readonly<Record<string, string>> = {
+  reEstiz: 'Ре-Эстиз',
+  robl: 'Робл',
+  boharut: 'Бохарут',
+  durHazad: 'Дор-Хазад',
+  tribes: 'Племена',
+}
 
 export const KINGDOM_CENTERS: Record<string, { readonly x: number; readonly y: number }> = {
   reEstiz: { x: 700, y: 700 },
