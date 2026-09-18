@@ -11,6 +11,7 @@ import {
   carried,
   carriedWeight,
   dayOf,
+  fairAt,
   isSettlement,
   itemsSoldAt,
   kingdomOf,
@@ -20,6 +21,7 @@ import {
   priceHistory,
   sellPrice,
   skillLevel,
+  tradeSkillAt,
 } from '@tpg/engine'
 import { useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
@@ -27,7 +29,7 @@ import Svg, { Polyline } from 'react-native-svg'
 import { Icon } from '../art/icons'
 import { dispatch } from '../game/store'
 import { font, palette, radii, spacing, touch } from '../theme'
-import { Card, Chip, Chips, Empty, Panel, Section, Stat, Stats } from '../ui/parts'
+import { Card, Chip, Chips, Dim, Empty, Panel, Section, Stat, Stats } from '../ui/parts'
 
 const LOTS = [1, 5, 20] as const
 
@@ -42,7 +44,10 @@ export function TradeScreen({ game }: { game: GameState }) {
   const [lot, setLot] = useState<number>(5)
   const [open, setOpen] = useState<GoodId | null>(null)
   const market = game.settlements[game.locationId]
-  const tradeSkill = skillLevel(game.character, 'trade')
+  // С ярмаркой: в дни торга разница между «купить» и «продать» сходится сама
+  // (этап 39), и здесь она обязана сойтись так же, как в ядре.
+  const tradeSkill = tradeSkillAt(game)
+  const fair = fairAt(game.world, game.locationId, dayOf(game.time))
   const weight = carriedWeight(game.character)
   const capacity = partyCapacity(game.character, game.party)
 
@@ -60,9 +65,16 @@ export function TradeScreen({ game }: { game: GameState }) {
         <Stats>
           <Stat label="Кошель" value={`${game.character.money}`} tone="gold" />
           <Stat label="Поклажа" value={`${weight} из ${capacity}`} />
-          <Stat label="Торг" value={`${tradeSkill}`} />
+          <Stat
+            label="Торг"
+            value={fair ? `${tradeSkill} · ярмарка` : `${tradeSkill}`}
+            tone={fair ? 'good' : undefined}
+          />
         </Stats>
       </Panel>
+      {fair ? (
+        <Dim>{`${fair.name}: съехались со всей округи, цены сходятся, товара вдоволь.`}</Dim>
+      ) : null}
 
       <Chips>
         {LOTS.map((size) => (

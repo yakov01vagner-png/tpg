@@ -17,7 +17,10 @@ import {
   companionsAt,
   coursesAt,
   dayOf,
+  daysToFair,
   examsAt,
+  fairAt,
+  feastAt,
   foeName,
   foodSecurity,
   fordShut,
@@ -518,6 +521,20 @@ function StateLine({ game }: { game: GameState }) {
   if (settlement.harvest < 0.7) parts.push({ text: 'недород', tone: 'danger' })
   else if (settlement.harvest < 0.9) parts.push({ text: 'год тощий', tone: 'warn' })
   if (sick) parts.push({ text: 'здесь мор', tone: 'danger' })
+  // Год человеческий (этап 39): ярмарка — повод приехать к сроку, праздник —
+  // причина, по которой сегодня никто не работает.
+  const today = dayOf(game.time)
+  const fair = fairAt(game.world, game.locationId, today)
+  const untilFair = daysToFair(game.world, game.locationId, today)
+  if (fair) parts.push({ text: `${fair.name.toLowerCase()}: ярмарка`, tone: 'good' })
+  else if (untilFair !== null && untilFair <= 30) {
+    parts.push({
+      text: `ярмарка через ${untilFair} ${plural(untilFair, 'день', 'дня', 'дней')}`,
+      tone: 'good',
+    })
+  }
+  const feast = feastAt(game.world, game.locationId, today)
+  if (feast) parts.push({ text: `праздник: ${feast.name}`, tone: 'good' })
   return (
     <View style={styles.state}>
       {parts.map((part) => (

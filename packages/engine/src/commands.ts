@@ -60,6 +60,7 @@ import type { Enterprise } from './enterprise'
 import { CARAVAN_COST, SHIPPING_COST, WORKSHOP_COST, tickEnterprises } from './enterprise'
 import { gearBonus, horseCarry, repairCost, withItem } from './equipment'
 import type { GameEvent, LogKind } from './events'
+import { FAIR_TRADE_BONUS, fairAt, feastAt } from './fair'
 import {
   PLAYER,
   dailyTax,
@@ -220,6 +221,8 @@ export type Command =
   | { readonly type: 'repairItem'; readonly slot: SlotId }
   | { readonly type: 'outfitParty'; readonly weapons: number }
   | { readonly type: 'giveFood'; readonly amount: number }
+  /** Сдать товар тому, кто ждёт его к ярмарке (этап 39). */
+  | { readonly type: 'deliverGoods'; readonly good: GoodId; readonly amount: number }
   | { readonly type: 'takeQuest'; readonly questId: string }
   | { readonly type: 'finishQuest'; readonly questId: string }
   | { readonly type: 'abandonQuest'; readonly questId: string }
@@ -430,6 +433,8 @@ export function applyCommand(
       return outfitParty(state, command.weapons)
     case 'giveFood':
       return giveFood(state, command.amount)
+    case 'deliverGoods':
+      return deliverGoods(state, command.good, command.amount)
     case 'takeQuest':
       return takeQuest(state, command.questId)
     case 'finishQuest':
@@ -502,6 +507,19 @@ const BEDRIDDEN_BLOCKS: ReadonlySet<Command['type']> = new Set<Command['type']>(
   'siegeAssault',
   'foundCaravan',
 ])
+
+/**
+ * Праздник: в этот день не работают и не учат (этап 39).
+ *
+ * У каждой короны год немного свой: в Робле неделя поста, у племён конский
+ * праздник. Отказ говорит, какой именно, — чтобы игрок знал, что это не
+ * поломка, а обычай.
+ */
+function checkFeast(state: GameState, what: string): CommandResult | null {
+  const feast = feastAt(state.world, state.locationId, dayOf(state.time))
+  if (!feast) return null
+  return fail('closed', `Сегодня ${feast.name}: ${what}.`)
+}
 
 /** Как зовут того, кто стоит напротив: лорд, корона или просто разбойники. */
 export function foeName(state: GameState, foeId: string | null): string {
@@ -1212,9 +1230,12 @@ function hire(state: GameState, troop: TroopId, count: number): CommandResult {
   const here = state.world.locations[state.locationId]
   const settlement = state.settlements[state.locationId]
   if (!here || !settlement) return fail('invalid', 'Непонятно, где находится герой.')
+  // На ярмарку приходят наёмники (этап 39): в дни торга здесь можно найти
+  // тех, кого в этом месте обычно не найдёшь, лишь бы людей хватало.
+  const fair = fairAt(state.world, state.locationId, dayOf(state.time)) !== null
   if (
     !isSettlement(here.archetype) ||
-    !def.where.includes(here.archetype) ||
+    (!fair && !def.where.includes(here.archetype)) ||
     settlement.population < def.minPopulation
   ) {
     return fail('unavailableHere', `${def.label} здесь не найдёшь.`)
@@ -1965,6 +1986,50 @@ function giveFood(state: GameState, amount: number): CommandResult {
 }
 
 // --- поручения --------------------------------------------------------------
+
+/**
+ * Сдать товар к ярмарке.
+ *
+ * Поручение «к ярмарке» — единственное, у которого срок и есть условие: товар
+ * нужен к торгу, а не вообще. Сдают его тому, кто просил, и в счёт идёт только
+ * тот товар, что просили.
+ */
+function deliverGoods(state: GameState, good: GoodId, amount: number): CommandResult {
+  if (!Number.isInteger(amount) || amount <= 0) return fail('invalid', 'Сколько именно?')
+  if (carried(state.character, good) < amount) {
+    return fail('noGoods', `У тебя нет столько: ${GOODS[good].label.toLowerCase()}.`)
+  }
+  const waiting = state.quests.filter(
+    (quest) =>
+      quest.type === 'fairGoods' &&
+      quest.issuerLocationId === state.locationId &&
+      quest.good === good &&
+      quest.progress < quest.amount,
+  )
+  if (waiting.length === 0) return fail('unavailableHere', 'Этого здесь к ярмарке не ждут.')
+  const settlement = state.settlements[state.locationId]
+  if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
+
+  const draft = open(state)
+  addGoods(draft, good, -amount)
+  draft.settlements = {
+    ...draft.settlements,
+    [state.locationId]: {
+      ...settlement,
+      stock: { ...settlement.stock, [good]: settlement.stock[good] + amount },
+    },
+  }
+  let left = amount
+  draft.quests = draft.quests.map((quest) => {
+    if (!waiting.some((one) => one.id === quest.id) || left <= 0) return quest
+    const take = Math.min(left, quest.amount - quest.progress)
+    left -= take
+    return { ...quest, progress: quest.progress + take }
+  })
+  notice(draft, `Сдано к ярмарке: ${GOODS[good].label.toLowerCase()}, ${amount}.`)
+  advance(draft, TRADE_MINUTES)
+  return close(draft)
+}
 
 function takeQuest(state: GameState, questId: string): CommandResult {
   if (state.quests.some((quest) => quest.id === questId)) {
@@ -2907,13 +2972,25 @@ function quarantine(state: GameState): CommandResult {
   return close(draft)
 }
 
+/**
+ * С каким навыком торгуются здесь и сейчас.
+ *
+ * На ярмарке продавцов много и все на виду: разница между «купить» и «продать»
+ * сходится сама, как у того, кого на рынке знают (этап 39). Поэтому ярмарка —
+ * прибавка к навыку, а не скидка: одна и та же линейка на все цены.
+ */
+export function tradeSkillAt(state: GameState): number {
+  const fair = fairAt(state.world, state.locationId, dayOf(state.time))
+  return skillLevel(state.character, 'trade') + (fair ? FAIR_TRADE_BONUS : 0)
+}
+
 function buy(state: GameState, good: GoodId, amount: number): CommandResult {
   const problem = checkTradeRequest(good, amount)
   if (problem) return problem
   const settlement = state.settlements[state.locationId]
   if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
 
-  const tradeSkill = skillLevel(state.character, 'trade')
+  const tradeSkill = tradeSkillAt(state)
   // Своим уступают, чужих обдирают.
   const welcome = priceFactor(placeRep(state.reputation, state.locationId))
   const quote = quoteBuy(state.world, settlement, good, amount, tradeSkill)
@@ -2950,7 +3027,7 @@ function sell(state: GameState, good: GoodId, amount: number): CommandResult {
     return fail('noGoods', `У тебя нет столько: ${GOODS[good].label.toLowerCase()}.`)
   }
 
-  const tradeSkill = skillLevel(state.character, 'trade')
+  const tradeSkill = tradeSkillAt(state)
   const quote = quoteSell(state.world, settlement, good, amount, tradeSkill)
 
   const draft = open(state)
@@ -2974,6 +3051,7 @@ function work(state: GameState, jobId: string, content: Content): CommandResult 
   if (!job) return fail('unknownAction', 'Такой работы здесь нет.')
   const blocked =
     checkWelcome(state) ??
+    checkFeast(state, 'не работают') ??
     checkPlace(state, job.where, 'Здесь такой работы нет.') ??
     checkWindow(state.time, job.window, 'На эту работу нанимают') ??
     checkRequirements(state.character, job.requires) ??
@@ -2997,6 +3075,7 @@ function study(state: GameState, courseId: string, content: Content): CommandRes
   if (!course) return fail('unknownAction', 'Такого наставника здесь нет.')
   const blocked =
     checkWelcome(state) ??
+    checkFeast(state, 'не учат') ??
     checkPlace(state, course.where, 'Такому здесь учить некому.') ??
     checkWindow(state.time, course.window, 'Занятия идут') ??
     checkRequirements(state.character, course.requires) ??

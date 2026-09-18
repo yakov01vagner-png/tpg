@@ -2,15 +2,18 @@ import {
   type AttributeId,
   CARAVAN_COST,
   type Command,
+  GOODS,
   type GameState,
   SKILLS,
   type SkillId,
   WORKSHOP_COST,
   canApply,
+  carried,
   chainDef,
   chainsOfferedAt,
   currentStep,
   describeQuest,
+  formatDate,
   formatDuration,
   formatWindowShort,
   isComplete,
@@ -22,7 +25,7 @@ import { Icon } from '../art/icons'
 import { Portrait } from '../art/portrait'
 import { dispatch } from '../game/store'
 import { palette, spacing } from '../theme'
-import { Card, Dim, Empty, Section } from '../ui/parts'
+import { Button, Card, Dim, Empty, Section } from '../ui/parts'
 
 /**
  * Заработать: всё, что здесь приносит деньги.
@@ -127,14 +130,31 @@ export function EarnSheet({ game }: { game: GameState }) {
               description={
                 done
                   ? 'Сделано. Пора за наградой.'
-                  : quest.type === 'bringFood'
+                  : quest.type === 'bringFood' || quest.type === 'fairGoods'
                     ? `Привезено ${quest.progress} из ${quest.amount}.`
                     : 'Ещё не сделано.'
               }
-              meta={`${quest.reward} · до ${quest.deadlineDay} дня`}
+              meta={`${quest.reward} · до ${formatDate(quest.deadlineDay)}`}
               reason={reasonFor({ type: 'finishQuest', questId: quest.id })}
               onPress={() => dispatch({ type: 'finishQuest', questId: quest.id })}
               tone={done ? 'good' : 'gold'}
+            />
+          )
+        })}
+        {taken.map((quest) => {
+          const good = quest.type === 'fairGoods' ? quest.good : undefined
+          if (!good || isComplete(game, quest) || quest.issuerLocationId !== game.locationId) {
+            return null
+          }
+          const amount = Math.min(quest.amount - quest.progress, carried(game.character, good))
+          const command = { type: 'deliverGoods' as const, good, amount: Math.max(1, amount) }
+          return (
+            <Button
+              key={`hand:${quest.id}`}
+              label={`Сдать к ярмарке: ${GOODS[good].label.toLowerCase()} (${amount})`}
+              tone="quiet"
+              disabled={amount <= 0 || !canApply(game, command).ok}
+              onPress={() => dispatch(command)}
             />
           )
         })}

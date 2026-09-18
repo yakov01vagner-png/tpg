@@ -1,3 +1,6 @@
+import type { GoodId } from './content/goods'
+import { GOODS } from './content/goods'
+import { daysToFair, fairOf } from './fair'
 import { foodSecurity } from './life'
 import type { GameState } from './state'
 import { lanesFrom } from './world/lanes'
@@ -11,7 +14,7 @@ import { regionOf } from './world/queries'
  * шалят, просят разобраться с шайкой. Поэтому у них нет отдельной жизни —
  * они просто читаются из мира, пока не взяты.
  */
-export type QuestType = 'clearBandits' | 'bringFood' | 'freight'
+export type QuestType = 'clearBandits' | 'bringFood' | 'freight' | 'fairGoods'
 
 export interface Quest {
   readonly id: string
@@ -27,6 +30,8 @@ export interface Quest {
   readonly deadlineDay: number
   /** Сколько уже сделано. */
   readonly progress: number
+  /** Какой товар везти — у поручений «к ярмарке» (этап 39). */
+  readonly good?: GoodId
 }
 
 /** Разбой ниже этого считается выведенным. */
@@ -121,8 +126,36 @@ export function offersAt(
     })
   }
 
+  // К ярмарке (этап 39): за месяц-полтора до торга место просит привезти то,
+  // чего ему к ярмарке не хватит. Срок здесь — условие: после ярмарки товар
+  // никому не нужен, и опоздавший остаётся с ним.
+  const fair = fairOf(state.world, locationId)
+  const untilFair = daysToFair(state.world, locationId, day)
+  const host = state.settlements[locationId]
+  if (fair && host && untilFair !== null && untilFair >= 7 && untilFair <= 50) {
+    for (const good of FAIR_GOODS) {
+      const id = `fair:${locationId}:${good}`
+      if (taken.has(id)) continue
+      const amount = Math.min(40, Math.max(8, Math.round(host.population * 0.01)))
+      offers.push({
+        id,
+        type: 'fairGoods',
+        issuerLocationId: locationId,
+        targetLocationId: locationId,
+        amount,
+        reward: Math.round(amount * GOODS[good].basePrice * 2.2 + 40),
+        deadlineDay: day + untilFair + fair.days - 1,
+        progress: 0,
+        good,
+      })
+    }
+  }
+
   return offers
 }
+
+/** Что просят к ярмарке: не хлеб, а то, ради чего на неё едут. */
+const FAIR_GOODS: readonly GoodId[] = ['wine', 'cloth', 'spices']
 
 /** Сколько фрахтов предлагают в одной гавани разом. */
 const FREIGHT_OFFERS = 2
@@ -145,5 +178,9 @@ export function describeQuest(state: GameState, quest: Quest): string {
   const target = state.world.locations[quest.targetLocationId]?.name ?? 'где-то рядом'
   if (quest.type === 'clearBandits') return `Извести шайку у ${target}`
   if (quest.type === 'freight') return `Довезти чужой груз в ${target}: ${quest.amount} мер`
+  if (quest.type === 'fairGoods') {
+    const good = quest.good ? GOODS[quest.good].label.toLowerCase() : 'товар'
+    return `К ярмарке в ${target}: ${good}, ${quest.amount} мер`
+  }
   return `Привезти хлеб в ${target}: ${quest.amount} мер`
 }

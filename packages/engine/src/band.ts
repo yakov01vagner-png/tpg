@@ -6,6 +6,7 @@ import { takeLand } from './holding'
 import { ARMY_PACE, legHoursFor } from './journey'
 import type { Party } from './party'
 import { type Rng, nextFloat, nextInt, rollChance } from './rng'
+import type { Season } from './time'
 import { seasonOf } from './time'
 import type { Lord, Politics } from './war'
 import { atWar, isRebel } from './war'
@@ -113,6 +114,21 @@ const MUSTER_CHANCE = 0.6
  * передышки. Раз в месяц — это уже война, а не погода.
  */
 const CAMPAIGN_CHANCE = 0.03
+
+/**
+ * Сезон войны (этап 39).
+ *
+ * В поход выступают по сроку, а не когда выпало: весной, как только сошла вода
+ * и подрос конь, — чаще всего; летом идут; осенью уже редко — впереди
+ * распутица и жатва, которую войску надо успеть отнять или защитить. Зима стоит
+ * (этап 38), и здесь она ноль только для порядка.
+ */
+const CAMPAIGN_SEASON: Record<Season, number> = {
+  spring: 1.8,
+  summer: 1.1,
+  autumn: 0.5,
+  winter: 0,
+}
 
 export function bandSize(band: Band): number {
   return unitsSize(band.units)
@@ -922,7 +938,10 @@ export function tickBands(
     // немедленно выбирал новую — и осада снималась в тот же день, не начавшись.
     // И не каждый день: войско сидит дома между походами, а не выступает с утра
     // по любому поводу. Заодно это главный расход такта — поиск пути к целям.
-    const [stirs, afterStir] = rollChance(generator, CAMPAIGN_CHANCE)
+    const [stirs, afterStir] = rollChance(
+      generator,
+      CAMPAIGN_CHANCE * (day === null ? 1 : CAMPAIGN_SEASON[seasonOf(day)]),
+    )
     generator = afterStir
     if (goal.type === 'muster' && stirs) {
       const [chosen, afterChoice] = chooseGoal(
