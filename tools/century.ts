@@ -119,12 +119,19 @@ function run(seed: number, years: number): Run {
 
   const byKingdom = new Map<string, { start: number; end: number }>()
   const byArchetype = new Map<string, { start: number; end: number; places: number }>()
+  /** Кем место было на старте: по этому виду его и считают весь век. */
+  const bornAs = new Map<string, string>()
   for (const [id, settlement] of Object.entries(settlements)) {
     const kingdom = kingdomOf(world, id)?.id ?? '—'
     const kingdomRow = byKingdom.get(kingdom) ?? { start: 0, end: 0 }
     kingdomRow.start += settlement.population
     byKingdom.set(kingdom, kingdomRow)
     const archetype = world.locations[id]?.archetype ?? '—'
+    // Вид места запоминается на старте: за век деревня становится городком, а
+    // рудник — городом, и считать по нынешнему виду значит мерить не места, а
+    // корзины. Так рудники «теряли» две трети населения ровно в тот век, когда
+    // они росли: выросшие уходили в чужую строку.
+    bornAs.set(id, archetype)
     const archetypeRow = byArchetype.get(archetype) ?? { start: 0, end: 0, places: 0 }
     archetypeRow.start += settlement.population
     archetypeRow.places += 1
@@ -309,7 +316,7 @@ function run(seed: number, years: number): Run {
     const kingdom = kingdomOf(world, id)?.id ?? '—'
     const kingdomRow = byKingdom.get(kingdom)
     if (kingdomRow) kingdomRow.end += settlement.population
-    const archetype = world.locations[id]?.archetype ?? '—'
+    const archetype = bornAs.get(id) ?? world.locations[id]?.archetype ?? '—'
     const archetypeRow = byArchetype.get(archetype)
     if (archetypeRow) archetypeRow.end += settlement.population
   }
@@ -510,11 +517,11 @@ for (const [id, row] of first.byKingdom) {
   )
 }
 
-console.log('\nПо видам мест:')
+console.log('\nПо видам мест (по тому, чем место было на старте):')
 for (const [archetype, row] of [...first.byArchetype].sort((a, b) => b[1].end - a[1].end)) {
   const change = row.start > 0 ? ((row.end / row.start - 1) * 100).toFixed(0) : '—'
   console.log(
-    `  ${archetype.padEnd(12)} ${String(row.places).padStart(2)} мест  ${String(row.start).padStart(7)} → ${String(row.end).padStart(7)}  (${change}%)`,
+    `  ${archetype.padEnd(12)} ${String(row.places).padStart(2)} мест  ${String(row.start).padStart(7)} → ${row.end.toFixed(0).padStart(7)}  (${change}%)`,
   )
 }
 

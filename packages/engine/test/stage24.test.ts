@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { musterBands, tickBands } from '../src/band'
 import type { Band } from '../src/band'
+import { createCharacter } from '../src/character'
+import { applyCommand } from '../src/commands'
 import { createSettlements } from '../src/economy'
 import type { Settlement } from '../src/economy'
 import { LIFE, carryingCapacity, foodStock, rollHarvest, tickDays } from '../src/life'
 import { createRng } from '../src/rng'
 import { tickSettling } from '../src/settle'
+import { createGame } from '../src/state'
 import { createPolitics, tickPolitics } from '../src/war'
 import { generateWorld } from '../src/world/generate'
 import { roadsFrom } from '../src/world/queries'
@@ -224,5 +227,23 @@ describe('век воспроизводится', () => {
     const second = lived(10)
     expect(second.settlements).toEqual(first.settlements)
     expect(second.famines).toBe(first.famines)
+  })
+})
+
+describe('год виден игроку', () => {
+  it('прожитый год кладёт урожай в мир, а не остаётся числом в тесте', () => {
+    const world = generateWorld(1)
+    let game = createGame(createCharacter({ name: 'Вит' }), 1, world)
+    // Год игрового времени — и земля получает свой урожай.
+    for (let day = 0; day < 370; day += 1) {
+      const result = applyCommand(game, { type: 'tick', minutes: 24 * 60 })
+      if (!result.ok) throw new Error(result.message)
+      game = result.state
+    }
+    const harvests = new Set(Object.values(game.settlements).map((one) => one.harvest))
+    console.log(`через год в мире ${harvests.size} разных урожаев`)
+    // Год катится на каждую провинцию отдельно, поэтому чисел много и они не
+    // равны единице, с которой мир заводился.
+    expect(harvests.size).toBeGreaterThan(3)
   })
 })
