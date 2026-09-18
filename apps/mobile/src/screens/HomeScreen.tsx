@@ -23,6 +23,7 @@ import {
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useWindowDimensions } from 'react-native'
 import { Icon } from '../art/icons'
+import { COMPANION_FACES, Portrait } from '../art/portrait'
 import { Scene } from '../art/scene'
 import { openSheet } from '../game/nav'
 import { dispatch } from '../game/store'
@@ -56,6 +57,35 @@ export function HomeScreen({ game }: { game: GameState }) {
   const mine = settlement ? isOwnedByPlayer(settlement) : false
   const besieging = game.siege?.locationId === game.locationId
   const recent = [...game.log].reverse().slice(0, 3)
+  const holder = settlement?.owner ? lordById(game.politics, settlement.owner) : null
+  const following = game.companions.filter((one) => !one.captive && one.role.type === 'party')
+  const stewards = game.companions.filter(
+    (one) => one.role.type === 'steward' && one.role.locationId === game.locationId,
+  )
+  const happening: { text: string; tone: 'danger' | 'warn' | 'info' }[] = []
+  if (hosts.length > 0) {
+    happening.push({
+      text: `У ворот войско: ${hosts
+        .map((band) => {
+          const lord = lordById(game.politics, band.lordId)
+          return lord ? `${lord.title} ${lord.name}` : 'рать короны'
+        })
+        .join(', ')}`,
+      tone: 'danger',
+    })
+  }
+  if (besieging)
+    happening.push({ text: `Ты держишь осаду: ${game.siege?.days ?? 0} сут.`, tone: 'warn' })
+  if (sick)
+    happening.push({
+      text: settlement?.quarantined ? 'Мор — ворота закрыты' : 'Здесь мор',
+      tone: 'danger',
+    })
+  if (settlement && settlement.population <= 0)
+    happening.push({ text: 'Руины: людей нет, дороги заросли', tone: 'warn' })
+  if (settlement?.building) {
+    happening.push({ text: `Стройка: осталось ${settlement.building.daysLeft} сут.`, tone: 'info' })
+  }
 
   const ownTitle = mine ? 'Твоя земля' : besieging ? 'Осада' : game.service ? 'Служба' : 'Своё'
   const ownSubtitle = mine
@@ -91,6 +121,43 @@ export function HomeScreen({ game }: { game: GameState }) {
         <StateLine game={game} />
       </View>
 
+      {happening.length > 0 ? (
+        <Section title="Что происходит">
+          {happening.map((item) => (
+            <Body key={item.text} tone={item.tone}>
+              {item.text}
+            </Body>
+          ))}
+        </Section>
+      ) : null}
+
+      {holder || following.length > 0 || stewards.length > 0 ? (
+        <Section title="Кто здесь">
+          <View style={styles.faces}>
+            {holder ? (
+              <View style={styles.faceCell}>
+                <Portrait seed={holder.id} size={44} age={46} kingdomId={holder.kingdomId} />
+                <Text numberOfLines={1} style={styles.faceName}>
+                  {holder.name}
+                </Text>
+                <Text style={styles.faceRole}>{holder.title}</Text>
+              </View>
+            ) : null}
+            {[...following, ...stewards].map((one) => (
+              <View key={one.id} style={styles.faceCell}>
+                <Portrait seed={one.id} size={44} overrides={COMPANION_FACES[one.id]} />
+                <Text numberOfLines={1} style={styles.faceName}>
+                  {one.name.split(' ')[0]}
+                </Text>
+                <Text style={styles.faceRole}>
+                  {one.role.type === 'steward' ? 'управляет' : 'с тобой'}
+                </Text>
+              </View>
+            ))}
+          </View>
+        </Section>
+      ) : null}
+
       <Section title="Дороги отсюда" aside={roads.length === 0 ? 'нет' : undefined}>
         <Chips>
           {roads.map((road) => {
@@ -99,11 +166,12 @@ export function HomeScreen({ game }: { game: GameState }) {
             const command: Command = { type: 'travel', toLocationId: road.to }
             const danger = (game.settlements[road.to]?.banditry ?? 0) > 0.4
             const plagueThere = plagueAt(game.plagues, road.to) !== null
+            const dead = (game.settlements[road.to]?.population ?? 1) <= 0
             return (
               <Road
                 key={road.to}
                 name={target.name}
-                meta={`${formatDuration(hours(road.hours))}${danger ? ' · разбой' : ''}${plagueThere ? ' · мор' : ''}`}
+                meta={`${formatDuration(hours(dead ? road.hours * 2 : road.hours))}${danger ? ' · разбой' : ''}${plagueThere ? ' · мор' : ''}${dead ? ' · заросла' : ''}`}
                 warn={danger || plagueThere}
                 blocked={!canApply(game, command).ok}
                 onPress={() => dispatch(command)}
@@ -322,5 +390,9 @@ const styles = StyleSheet.create({
   roadMeta: { color: palette.gold, fontSize: font.tiny, lineHeight: lineHeight.tiny },
   roadMetaWarn: { color: palette.danger },
   more: { minHeight: touch.min, justifyContent: 'center' },
+  faces: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+  faceCell: { alignItems: 'center', width: 64 },
+  faceName: { color: palette.text, fontSize: font.tiny, marginTop: spacing.xxs },
+  faceRole: { color: palette.faint, fontSize: 9 },
   moreLabel: { color: palette.gold, fontSize: font.small },
 })

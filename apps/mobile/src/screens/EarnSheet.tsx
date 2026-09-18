@@ -1,7 +1,9 @@
 import {
+  type AttributeId,
   CARAVAN_COST,
   type Command,
   type GameState,
+  SKILLS,
   type SkillId,
   WORKSHOP_COST,
   canApply,
@@ -35,23 +37,29 @@ export function EarnSheet({ game }: { game: GameState }) {
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <Section title="Работа">
-        {jobs.length === 0 ? <Empty text="Здесь работы для чужака нет." /> : null}
-        {jobs.map((job) => {
-          const command: Command = { type: 'work', jobId: job.id }
-          return (
-            <Card
-              key={job.id}
-              glyph={<Icon name={mainSkill(job.practice)} size={20} color={palette.dim} />}
-              title={job.label}
-              description={job.description}
-              meta={`${formatDuration(job.durationMinutes)} · +${job.pay}${job.window ? ` · ${formatWindowShort(job.window)}` : ''}`}
-              reason={reasonFor(command)}
-              onPress={() => dispatch(command)}
-            />
-          )
-        })}
-      </Section>
+      {jobs.length === 0 ? (
+        <Section title="Работа">
+          <Empty text="Здесь работы для чужака нет." />
+        </Section>
+      ) : null}
+      {groupJobs(jobs).map(([attribute, group]) => (
+        <Section key={attribute} title={`Работа ${GROUP_TITLES[attribute]}`}>
+          {group.map((job) => {
+            const command: Command = { type: 'work', jobId: job.id }
+            return (
+              <Card
+                key={job.id}
+                glyph={<Icon name={mainSkill(job.practice)} size={20} color={palette.dim} />}
+                title={job.label}
+                description={job.description}
+                meta={`${formatDuration(job.durationMinutes)} · +${job.pay}${job.window ? ` · ${formatWindowShort(job.window)}` : ''}`}
+                reason={reasonFor(command)}
+                onPress={() => dispatch(command)}
+              />
+            )
+          })}
+        </Section>
+      ))}
 
       <Section title="Поручения">
         {taken.length === 0 && offers.length === 0 ? (
@@ -106,6 +114,32 @@ export function EarnSheet({ game }: { game: GameState }) {
       </Section>
     </ScrollView>
   )
+}
+
+/**
+ * Работы сгруппированы по тому, что они дают: по атрибуту главного навыка.
+ * Тринадцать карточек превращаются в три-четыре вопроса — «чем заработать?».
+ */
+const GROUP_TITLES: Record<AttributeId, string> = {
+  strength: 'силой',
+  agility: 'ловкостью',
+  endurance: 'выносливостью',
+  mind: 'умом',
+  will: 'волей',
+  charisma: 'словом',
+}
+
+type Job = ReturnType<typeof jobsAt>[number]
+
+function groupJobs(jobs: readonly Job[]): [AttributeId, Job[]][] {
+  const groups = new Map<AttributeId, Job[]>()
+  for (const job of jobs) {
+    const attribute = SKILLS[mainSkill(job.practice)].attribute
+    const list = groups.get(attribute)
+    if (list) list.push(job)
+    else groups.set(attribute, [job])
+  }
+  return [...groups.entries()]
 }
 
 /** Знак работы — навык, который она качает сильнее всего. */

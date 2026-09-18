@@ -113,6 +113,15 @@ export function OwnSheet({ game }: { game: GameState }) {
               },
             )}
             <Card
+              glyph={<Icon name="plague" size={20} color={palette.danger} />}
+              title={settlement.quarantined ? 'Ворота закрыты' : 'Закрыть ворота от мора'}
+              description="Мор останется внутри и унесёт меньше; торговля встанет, а люди запомнят, кто их запер."
+              meta="карантин"
+              reason={reasonFor({ type: 'quarantine' })}
+              onPress={() => dispatch({ type: 'quarantine' })}
+              tone="danger"
+            />
+            <Card
               title="Оставить людей в гарнизоне"
               description="Пятерых из отряда — держать это место."
               meta="5 чел."

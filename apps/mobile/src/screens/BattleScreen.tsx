@@ -5,15 +5,18 @@ import {
   type GroupId,
   ORDER_LABELS,
   type OrderId,
+  TERRAIN_LABELS,
   TROOPS,
   type TroopId,
+  type Units,
   unitsSize,
 } from '@tpg/engine'
 import { useState } from 'react'
-import { ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Icon } from '../art/icons'
 import { dispatch } from '../game/store'
-import { font, lineHeight, palette, spacing } from '../theme'
-import { Button, Dim, Faint, Heading, Panel, Row, Stat, Stats, Title } from '../ui/parts'
+import { font, lineHeight, palette, radii, spacing } from '../theme'
+import { Button, Dim, Faint, Heading, Panel, Stat, Stats } from '../ui/parts'
 import { moraleWord } from './PeopleScreen'
 
 /** Приказы, которые имеет смысл давать конкретной группе. */
@@ -34,11 +37,12 @@ const DEFAULT_ORDERS: Record<GroupId, OrderId> = {
 }
 
 /**
- * Бой: приказы группам, а не отдельным людям (DESIGN.md, п.5).
+ * Бой: поле, а не список.
  *
- * Раунд — это выбор: видно, кто чем занят, что делает враг и во что обошёлся
- * прошлый раунд. Строй и рассказ раундами — этап 13; здесь бой ложится на общий
- * язык, чтобы к тому этапу было куда класть.
+ * Сверху — враг строем: сколько и кого. Между — местность и стены. Ниже —
+ * твой строй группами: знак воинов, число, приказ; нажатие меняет приказ.
+ * Под строем — рассказ о прошлом раунде словами. Приказы группам, а не
+ * отдельным людям (DESIGN.md, п.5).
  */
 export function BattleScreen({ game }: { game: GameState }) {
   const battle = game.battle
@@ -47,7 +51,7 @@ export function BattleScreen({ game }: { game: GameState }) {
 
   const finished = battle.outcome !== 'ongoing'
   const enemySize = unitsSize(battle.enemy.units)
-  const log = [...battle.log].reverse().slice(0, 10)
+  const log = [...battle.log].reverse().slice(0, 6)
 
   const cycle = (group: GroupId) => {
     const allowed = ORDERS_FOR[group]
@@ -58,48 +62,70 @@ export function BattleScreen({ game }: { game: GameState }) {
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <Panel tone="danger">
-        <Title>{battle.enemy.name}</Title>
-        <Stats>
-          <Stat label="Против тебя" value={`${enemySize}`} />
-          <Stat label="Они" value={moraleWord(battle.enemy.morale)} />
-          <Stat label="Раунд" value={`${battle.round}`} />
-          <Stat label="Твои" value={moraleWord(battle.morale)} />
-        </Stats>
+      {/* Враг */}
+      <View style={styles.enemy}>
+        <View style={styles.side}>
+          <Text style={styles.sideName}>{battle.enemy.name}</Text>
+          <Text style={styles.sideMeta}>{`${enemySize} · ${moraleWord(battle.enemy.morale)}`}</Text>
+        </View>
+        <UnitsRow units={battle.enemy.units} color={palette.danger} />
+      </View>
+
+      {/* Поле */}
+      <View style={styles.field}>
+        <Icon name={battle.terrain} size={18} color={palette.faint} />
+        <Text style={styles.fieldText}>
+          {`${TERRAIN_LABELS[battle.terrain]}${battle.wallBonus > 1 ? ` · стены ×${battle.wallBonus.toFixed(1)}` : ''} · раунд ${battle.round}`}
+        </Text>
         {battle.strain > 0 ? (
-          <Dim tone={battle.strain > 70 ? 'danger' : undefined}>
-            {`Истощение круга: ${battle.strain}${battle.strain > 70 ? ' — колдовать опасно' : ''}`}
-          </Dim>
+          <Text style={[styles.fieldText, battle.strain > 70 && { color: palette.danger }]}>
+            {`истощение ${battle.strain}`}
+          </Text>
         ) : null}
-      </Panel>
+      </View>
+
+      {/* Свой строй */}
+      <View style={styles.mine}>
+        <View style={styles.side}>
+          <Text style={styles.sideName}>Твои</Text>
+          <Text style={styles.sideMeta}>{moraleWord(battle.morale)}</Text>
+        </View>
+        {finished
+          ? null
+          : GROUP_IDS.map((group: GroupId) => {
+              const units = battle.groups[group]
+              const size = unitsSize(units)
+              if (size === 0) return null
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  key={group}
+                  onPress={() => cycle(group)}
+                  style={({ pressed }) => [styles.group, pressed && styles.pressed]}
+                >
+                  <View style={styles.groupHead}>
+                    <Text style={styles.groupName}>{GROUP_LABELS[group]}</Text>
+                    <Text style={styles.groupSize}>{size}</Text>
+                  </View>
+                  <UnitsRow units={units} color={palette.text} />
+                  <View style={styles.order}>
+                    <Text style={styles.orderLabel}>{ORDER_LABELS[orders[group]]}</Text>
+                    <Text style={styles.orderHint}>нажми — сменить</Text>
+                  </View>
+                </Pressable>
+              )
+            })}
+      </View>
 
       {finished ? null : (
-        <>
-          {GROUP_IDS.map((group: GroupId) => {
-            const units = battle.groups[group]
-            const size = unitsSize(units)
-            if (size === 0) return null
-            return (
-              <Row
-                key={group}
-                title={`${GROUP_LABELS[group]} · ${size}`}
-                subtitle={describeUnits(units)}
-                right={<Text style={styles.order}>{ORDER_LABELS[orders[group]]}</Text>}
-                onPress={() => cycle(group)}
-              />
-            )
-          })}
-          <Faint>Нажми на группу, чтобы сменить приказ.</Faint>
-
-          <View style={styles.actions}>
-            <Button
-              label="Отдать приказы"
-              tone="primary"
-              onPress={() => dispatch({ type: 'battleOrders', orders })}
-            />
-            <Button label="Отойти" tone="quiet" onPress={() => dispatch({ type: 'battleFlee' })} />
-          </View>
-        </>
+        <View style={styles.actions}>
+          <Button
+            label="Отдать приказы"
+            tone="primary"
+            onPress={() => dispatch({ type: 'battleOrders', orders })}
+          />
+          <Button label="Отойти" tone="quiet" onPress={() => dispatch({ type: 'battleFlee' })} />
+        </View>
       )}
 
       {finished ? (
@@ -107,11 +133,12 @@ export function BattleScreen({ game }: { game: GameState }) {
           <Heading>{outcomeWord(battle.outcome)}</Heading>
           {battle.outcome === 'won' ? (
             <>
-              <Dim>
-                {`Добыча: ${battle.spoils.money} монет${
-                  battle.spoils.prisoners > 0 ? ` · пленных ${battle.spoils.prisoners}` : ''
-                }`}
-              </Dim>
+              <Stats>
+                <Stat label="Добыча" value={`${battle.spoils.money}`} tone="gold" />
+                {battle.spoils.prisoners > 0 ? (
+                  <Stat label="Пленных" value={`${battle.spoils.prisoners}`} />
+                ) : null}
+              </Stats>
               {battle.spoils.prisoners > 0 ? (
                 <View style={styles.actions}>
                   <Button
@@ -140,6 +167,11 @@ export function BattleScreen({ game }: { game: GameState }) {
             </>
           ) : (
             <View style={styles.actions}>
+              <Dim>
+                {battle.outcome === 'lost'
+                  ? 'Поле осталось за ними. Что стало с тобой — узнаешь, когда откроешь глаза.'
+                  : 'Отступили. Не победа, но и не конец.'}
+              </Dim>
               <Button
                 label="Дальше"
                 tone="primary"
@@ -150,9 +182,11 @@ export function BattleScreen({ game }: { game: GameState }) {
         </Panel>
       ) : null}
 
-      <View style={styles.log}>
+      {/* Рассказ */}
+      <View style={styles.tale}>
+        <Faint>ХОД БОЯ</Faint>
         {log.map((line: string, index: number) => (
-          <Text key={`${index}-${line}`} style={styles.logLine}>
+          <Text key={`${index}-${line}`} style={[styles.taleLine, index === 0 && styles.taleFresh]}>
             {line}
           </Text>
         ))}
@@ -161,10 +195,20 @@ export function BattleScreen({ game }: { game: GameState }) {
   )
 }
 
-function describeUnits(units: Readonly<Partial<Record<TroopId, number>>>): string {
-  return Object.entries(units)
-    .map(([troop, count]) => `${TROOPS[troop as TroopId].label.toLowerCase()} ${count}`)
-    .join(', ')
+/** Строй знаками: по одному знаку на вид воинов и число рядом. */
+function UnitsRow({ units, color }: { units: Units; color: string }) {
+  const entries = Object.entries(units).filter(([, count]) => (count ?? 0) > 0)
+  return (
+    <View style={styles.units}>
+      {entries.map(([troop, count]) => (
+        <View key={troop} style={styles.unit}>
+          <Icon name={troop as TroopId} size={22} color={color} />
+          <Text style={[styles.unitCount, { color }]}>{count}</Text>
+          <Text style={styles.unitName}>{TROOPS[troop as TroopId].label.toLowerCase()}</Text>
+        </View>
+      ))}
+    </View>
+  )
 }
 
 function outcomeWord(outcome: string): string {
@@ -175,18 +219,58 @@ function outcomeWord(outcome: string): string {
 
 const styles = StyleSheet.create({
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
-  order: { color: palette.gold, fontSize: font.small, textAlign: 'right' },
+  enemy: {
+    backgroundColor: palette.surface,
+    borderColor: palette.danger,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    padding: spacing.md,
+  },
+  mine: {
+    backgroundColor: palette.surface,
+    borderColor: palette.gold,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    gap: spacing.sm,
+    padding: spacing.md,
+  },
+  side: { alignItems: 'baseline', flexDirection: 'row', justifyContent: 'space-between' },
+  sideName: { color: palette.text, fontSize: font.heading, lineHeight: lineHeight.heading },
+  sideMeta: { color: palette.dim, fontSize: font.small },
+  field: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    justifyContent: 'center',
+    paddingVertical: spacing.md,
+  },
+  fieldText: { color: palette.faint, fontSize: font.tiny },
+  units: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginTop: spacing.sm },
+  unit: { alignItems: 'center', minWidth: 48 },
+  unitCount: { fontSize: font.body, fontWeight: '600' },
+  unitName: { color: palette.faint, fontSize: 9 },
+  group: {
+    backgroundColor: palette.surfaceAlt,
+    borderColor: palette.line,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    padding: spacing.sm,
+  },
+  pressed: { opacity: 0.7 },
+  groupHead: { flexDirection: 'row', justifyContent: 'space-between' },
+  groupName: { color: palette.text, fontSize: font.body },
+  groupSize: { color: palette.dim, fontSize: font.body },
+  order: { alignItems: 'baseline', flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
+  orderLabel: { color: palette.gold, fontSize: font.small },
+  orderHint: { color: palette.faint, fontSize: 9 },
   actions: { gap: spacing.sm, marginTop: spacing.md },
-  log: {
+  tale: {
     borderTopColor: palette.line,
     borderTopWidth: 1,
     marginTop: spacing.lg,
     paddingTop: spacing.md,
+    gap: spacing.xs,
   },
-  logLine: {
-    color: palette.dim,
-    fontSize: font.small,
-    lineHeight: lineHeight.small,
-    marginBottom: spacing.xs,
-  },
+  taleLine: { color: palette.dim, fontSize: font.small, lineHeight: lineHeight.small },
+  taleFresh: { color: palette.text },
 })

@@ -1,7 +1,7 @@
 import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
 import type { Band, BandEvent } from './band'
-import { bandSize, nextHop, tickBands } from './band'
+import { bandSize, nextHop, roadHours, tickBands } from './band'
 import type { Battle, BattleSide, GroupId, OrderId } from './battle'
 import { fleeBattle, resolveRound, startBattle, unformUp } from './battle'
 import type { Character } from './character'
@@ -16,7 +16,7 @@ import {
 } from './character'
 import type { CompanionRole } from './companion'
 import type { Companion } from './companion'
-import { companionDef, hireCompanion } from './companion'
+import { bestSkill, companionDef, hireCompanion } from './companion'
 import type { Availability, Content, Requirements } from './content'
 import { CONTENT } from './content'
 import type { BuildingId } from './content/buildings'
@@ -74,7 +74,7 @@ import {
 } from './party'
 import { isAvailableAt } from './place'
 import type { Plague, PlagueEvent } from './plague'
-import { tickPlague } from './plague'
+import { plagueAt, tickPlague } from './plague'
 import { PROGRESSION, applyCharacterXp, applySkillXp } from './progression'
 import { describeQuest, isComplete, offersAt } from './quest'
 import type { Quest } from './quest'
@@ -137,6 +137,8 @@ export type Command =
   | { readonly type: 'foundCaravan'; readonly awayId: string }
   | { readonly type: 'foundWorkshop' }
   | { readonly type: 'closeEnterprise'; readonly enterpriseId: string }
+  /** Закрыть ворота своего места от мора. */
+  | { readonly type: 'quarantine' }
   /** Посвататься к дому лорда: брак — это договор, а не украшение. */
   | { readonly type: 'proposeMarriage'; readonly lordId: string }
   | { readonly type: 'build'; readonly building: BuildingId }
@@ -246,6 +248,8 @@ export function applyCommand(
       return closeEnterprise(state, command.enterpriseId)
     case 'proposeMarriage':
       return proposeMarriage(state, command.lordId)
+    case 'quarantine':
+      return quarantine(state)
     case 'build':
       return build(state, command.building)
     case 'station':
@@ -340,7 +344,9 @@ function travel(state: GameState, toLocationId: string): CommandResult {
   )
   if (!road) return fail('unknownAction', `Отсюда нет прямой дороги в ${destination.name}.`)
 
-  const cost = travelFatigue(road.hours)
+  // К мёртвому месту дорога заросла: идти вдвое дольше (band.ts, OVERGROWN).
+  const roadHoursNow = roadHours(state.world, state.settlements, state.locationId, road.to)
+  const cost = travelFatigue(roadHoursNow)
   const blocked = checkFatigue(state.character, cost)
   if (blocked) return blocked
 
@@ -348,12 +354,14 @@ function travel(state: GameState, toLocationId: string): CommandResult {
   const draft = open(state)
   notice(
     draft,
-    `Дорога${from ? ` из ${from.name}` : ''} в ${destination.name}: ${formatDuration(hours(road.hours))} пути.`,
+    `Дорога${from ? ` из ${from.name}` : ''} в ${destination.name}: ${formatDuration(hours(roadHoursNow))} пути${
+      roadHoursNow > road.hours ? ' — заросла, идти дольше' : ''
+    }.`,
   )
-  advance(draft, hours(road.hours))
+  advance(draft, hours(roadHoursNow))
   addFatigue(draft, cost)
-  practice(draft, 'athletics', road.hours * 2.5)
-  practice(draft, 'survival', road.hours * 1.5)
+  practice(draft, 'athletics', roadHoursNow * 2.5)
+  practice(draft, 'survival', roadHoursNow * 1.5)
   draft.locationId = toLocationId
   ambush(draft, toLocationId)
   return close(draft)
@@ -1421,6 +1429,32 @@ function spouseName(rng: Rng): [string, Rng] {
   return [SPOUSE_NAMES[index] ?? 'Мирава', next]
 }
 
+/**
+ * Закрыть ворота.
+ *
+ * Единственное, что против мора может сделать владетель, кроме как привести
+ * лекаря: закрыть место. Мор внутри не выходит наружу и уносит меньше, но
+ * торговля стоит, а люди помнят, кто их запер. Только на своей земле и только
+ * пока мор идёт — открываются ворота сами, когда он отступит.
+ */
+function quarantine(state: GameState): CommandResult {
+  const settlement = state.settlements[state.locationId]
+  if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
+  if (settlement.owner !== PLAYER) return fail('invalid', 'Запирать ворота может только хозяин.')
+  if (!plagueAt(state.plagues, state.locationId))
+    return fail('invalid', 'Мора здесь нет — запирать не от чего.')
+  if (settlement.quarantined) return fail('invalid', 'Ворота уже закрыты.')
+  const draft = open(state)
+  draft.settlements = {
+    ...draft.settlements,
+    [state.locationId]: { ...settlement, quarantined: true },
+  }
+  draft.reputation = withPlaceRep(draft.reputation, state.locationId, -6)
+  notice(draft, 'Ворота закрыты. Мор останется внутри — и люди это запомнят.', 'plague')
+  advance(draft, hours(2))
+  return close(draft)
+}
+
 function buy(state: GameState, good: GoodId, amount: number): CommandResult {
   const problem = checkTradeRequest(good, amount)
   if (problem) return problem
@@ -1816,7 +1850,9 @@ function close(draft: Draft): CommandResult {
 
     // Мор идёт своими сутками: он не ждёт, пока игрок что-то сделает.
     for (let i = 0; i < daysPassed; i += 1) {
-      const sick = tickPlague(draft.base.world, draft.settlements, draft.plagues, draft.rng)
+      // Лекарь-спутник рядом — мор уносит на треть меньше там, где ты стоишь.
+      const healer = bestSkill(draft.companions, 'healing').level >= 4 ? draft.locationId : null
+      const sick = tickPlague(draft.base.world, draft.settlements, draft.plagues, draft.rng, healer)
       draft.plagues = sick.plagues
       draft.settlements = sick.settlements
       draft.rng = sick.rng

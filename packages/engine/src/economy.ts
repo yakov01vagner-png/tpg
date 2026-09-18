@@ -47,6 +47,12 @@ export interface Settlement {
    * линией между 214 и 248 тысячами.
    */
   readonly strain: number
+  /**
+   * Ворота закрыты: мор внутри не выходит наружу, торговля стоит. Снимается
+   * сам, когда мор отступил. Единственное, что игрок может противопоставить
+   * мору кроме лекаря, — и то лишь на своей земле.
+   */
+  readonly quarantined: boolean
 }
 
 /** Какая доля населения вообще способна взять оружие и уйти с чужаком. */
@@ -117,6 +123,7 @@ export function createSettlement(world: World, locationId: string): Settlement {
     building: null,
     garrison: {},
     strain: 0,
+    quarantined: false,
   }
 }
 

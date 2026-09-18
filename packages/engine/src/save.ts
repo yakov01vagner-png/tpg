@@ -62,6 +62,15 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
       quests: data.quests ?? [],
     }
   },
+  /** v10 → v11: у мест появились ворота, которые можно закрыть от мора. */
+  10: (data) => {
+    const settlements = (data.settlements ?? {}) as Record<string, Record<string, unknown>>
+    const opened: Record<string, unknown> = {}
+    for (const [id, settlement] of Object.entries(settlements)) {
+      opened[id] = { ...settlement, quarantined: settlement.quarantined ?? false }
+    }
+    return { ...data, settlements: opened }
+  },
   /**
    * v9 → v10: у записей журнала появился вид. Старым записям он неизвестен —
    * пусть будут просто событиями, лента их покажет без знака.

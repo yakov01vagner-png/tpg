@@ -58,6 +58,8 @@ export function tickPlague(
   settlements: Readonly<Record<string, Settlement>>,
   plagues: readonly Plague[],
   rng: Rng,
+  /** Где стоит лекарь: там мор уносит на треть меньше. */
+  healerAt: string | null = null,
 ): PlagueResult {
   let generator = rng
   const events: PlagueEvent[] = []
@@ -73,7 +75,10 @@ export function tickPlague(
       continue
     }
     // Голодный мрёт охотнее сытого: бедствия складываются.
-    const weakness = 1 + (1 - foodSecurity(place)) * 0.8
+    let weakness = 1 + (1 - foodSecurity(place)) * 0.8
+    // Лекарь при больных и закрытые ворота — то, чем на мор отвечают.
+    if (healerAt === plague.locationId) weakness *= 0.65
+    if (place.quarantined) weakness *= 0.8
     // Доля в сутки, а не в разы: при одном проценте мор за век уносил
     // семьсот пятьдесят тысяч душ — втрое больше, чем в мире вообще живёт.
     // Теперь вспышка съедает от десятой до пятой части места, как и положено.
@@ -96,7 +101,9 @@ export function tickPlague(
       if (infected.has(road.to)) continue
       const neighbour = places[road.to]
       if (!neighbour || neighbour.population <= 0) continue
-      const [spreads, afterSpread] = rollChance(generator, SPREAD_CHANCE * plague.severity)
+      // Из-за закрытых ворот мор выходит втрое реже.
+      const gate = place.quarantined ? 0.3 : 1
+      const [spreads, afterSpread] = rollChance(generator, SPREAD_CHANCE * plague.severity * gate)
       generator = afterSpread
       if (!spreads) continue
       const [span, afterSpan] = nextInt(generator, DURATION[0], DURATION[1])
@@ -109,6 +116,11 @@ export function tickPlague(
     const daysLeft = plague.daysLeft - 1
     if (daysLeft <= 0) {
       events.push({ type: 'plagueEnded', locationId: plague.locationId })
+      // Мор ушёл — ворота открывают.
+      const healed = places[plague.locationId]
+      if (healed?.quarantined) {
+        places = { ...places, [plague.locationId]: { ...healed, quarantined: false } }
+      }
       continue
     }
     next.push({ ...plague, daysLeft })

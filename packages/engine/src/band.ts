@@ -255,6 +255,20 @@ function hoursTo(world: World, fromId: string, toId: string): number {
   return Math.round((road?.hours ?? 12) * ARMY_SLOWDOWN)
 }
 
+/** Дорога к мёртвому месту зарастает: идти туда вдвое дольше. */
+export const OVERGROWN = 2
+
+export function roadHours(
+  world: World,
+  settlements: Readonly<Record<string, Settlement>>,
+  fromId: string,
+  toId: string,
+): number {
+  const road = roadsFrom(world, fromId).find((candidate) => candidate.to === toId)
+  const base = road?.hours ?? 12
+  return (settlements[toId]?.population ?? 1) <= 0 ? base * OVERGROWN : base
+}
+
 // --- выбор цели -------------------------------------------------------------
 
 /**
