@@ -1,6 +1,7 @@
 import type { Character } from './character'
 import type { Equipment, EquippedItem, ItemDef, SlotId } from './content/equipment'
-import { HORSE_CARRY, ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
+import { HORSE_CARRY, ITEMS, ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
+import type { LocationArchetype } from './world/types'
 
 export type { Equipment, EquippedItem }
 
@@ -72,4 +73,14 @@ export function withItem(equipment: Equipment, slot: SlotId, item: EquippedItem 
 /** Починка: сколько стоит вернуть вещь в порядок. */
 export function repairCost(item: ItemDef, condition: number): number {
   return Math.max(1, Math.round((item.price * (100 - condition)) / 100 / 2))
+}
+
+/** Что продают в этом месте: по виду места и, для именных вещей, по короне. */
+export function itemsSoldAt(
+  archetype: LocationArchetype,
+  kingdomId: string | null,
+): readonly ItemDef[] {
+  return ITEMS.filter(
+    (item) => item.where.includes(archetype) && (!item.kingdomId || item.kingdomId === kingdomId),
+  )
 }

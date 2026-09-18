@@ -7,7 +7,20 @@ import type { LocationArchetype } from '../world/types'
  * занять. Каждая постройка меняет числа, а не выдаёт надпись: амбар держит
  * запас, мельница прибавляет еды, стены считаются в осаде.
  */
-export const BUILDING_IDS = ['granary', 'mill', 'walls', 'barracks', 'smithy', 'market'] as const
+export const BUILDING_IDS = [
+  'granary',
+  'mill',
+  'walls',
+  'barracks',
+  'smithy',
+  'market',
+  'well',
+  'chapel',
+  'tavern',
+  'watchtower',
+  'warehouse',
+  'bathhouse',
+] as const
 
 export type BuildingId = (typeof BUILDING_IDS)[number]
 
@@ -68,16 +81,62 @@ export const BUILDINGS: Record<BuildingId, BuildingDef> = {
     days: 20,
     where: ['village', 'town', 'city', 'capital', 'port'],
   },
+  well: {
+    id: 'well',
+    label: 'Колодец',
+    description: 'Чистая вода. Мор, придя, уносит меньше.',
+    cost: 120,
+    days: 10,
+  },
+  chapel: {
+    id: 'chapel',
+    label: 'Часовня',
+    description:
+      'Есть куда прийти в голодный год. Люди терпят дольше, прежде чем взяться за кистень.',
+    cost: 200,
+    days: 20,
+  },
+  tavern: {
+    id: 'tavern',
+    label: 'Корчма',
+    description: 'Проезжие оставляют деньги, а молодые — слушают байки и идут в отряд.',
+    cost: 180,
+    days: 15,
+    where: ['village', 'town', 'city', 'capital', 'port'],
+  },
+  watchtower: {
+    id: 'watchtower',
+    label: 'Сторожевая башня',
+    description: 'Дозор видит далеко: разбой в округе унимается быстрее, набег берёт вдвое меньше.',
+    cost: 200,
+    days: 20,
+  },
+  warehouse: {
+    id: 'warehouse',
+    label: 'Склад',
+    description: 'Товар лежит и ждёт покупателя. Запасы больше, и пополняются они быстрее.',
+    cost: 300,
+    days: 25,
+    where: ['town', 'city', 'capital', 'port'],
+  },
+  bathhouse: {
+    id: 'bathhouse',
+    label: 'Бани',
+    description: 'Чистый город болеет меньше: мор уносит втрое меньше, чем в грязном.',
+    cost: 380,
+    days: 30,
+    where: ['town', 'city', 'capital', 'port'],
+  },
 }
 
 /** Сколько всего можно построить в месте такого размера. */
 export const BUILDING_SLOTS: Record<LocationArchetype, number> = {
-  village: 2,
-  town: 3,
-  city: 4,
-  capital: 5,
-  port: 3,
-  fortress: 3,
-  mine: 2,
-  monastery: 2,
+  village: 3,
+  town: 4,
+  city: 5,
+  capital: 6,
+  port: 4,
+  fortress: 4,
+  mine: 3,
+  monastery: 3,
 }

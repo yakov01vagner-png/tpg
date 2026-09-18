@@ -4,19 +4,25 @@ import {
   GOOD_IDS,
   type GameState,
   type GoodId,
-  ITEMS,
   SLOT_IDS,
   SLOT_LABELS,
   buyPrice,
   canApply,
   carried,
   carriedWeight,
+  dayOf,
+  itemsSoldAt,
+  kingdomOf,
+  knownMarkets,
   partyCapacity,
+  priceAgo,
+  priceHistory,
   sellPrice,
   skillLevel,
 } from '@tpg/engine'
 import { useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import Svg, { Polyline } from 'react-native-svg'
 import { Icon } from '../art/icons'
 import { dispatch } from '../game/store'
 import { font, palette, radii, spacing, touch } from '../theme'
@@ -33,6 +39,7 @@ const LOTS = [1, 5, 20] as const
  */
 export function TradeScreen({ game }: { game: GameState }) {
   const [lot, setLot] = useState<number>(5)
+  const [open, setOpen] = useState<GoodId | null>(null)
   const market = game.settlements[game.locationId]
   const tradeSkill = skillLevel(game.character, 'trade')
   const weight = carriedWeight(game.character)
@@ -76,48 +83,57 @@ export function TradeScreen({ game }: { game: GameState }) {
           const canSell = canApply(game, { type: 'sell', good, amount: lot }).ok
           const word = verdict(buy, GOODS[good].basePrice)
           return (
-            <View key={good} style={styles.row}>
-              <Icon name={good} size={22} color={palette.dim} />
-              <View style={styles.info}>
-                <Text style={styles.name}>
-                  {GOODS[good].label}
-                  {mine > 0 ? <Text style={styles.mine}>{`  у тебя ${mine}`}</Text> : null}
-                </Text>
-                <Text style={styles.prices}>
-                  {`купить ${buy} · продать ${sell}`}
-                  {word ? (
-                    <Text
-                      style={word === 'дёшево' ? styles.cheap : styles.dear}
-                    >{`  ${word}`}</Text>
-                  ) : null}
-                </Text>
+            <View key={good}>
+              <View style={styles.row}>
+                <Pressable
+                  accessibilityLabel={`История: ${GOODS[good].label}`}
+                  onPress={() => setOpen(open === good ? null : good)}
+                  style={styles.info}
+                >
+                  <View style={styles.nameRow}>
+                    <Icon name={good} size={22} color={palette.dim} />
+                    <Text style={styles.name}>
+                      {GOODS[good].label}
+                      {mine > 0 ? <Text style={styles.mine}>{`  у тебя ${mine}`}</Text> : null}
+                    </Text>
+                  </View>
+                  <Text style={styles.prices}>
+                    {`купить ${buy} · продать ${sell}`}
+                    {word ? (
+                      <Text
+                        style={word === 'дёшево' ? styles.cheap : styles.dear}
+                      >{`  ${word}`}</Text>
+                    ) : null}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityLabel={`Купить ${GOODS[good].label}`}
+                  disabled={!canBuy}
+                  onPress={() => dispatch({ type: 'buy', good, amount: lot })}
+                  style={[styles.action, !canBuy && styles.actionOff]}
+                >
+                  <Text style={styles.actionLabel}>+</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityLabel={`Продать ${GOODS[good].label}`}
+                  disabled={!canSell}
+                  onPress={() => dispatch({ type: 'sell', good, amount: lot })}
+                  style={[styles.action, !canSell && styles.actionOff]}
+                >
+                  <Text style={styles.actionLabel}>−</Text>
+                </Pressable>
               </View>
-              <Pressable
-                accessibilityLabel={`Купить ${GOODS[good].label}`}
-                disabled={!canBuy}
-                onPress={() => dispatch({ type: 'buy', good, amount: lot })}
-                style={[styles.action, !canBuy && styles.actionOff]}
-              >
-                <Text style={styles.actionLabel}>+</Text>
-              </Pressable>
-              <Pressable
-                accessibilityLabel={`Продать ${GOODS[good].label}`}
-                disabled={!canSell}
-                onPress={() => dispatch({ type: 'sell', good, amount: lot })}
-                style={[styles.action, !canSell && styles.actionOff]}
-              >
-                <Text style={styles.actionLabel}>−</Text>
-              </Pressable>
+              {open === good ? <History game={game} good={good} /> : null}
             </View>
           )
         })}
       </Section>
 
       <Section title="Снаряжение">
-        {ITEMS.filter((item) => {
-          const here = game.world.locations[game.locationId]
-          return here ? item.where.includes(here.archetype) : false
-        }).map((item) => {
+        {itemsSoldAt(
+          game.world.locations[game.locationId]?.archetype ?? 'village',
+          kingdomOf(game.world, game.locationId)?.id ?? null,
+        ).map((item) => {
           const command: Command = { type: 'buyItem', itemId: item.id }
           const check = canApply(game, command)
           const worn = game.character.equipment[item.slot]?.id === item.id
@@ -154,6 +170,78 @@ export function TradeScreen({ game }: { game: GameState }) {
   )
 }
 
+/**
+ * История цены: что было здесь, пока ты здесь стоял, и где по памяти дороже.
+ * Линия — записная книжка, а не биржа: точек столько, сколько раз ты тут был.
+ */
+function History({ game, good }: { game: GameState; good: GoodId }) {
+  const today = dayOf(game.time)
+  const samples = priceHistory(game.priceLog, game.locationId, good)
+  const yearAgo = priceAgo(game.priceLog, game.locationId, good, today, 360)
+  const monthAgo = priceAgo(game.priceLog, game.locationId, good, today, 30)
+  const elsewhere = knownMarkets(game.priceLog, good)
+    .filter((entry) => entry.locationId !== game.locationId)
+    .slice(0, 2)
+  const width = 120
+  const height = 28
+  const line = sparkline(
+    samples.map((sample) => sample.price),
+    width,
+    height,
+  )
+  return (
+    <View style={styles.history}>
+      <View style={styles.historyRow}>
+        {samples.length >= 2 ? (
+          <Svg width={width} height={height}>
+            <Polyline
+              points={line}
+              fill="none"
+              stroke={palette.gold}
+              strokeWidth={1.5}
+              strokeLinejoin="round"
+            />
+          </Svg>
+        ) : (
+          <Text style={styles.historyText}>Здесь ты недавно: истории цен ещё нет.</Text>
+        )}
+        <View style={styles.historyNotes}>
+          {monthAgo !== null ? (
+            <Text style={styles.historyText}>{`месяц назад ${monthAgo}`}</Text>
+          ) : null}
+          {yearAgo !== null ? (
+            <Text style={styles.historyText}>{`год назад ${yearAgo}`}</Text>
+          ) : null}
+        </View>
+      </View>
+      {elsewhere.length > 0 ? (
+        <Text style={styles.historyText}>
+          {`Дороже, по памяти: ${elsewhere
+            .map((entry) => `${game.world.locations[entry.locationId]?.name ?? '…'} ${entry.price}`)
+            .join(' · ')}`}
+        </Text>
+      ) : (
+        <Text style={styles.historyText}>Где дороже — узнаешь, побывав в других местах.</Text>
+      )}
+    </View>
+  )
+}
+
+/** Точки ломаной по значениям: растянуть по ширине, вписать по высоте. */
+function sparkline(values: readonly number[], width: number, height: number): string {
+  if (values.length < 2) return ''
+  const low = Math.min(...values)
+  const high = Math.max(...values)
+  const span = Math.max(1, high - low)
+  return values
+    .map((value, index) => {
+      const x = (index / (values.length - 1)) * (width - 2) + 1
+      const y = height - 2 - ((value - low) / span) * (height - 4)
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(' ')
+}
+
 /** Дёшево или дорого — относительно обычной цены этого товара в мире. */
 function verdict(price: number, base: number): string {
   if (price <= base * 0.7) return 'дёшево'
@@ -172,6 +260,17 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   info: { flex: 1 },
+  nameRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
+  history: {
+    backgroundColor: palette.surface,
+    borderRadius: radii.md,
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+    padding: spacing.sm,
+  },
+  historyRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
+  historyNotes: { flex: 1, gap: 2 },
+  historyText: { color: palette.dim, fontSize: font.tiny },
   name: { color: palette.text, fontSize: font.body },
   mine: { color: palette.faint, fontSize: font.tiny },
   prices: { color: palette.dim, fontSize: font.small },

@@ -742,7 +742,9 @@ export function tickBands(
       if (victim && victim.population > 0 && band.goal.type === 'raid') {
         const [severity, afterSeverity] = nextFloat(generator)
         generator = afterSeverity
-        const lost = Math.round(victim.population * (0.005 + severity * 0.015))
+        // Дозорная башня: люди успевают уйти за стены, набег берёт вдвое меньше.
+        const warned = victim.buildings.includes('watchtower') ? 0.5 : 1
+        const lost = Math.round(victim.population * (0.005 + severity * 0.015) * warned)
         places = {
           ...places,
           [band.locationId]: {

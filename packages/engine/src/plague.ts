@@ -79,6 +79,9 @@ export function tickPlague(
     // Лекарь при больных и закрытые ворота — то, чем на мор отвечают.
     if (healerAt === plague.locationId) weakness *= 0.65
     if (place.quarantined) weakness *= 0.8
+    // Чистая вода и бани: город, который моется, болеет меньше.
+    if (place.buildings.includes('well')) weakness *= 0.85
+    if (place.buildings.includes('bathhouse')) weakness *= 0.7
     // Доля в сутки, а не в разы: при одном проценте мор за век уносил
     // семьсот пятьдесят тысяч душ — втрое больше, чем в мире вообще живёт.
     // Теперь вспышка съедает от десятой до пятой части места, как и положено.

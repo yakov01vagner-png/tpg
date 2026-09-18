@@ -47,7 +47,8 @@ export function prosperity(settlement: Settlement, foodSecurity: number): number
 export function dailyTax(settlement: Settlement, foodSecurity: number): number {
   const base = settlement.population * 0.012 * prosperity(settlement, foodSecurity)
   const market = hasBuilding(settlement, 'market') ? 1.3 : 1
-  return Math.floor(base * market)
+  const tavern = hasBuilding(settlement, 'tavern') ? 1.1 : 1
+  return Math.floor(base * market * tavern)
 }
 
 /** Сколько человек помещается в гарнизон: без казарм много не посадишь. */

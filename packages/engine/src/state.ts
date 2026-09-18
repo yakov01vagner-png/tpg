@@ -8,6 +8,7 @@ import { createSettlements } from './economy'
 import type { Enterprise } from './enterprise'
 import type { GameEvent, LogKind } from './events'
 import { describeEvent, kindOf } from './events'
+import { EMPTY_PRICE_LOG, type PriceLog } from './market'
 import type { Party } from './party'
 import { EMPTY_PARTY } from './party'
 import type { Plague } from './plague'
@@ -24,7 +25,7 @@ import { defaultStartLocationId, generateWorld } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 12
+export const SCHEMA_VERSION = 13
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -85,6 +86,8 @@ export interface GameState {
   readonly enterprises: readonly Enterprise[]
   /** Где идёт мор. Пусто почти всегда — и тем страшнее, когда не пусто. */
   readonly plagues: readonly Plague[]
+  /** Записная книжка купца: цены там, где ты был или где стоял твой караван. */
+  readonly priceLog: PriceLog
   /** Игра кончена: герой погиб. Пермадэт редкий, но настоящий. */
   readonly over: boolean
   readonly log: readonly LogEntry[]
@@ -120,6 +123,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     companions: [],
     enterprises: [],
     plagues: [],
+    priceLog: EMPTY_PRICE_LOG,
     over: false,
     log: [
       {

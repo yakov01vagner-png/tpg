@@ -67,6 +67,8 @@ import {
 import type { LifeEvent } from './life'
 import { foodSecurity, tickDays } from './life'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
+import type { PriceLog } from './market'
+import { recordPrices } from './market'
 import type { Party } from './party'
 import {
   DESERTION_MORALE,
@@ -1087,6 +1089,10 @@ function buyItem(state: GameState, itemId: string): CommandResult {
   if (!here) return fail('invalid', 'Непонятно, где находится герой.')
   if (!item.where.includes(here.archetype)) {
     return fail('unavailableHere', 'Здесь такого не делают и не возят.')
+  }
+  // Именную вещь делают в одной короне и за её пределы не возят.
+  if (item.kingdomId && kingdomOf(state.world, state.locationId)?.id !== item.kingdomId) {
+    return fail('unavailableHere', 'Такое делают не здесь, и сюда не возят.')
   }
   const shunned = checkWelcome(state)
   if (shunned) return shunned
@@ -2121,6 +2127,7 @@ interface Draft {
   /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
   world: World
   plagues: readonly Plague[]
+  priceLog: PriceLog
   bands: readonly Band[]
   companions: readonly Companion[]
   enterprises: readonly Enterprise[]
@@ -2147,6 +2154,7 @@ function open(state: GameState): Draft {
     politics: state.politics,
     world: state.world,
     plagues: state.plagues,
+    priceLog: state.priceLog,
     bands: state.bands,
     companions: state.companions,
     enterprises: state.enterprises,
@@ -2263,10 +2271,29 @@ function close(draft: Draft): CommandResult {
     healAndFree(draft, daysPassed)
   }
 
+  // Записная книжка купца: цены там, где стоишь, и там, где стоит караван.
+  const today = dayOf(draft.time)
+  draft.priceLog = recordPrices(
+    draft.priceLog,
+    draft.base.world,
+    draft.settlements[draft.locationId],
+    today,
+  )
+  for (const enterprise of draft.enterprises) {
+    if (enterprise.kind !== 'caravan' || enterprise.travel) continue
+    draft.priceLog = recordPrices(
+      draft.priceLog,
+      draft.base.world,
+      draft.settlements[enterprise.locationId],
+      today,
+    )
+  }
+
   const state: GameState = {
     ...draft.base,
     world: draft.world,
     plagues: draft.plagues,
+    priceLog: draft.priceLog,
     time: draft.time,
     rng: draft.rng,
     character: draft.character,

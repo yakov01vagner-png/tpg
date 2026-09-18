@@ -268,11 +268,15 @@ function produceAndEat(
 
     // Прочие товары потихоньку возвращаются к обычному для места уровню.
     const smithy = hasBuilding(settlement, 'smithy')
+    // Склад: запасов больше, и возвращаются они быстрее.
+    const warehouse = hasBuilding(settlement, 'warehouse')
+    const recovery = config.goodsRecovery * (warehouse ? 1.5 : 1)
     for (const good of GOOD_IDS) {
       if (good === 'grain' || good === 'fish') continue
       const craft = smithy && (good === 'tools' || good === 'weapons') ? 1.4 : 1
-      const target = targetStock(world, id, good, settlement.population) * craft
-      stock[good] = stock[good] + (target - stock[good]) * config.goodsRecovery
+      const target =
+        targetStock(world, id, good, settlement.population) * craft * (warehouse ? 1.3 : 1)
+      stock[good] = stock[good] + (target - stock[good]) * recovery
     }
 
     // Стройка идёт своим чередом, пока хозяин в отъезде.
@@ -285,15 +289,20 @@ function produceAndEat(
         ? [...settlement.buildings, settlement.building.id]
         : settlement.buildings
 
-    // Голод рождает разбой, сытость его гасит — медленно.
+    // Голод рождает разбой, сытость его гасит — медленно. Часовня даёт людям
+    // терпение, дозорная башня — гасит разбой вдвое быстрее.
+    const patience = hasBuilding(settlement, 'chapel') ? 0.6 : 1
+    const watch = hasBuilding(settlement, 'watchtower') ? 2 : 1
     const banditry = Math.min(
       1,
-      Math.max(0, settlement.banditry + (hunger > 0 ? hunger * 0.03 : -0.004)),
+      Math.max(0, settlement.banditry + (hunger > 0 ? hunger * 0.03 * patience : -0.004 * watch)),
     )
     // Рекруты возвращаются: подросли, вернулись с отхожих промыслов.
-    // При казармах идут охотнее: есть куда прийти и кому учить.
+    // При казармах идут охотнее: есть куда прийти и кому учить; корчма зовёт.
     const pool =
-      recruitPool(settlement.population) * (hasBuilding(settlement, 'barracks') ? 1.5 : 1)
+      recruitPool(settlement.population) *
+      (hasBuilding(settlement, 'barracks') ? 1.5 : 1) *
+      (hasBuilding(settlement, 'tavern') ? 1.3 : 1)
     const recruits = Math.min(pool, settlement.recruits + pool * RECRUIT_RECOVERY)
 
     // Земля устаёт от того, что с неё берут. Пашут в полную силу — беднеет;

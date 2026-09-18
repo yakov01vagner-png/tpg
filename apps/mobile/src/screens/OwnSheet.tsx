@@ -4,22 +4,39 @@ import {
   type BuildingId,
   type Command,
   type GameState,
+  LIFE,
+  type Settlement,
+  TROOPS,
+  TROOP_IDS,
   canApply,
   dailyTax,
   foodSecurity,
   freeSlots,
   garrisonLimit,
   garrisonSize,
+  garrisonWages,
   isOwnedByPlayer,
   kingdomOf,
   lordById,
   warsOf,
 } from '@tpg/engine'
-import { ScrollView, StyleSheet } from 'react-native'
+import { ScrollView, StyleSheet, View } from 'react-native'
 import { Icon } from '../art/icons'
 import { dispatch } from '../game/store'
 import { palette, spacing } from '../theme'
-import { Body, Card, Dim, Empty, Panel, Section } from '../ui/parts'
+import {
+  Body,
+  Button,
+  Card,
+  Dim,
+  Empty,
+  Faint,
+  Panel,
+  Row,
+  Section,
+  Stat,
+  Stats,
+} from '../ui/parts'
 
 /**
  * Своё: земля, служба, власть.
@@ -80,20 +97,7 @@ export function OwnSheet({ game }: { game: GameState }) {
         ) : null}
         {settlement && here && isOwnedByPlayer(settlement) ? (
           <>
-            <Panel>
-              <Body>{`Подать ${dailyTax(settlement, foodSecurity(settlement))} в сутки`}</Body>
-              <Dim>
-                {`Гарнизон ${garrisonSize(settlement)} из ${garrisonLimit(game.world, settlement)} · мест под стройку ${freeSlots(game.world, settlement)}`}
-              </Dim>
-              {settlement.buildings.length > 0 ? (
-                <Dim>{`Построено: ${settlement.buildings.map((id: BuildingId) => BUILDINGS[id].label).join(', ')}`}</Dim>
-              ) : null}
-              {settlement.building ? (
-                <Dim>
-                  {`Строится: ${BUILDINGS[settlement.building.id].label.toLowerCase()} — осталось ${settlement.building.daysLeft} сут.`}
-                </Dim>
-              ) : null}
-            </Panel>
+            <Holding game={game} settlement={settlement} />
             {BUILDING_IDS.filter((id: BuildingId) => !settlement.buildings.includes(id)).map(
               (id: BuildingId) => {
                 const command: Command = { type: 'build', building: id }
@@ -120,19 +124,6 @@ export function OwnSheet({ game }: { game: GameState }) {
               reason={reasonFor({ type: 'quarantine' })}
               onPress={() => dispatch({ type: 'quarantine' })}
               tone="danger"
-            />
-            <Card
-              title="Оставить людей в гарнизоне"
-              description="Пятерых из отряда — держать это место."
-              meta="5 чел."
-              reason={reasonFor({ type: 'station', troop: 'militia', count: 5 })}
-              onPress={() => dispatch({ type: 'station', troop: 'militia', count: 5 })}
-            />
-            <Card
-              title="Забрать людей из гарнизона"
-              meta="5 чел."
-              reason={reasonFor({ type: 'withdraw', troop: 'militia', count: 5 })}
-              onPress={() => dispatch({ type: 'withdraw', troop: 'militia', count: 5 })}
             />
           </>
         ) : null}
@@ -193,6 +184,104 @@ export function OwnSheet({ game }: { game: GameState }) {
   )
 }
 
+/**
+ * Владение как хозяйство: люди, хлеб, подати и жалованье, стройка, гарнизон,
+ * управляющий, постройки. Лен — не строка в сводке, а то, чем живёшь.
+ */
+function Holding({ game, settlement }: { game: GameState; settlement: Settlement }) {
+  const security = foodSecurity(settlement)
+  const tax = dailyTax(settlement, security)
+  const wages = garrisonWages(settlement)
+  const steward = game.companions.find(
+    (one) => one.role.type === 'steward' && one.role.locationId === settlement.locationId,
+  )
+  const breadDays = Math.floor(
+    (settlement.stock.grain + settlement.stock.fish) /
+      Math.max(1, settlement.population * LIFE.foodPerPerson),
+  )
+  const troopsHere = TROOP_IDS.filter(
+    (troop) => (settlement.garrison[troop] ?? 0) > 0 || (game.party.units[troop] ?? 0) > 0,
+  )
+  return (
+    <>
+      <Panel>
+        <Stats>
+          <Stat label="Людей" value={`${settlement.population}`} />
+          <Stat
+            label="Хлеба на"
+            value={`${breadDays} сут.`}
+            tone={security < 0.25 ? 'danger' : security < 0.6 ? 'warn' : 'good'}
+          />
+          <Stat label="Подать" value={`+${tax}`} tone="gold" />
+          <Stat label="Жалованье" value={`−${wages}`} tone={wages > tax ? 'danger' : undefined} />
+        </Stats>
+        <Dim>
+          {`Гарнизон ${garrisonSize(settlement)} из ${garrisonLimit(game.world, settlement)} · рекрутов ${Math.floor(settlement.recruits)} · разбой ${Math.round(settlement.banditry * 100)}%`}
+        </Dim>
+        <Dim>
+          {steward
+            ? `Управляющий: ${steward.name} — торг ${steward.skills.trade ?? 0}`
+            : 'Управляющего нет: спутника можно поставить на это место в «Людях».'}
+        </Dim>
+        {settlement.building ? (
+          <Dim tone="gold">
+            {`Строится: ${BUILDINGS[settlement.building.id].label.toLowerCase()} — осталось ${settlement.building.daysLeft} сут.`}
+          </Dim>
+        ) : (
+          <Dim>{`Мест под стройку: ${freeSlots(game.world, settlement)}`}</Dim>
+        )}
+      </Panel>
+
+      {settlement.buildings.length > 0 ? (
+        <View style={styles.built}>
+          {settlement.buildings.map((id: BuildingId) => (
+            <View key={id} style={styles.builtOne}>
+              <Icon name={id} size={22} color={palette.gold} />
+              <Faint>{BUILDINGS[id].label}</Faint>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      {troopsHere.length > 0 ? (
+        <View style={styles.garrison}>
+          {troopsHere.map((troop) => {
+            const inGarrison = settlement.garrison[troop] ?? 0
+            const withMe = game.party.units[troop] ?? 0
+            const station: Command = { type: 'station', troop, count: 1 }
+            const withdraw: Command = { type: 'withdraw', troop, count: 1 }
+            return (
+              <Row
+                key={troop}
+                glyph={<Icon name={troop} size={20} color={palette.dim} />}
+                title={TROOPS[troop].label}
+                subtitle={`на стенах ${inGarrison} · с тобой ${withMe}`}
+                right={
+                  <View style={styles.garrisonButtons}>
+                    <Button
+                      compact
+                      label="−"
+                      tone="quiet"
+                      disabled={!canApply(game, withdraw).ok}
+                      onPress={() => dispatch(withdraw)}
+                    />
+                    <Button
+                      compact
+                      label="+"
+                      disabled={!canApply(game, station).ok}
+                      onPress={() => dispatch(station)}
+                    />
+                  </View>
+                }
+              />
+            )
+          })}
+        </View>
+      ) : null}
+    </>
+  )
+}
+
 function ownerName(game: GameState, owner: string | null): string {
   if (!owner) return 'никто'
   if (owner === 'player') return 'ты'
@@ -204,4 +293,8 @@ function ownerName(game: GameState, owner: string | null): string {
 
 const styles = StyleSheet.create({
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  built: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, paddingVertical: spacing.sm },
+  builtOne: { alignItems: 'center', minWidth: 56 },
+  garrison: { marginBottom: spacing.sm },
+  garrisonButtons: { flexDirection: 'row', gap: spacing.xs },
 })

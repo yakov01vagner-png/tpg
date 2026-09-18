@@ -2,7 +2,10 @@ import {
   ARCHETYPE_LABELS,
   CARAVAN_COST,
   type Command,
+  GOODS,
+  GOOD_IDS,
   type GameState,
+  type GoodId,
   type GridCell,
   KINGDOM_COLORS,
   MAP_SIZE,
@@ -11,6 +14,7 @@ import {
   TERRAIN_LABELS,
   addressOf,
   canApply,
+  dayOf,
   foodSecurity,
   formatDuration,
   holderOf,
@@ -147,6 +151,23 @@ export function MapScreen({ game }: { game: GameState }) {
     }
     return byPlace
   }, [game.bands])
+
+  // Свои дела на полотне: мастерская дымит у места, караван идёт по дороге.
+  const ventures = useMemo(() => {
+    const out: { id: string; x: number; y: number; kind: 'caravan' | 'workshop' }[] = []
+    for (const enterprise of game.enterprises) {
+      const at = points[enterprise.locationId]
+      if (!at) continue
+      const to = enterprise.travel ? points[enterprise.travel.toLocationId] : null
+      out.push({
+        id: enterprise.id,
+        kind: enterprise.kind,
+        x: to ? (at.x + to.x) / 2 : at.x,
+        y: to ? (at.y + to.y) / 2 : at.y,
+      })
+    }
+    return out
+  }, [game.enterprises, points])
 
   const here = points[game.locationId]
   const neighbours = useMemo(
@@ -341,6 +362,38 @@ export function MapScreen({ game }: { game: GameState }) {
               })}
             </G>
 
+            <G>
+              {ventures.map((venture) => {
+                // Мастерская — жёлтый квадрат слева от места; караван — ромб,
+                // на дороге между двумя местами, пока идёт.
+                const r = 3.5 * mark
+                return venture.kind === 'workshop' ? (
+                  <Rect
+                    key={venture.id}
+                    x={venture.x - 8 * mark - r}
+                    y={venture.y - r}
+                    width={r * 2}
+                    height={r * 2}
+                    fill="#c9a227"
+                    stroke="#17140f"
+                    strokeWidth={0.8 * mark}
+                  />
+                ) : (
+                  <Rect
+                    key={venture.id}
+                    x={venture.x - r}
+                    y={venture.y - r}
+                    width={r * 2}
+                    height={r * 2}
+                    fill="#c9a227"
+                    stroke="#17140f"
+                    strokeWidth={0.8 * mark}
+                    transform={`rotate(45 ${venture.x} ${venture.y})`}
+                  />
+                )
+              })}
+            </G>
+
             {here ? (
               <Rect
                 x={here.x - 11 * mark}
@@ -386,6 +439,18 @@ export function MapScreen({ game }: { game: GameState }) {
           </Text>
           {plagueAt(game.plagues, chosen.id) ? (
             <Text style={styles.plague}>Здесь мор. Ехать туда — своей волей.</Text>
+          ) : null}
+          {game.enterprises
+            .filter((one) => one.locationId === chosen.id || one.homeId === chosen.id)
+            .map((one) => (
+              <Text key={one.id} style={styles.venture}>
+                {one.kind === 'workshop'
+                  ? `Твоя мастерская · принесла ${one.earned}`
+                  : `Твой караван${one.travel ? ` · в пути к ${game.world.locations[one.travelTarget ?? '']?.name ?? '…'}` : ' · стоит здесь'} · принёс ${one.earned}`}
+              </Text>
+            ))}
+          {knownPrice(game, chosen.id) ? (
+            <Text style={styles.dim}>{knownPrice(game, chosen.id)}</Text>
           ) : null}
           {hosts.get(chosen.id) ? (
             <Text style={styles.host}>
@@ -502,6 +567,25 @@ function foodWord(security: number): string {
   return 'сыто'
 }
 
+/** Что помнишь о ценах этого места: когда был и что тогда стоило дороже всего. */
+function knownPrice(game: GameState, locationId: string): string | null {
+  const known = game.priceLog[locationId]
+  if (!known) return null
+  let best: { good: GoodId; ratio: number } | null = null
+  let lastDay = 0
+  for (const good of GOOD_IDS) {
+    const samples = known[good]
+    const last = samples?.[samples.length - 1]
+    if (!last) continue
+    lastDay = Math.max(lastDay, last.day)
+    const ratio = last.price / GOODS[good].basePrice
+    if (!best || ratio > best.ratio) best = { good, ratio }
+  }
+  if (!best) return null
+  const ago = dayOf(game.time) - lastDay
+  return `Цены помнишь${ago > 0 ? ` (${ago} сут. назад)` : ''}: дороже всего ${GOODS[best.good].label.toLowerCase()}`
+}
+
 const styles = StyleSheet.create({
   wrap: { flex: 1, paddingHorizontal: spacing.lg, paddingTop: spacing.md },
   canvas: { backgroundColor: '#15120f' },
@@ -516,5 +600,6 @@ const styles = StyleSheet.create({
   dim: { color: colors.dim, fontSize: font.small },
   here: { color: colors.gold, fontSize: font.small },
   host: { color: '#d8cdbb', fontSize: font.small },
+  venture: { color: '#c9a227', fontSize: font.small },
   plague: { color: '#c0533a', fontSize: font.small },
 })

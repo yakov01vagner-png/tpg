@@ -1,5 +1,6 @@
 import {
   ARCHETYPE_LABELS,
+  BUILDINGS,
   type Command,
   type GameState,
   TERRAIN_LABELS,
@@ -143,6 +144,16 @@ export function HomeScreen({ game }: { game: GameState }) {
           {`${people > 0 ? `${formatPopulation(people)} жителей` : 'заброшено'} · ${ownerName(game, settlement?.owner ?? null)}`}
         </Dim>
         <StateLine game={game} />
+        {settlement && settlement.buildings.length > 0 ? (
+          <View style={styles.built}>
+            {settlement.buildings.map((id) => (
+              <View key={id} style={styles.builtOne}>
+                <Icon name={id} size={18} color={palette.dim} />
+                <Text style={styles.builtLabel}>{BUILDINGS[id].label}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
       </View>
 
       {captivity ? (
@@ -404,6 +415,9 @@ function plural(n: number, one: string, few: string, many: string): string {
 
 const styles = StyleSheet.create({
   captiveActions: { gap: spacing.sm, marginTop: spacing.sm },
+  built: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginTop: spacing.sm },
+  builtOne: { alignItems: 'center', minWidth: 48 },
+  builtLabel: { color: palette.faint, fontSize: 9 },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
   scene: {
     backgroundColor: palette.surface,

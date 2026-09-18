@@ -1,6 +1,6 @@
 import { musterBands } from './band'
 import { NO_FAMILY, START_AGE, birthDayFor } from './dynasty'
-import { createSettlements, recruitPool } from './economy'
+import { createSettlements, initialStock, recruitPool } from './economy'
 import type { Settlement } from './economy'
 import { EMPTY_PARTY } from './party'
 import { NO_REPUTATION } from './reputation'
@@ -61,6 +61,21 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
       realm: data.realm ?? null,
       quests: data.quests ?? [],
     }
+  },
+  /**
+   * v12 → v13: пять новых товаров и записная книжка цен. Старым местам
+   * досыпаем запас новых товаров по их норме; книжка пуста — её ещё не вели.
+   */
+  12: (data) => {
+    const world = data.world as World
+    const settlements = (data.settlements ?? {}) as Record<string, Record<string, unknown>>
+    const filled: Record<string, unknown> = {}
+    for (const [id, settlement] of Object.entries(settlements)) {
+      const population = (settlement.population as number) ?? 0
+      const stock = { ...initialStock(world, id, population), ...(settlement.stock as object) }
+      filled[id] = { ...settlement, stock }
+    }
+    return { ...data, settlements: filled, priceLog: data.priceLog ?? {} }
   },
   /**
    * v11 → v12: у героя появились рана и плен, у боя — поединок, свои стены и
