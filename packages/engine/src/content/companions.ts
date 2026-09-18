@@ -85,6 +85,8 @@ export interface CompanionDef {
   readonly fee: number
   /** Где его встречают. */
   readonly where?: Availability
+  /** Человек одной короны: встречается только на её землях. */
+  readonly kingdomId?: string
 }
 
 export const COMPANIONS: Record<string, CompanionDef> = {
@@ -177,6 +179,107 @@ export const COMPANIONS: Record<string, CompanionDef> = {
     skills: { persuasion: 6, healing: 3, concentration: 3 },
     fee: 210,
     where: { archetypes: ['monastery', 'town', 'city', 'capital'] },
+  },
+  // --- вторая десятка: по два-три на королевство --------------------------
+  grimbold: {
+    id: 'grimbold',
+    name: 'Гримбольд Рудный',
+    story: 'Мастер-рудокоп Дур-Хазада. Ушёл из клана после спора о наследстве — и о жиле.',
+    temper: 'proud',
+    skills: { engineering: 5, hardLabour: 5, heavyWeapons: 3 },
+    fee: 190,
+    where: { archetypes: ['mine', 'fortress', 'capital'] },
+    kingdomId: 'durHazad',
+  },
+  dagna: {
+    id: 'dagna',
+    name: 'Дагна Молотобойка',
+    story: 'Кузнечиха с подгорья. Говорит, что железо честнее людей, но с людьми ладит.',
+    temper: 'honest',
+    skills: { engineering: 4, heavyWeapons: 4, trade: 3 },
+    fee: 170,
+    where: { archetypes: ['mine', 'town', 'city'] },
+    kingdomId: 'durHazad',
+  },
+  ashan: {
+    id: 'ashan',
+    name: 'Ашан Полынь',
+    story: 'Степной следопыт. Отряд его рода ушёл с кочевья, а он остался при дорогах.',
+    temper: 'grim',
+    skills: { riding: 6, archery: 5, survival: 4 },
+    fee: 160,
+    where: { archetypes: ['village', 'town'] },
+    kingdomId: 'tribes',
+  },
+  saule: {
+    id: 'saule',
+    name: 'Сауле Дочь Ветра',
+    story: 'Из племён. Поёт так, что замолкают костры; торгуется так, что замолкают купцы.',
+    temper: 'proud',
+    skills: { persuasion: 5, riding: 4, trade: 3 },
+    fee: 180,
+    where: { archetypes: ['village', 'town', 'capital'] },
+    kingdomId: 'tribes',
+  },
+  nadir: {
+    id: 'nadir',
+    name: 'Надир аль-Бохар',
+    story: 'Имперский писарь, знавший слишком много о податях. Ушёл раньше, чем спросили.',
+    temper: 'greedy',
+    skills: { scholarship: 6, trade: 4, persuasion: 3 },
+    fee: 200,
+    where: { archetypes: ['city', 'capital', 'port'] },
+    kingdomId: 'boharut',
+  },
+  zaira: {
+    id: 'zaira',
+    name: 'Заира Тень',
+    story: 'Из южных портов. Что она умеет — лучше не спрашивать при свидетелях.',
+    temper: 'grim',
+    skills: { sleight: 5, lightWeapons: 5, concentration: 3 },
+    fee: 175,
+    where: { archetypes: ['port', 'city'] },
+    kingdomId: 'boharut',
+  },
+  brother_ilar: {
+    id: 'brother_ilar',
+    name: 'Брат Илар',
+    story: 'Монах Робла, лишённый сана за проповедь не по уставу. Проповедует по-прежнему.',
+    temper: 'devout',
+    skills: { healing: 5, persuasion: 4, scholarship: 3 },
+    fee: 130,
+    where: { archetypes: ['monastery', 'town', 'village'] },
+    kingdomId: 'robl',
+  },
+  kassia: {
+    id: 'kassia',
+    name: 'Кассия Свечница',
+    story: 'Служила при храме Робла, пока не выяснилось, что читает лучше настоятеля.',
+    temper: 'loyal',
+    skills: { magic: 4, concentration: 5, scholarship: 3 },
+    fee: 210,
+    where: { archetypes: ['monastery', 'city', 'capital'] },
+    kingdomId: 'robl',
+  },
+  radan: {
+    id: 'radan',
+    name: 'Радан Копейщик',
+    story: 'Двадцать лет в ополчении Ре-Эстиза, три войны, ни одной награды.',
+    temper: 'loyal',
+    skills: { command: 4, heavyWeapons: 4, fortitude: 4 },
+    fee: 150,
+    where: { archetypes: ['village', 'town', 'fortress'] },
+    kingdomId: 'reEstiz',
+  },
+  lisava: {
+    id: 'lisava',
+    name: 'Лисава Знахарка',
+    story: 'Деревенская травница. Знает, от чего умирают, и почти всегда — как не умереть.',
+    temper: 'honest',
+    skills: { healing: 4, survival: 4, persuasion: 2 },
+    fee: 110,
+    where: { archetypes: ['village', 'monastery'] },
+    kingdomId: 'reEstiz',
   },
 }
 

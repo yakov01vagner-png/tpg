@@ -62,6 +62,13 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
       quests: data.quests ?? [],
     }
   },
+  /** v13 → v14: поручения руками и счёт побед. Старый герой ничего не брал. */
+  13: (data) => ({
+    ...data,
+    chains: data.chains ?? [],
+    doneChains: data.doneChains ?? [],
+    battlesWon: data.battlesWon ?? 0,
+  }),
   /**
    * v12 → v13: пять новых товаров и записная книжка цен. Старым местам
    * досыпаем запас новых товаров по их норме; книжка пуста — её ещё не вели.

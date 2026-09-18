@@ -1,6 +1,7 @@
 import type { Band } from './band'
 import { musterBands } from './band'
 import type { Battle } from './battle'
+import type { ChainProgress } from './chain'
 import type { Character } from './character'
 import type { Companion } from './companion'
 import type { Settlement } from './economy'
@@ -21,11 +22,11 @@ import type { GameTime } from './time'
 import { WORLD_START } from './time'
 import type { Politics } from './war'
 import { createPolitics } from './war'
-import { defaultStartLocationId, generateWorld } from './world/generate'
+import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 13
+export const SCHEMA_VERSION = 14
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -88,6 +89,11 @@ export interface GameState {
   readonly plagues: readonly Plague[]
   /** Записная книжка купца: цены там, где ты был или где стоял твой караван. */
   readonly priceLog: PriceLog
+  /** Поручения руками: какие идут и какие уже сделаны. */
+  readonly chains: readonly ChainProgress[]
+  readonly doneChains: readonly string[]
+  /** Сколько боёв выиграно: цепочки и лорды считают по этому. */
+  readonly battlesWon: number
   /** Игра кончена: герой погиб. Пермадэт редкий, но настоящий. */
   readonly over: boolean
   readonly log: readonly LogEntry[]
@@ -97,7 +103,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
   // Мир можно передать готовым: тестам и прогонам баланса незачем каждый раз
   // собирать семьдесят локаций заново.
   const world = prebuilt ?? generateWorld(seed)
-  const locationId = defaultStartLocationId(world)
+  const locationId = startLocationFor(world, character.tags)
   const home = world.locations[locationId]
   // Землю раздаём сразу: у каждого места есть держатель, иначе отнимать не у кого.
   const [politics, settlements] = createPolitics(world, createSettlements(world), createRng(seed))
@@ -124,6 +130,9 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     enterprises: [],
     plagues: [],
     priceLog: EMPTY_PRICE_LOG,
+    chains: [],
+    doneChains: [],
+    battlesWon: 0,
     over: false,
     log: [
       {

@@ -365,6 +365,60 @@ export const COMPANION_FACES: Record<string, Partial<Face>> = {
   yfka: { hair: 'cropped', beard: 'none', eyes: 'narrow', brows: 'flat', hairColor: 0, skin: 2 },
   ostap: { hair: 'curly', beard: 'short', eyes: 'wide', brows: 'arched', hairColor: 1 },
   vela: { hair: 'braids', beard: 'none', eyes: 'wide', brows: 'flat', hairColor: 6, skin: 1 },
+  grimbold: {
+    shape: 'square',
+    hair: 'short',
+    beard: 'full',
+    eyes: 'narrow',
+    brows: 'heavy',
+    hairColor: 1,
+  },
+  dagna: {
+    shape: 'square',
+    hair: 'braids',
+    beard: 'none',
+    eyes: 'calm',
+    brows: 'heavy',
+    hairColor: 1,
+    scar: true,
+  },
+  ashan: {
+    hair: 'topknot',
+    beard: 'stubble',
+    eyes: 'narrow',
+    brows: 'flat',
+    hairColor: 0,
+    skin: 2,
+  },
+  saule: { hair: 'braids', beard: 'none', eyes: 'wide', brows: 'arched', hairColor: 0, skin: 2 },
+  nadir: { hair: 'cropped', beard: 'short', eyes: 'calm', brows: 'arched', hairColor: 0, skin: 3 },
+  zaira: {
+    hair: 'long',
+    beard: 'none',
+    eyes: 'narrow',
+    brows: 'flat',
+    hairColor: 0,
+    skin: 3,
+    scar: true,
+  },
+  brother_ilar: {
+    hair: 'cropped',
+    beard: 'short',
+    eyes: 'calm',
+    brows: 'flat',
+    hairColor: 3,
+    hood: true,
+  },
+  kassia: { hair: 'long', beard: 'none', eyes: 'wide', brows: 'arched', hairColor: 2, hood: true },
+  radan: {
+    hair: 'short',
+    beard: 'stubble',
+    eyes: 'calm',
+    brows: 'heavy',
+    hairColor: 4,
+    scar: true,
+  },
+  lisava: { hair: 'long', beard: 'none', eyes: 'calm', brows: 'flat', hairColor: 5, skin: 1 },
 }
 
 /**
@@ -373,6 +427,9 @@ export const COMPANION_FACES: Record<string, Partial<Face>> = {
  */
 export function heroFace(tags: readonly string[]): Partial<Face> {
   const face: Partial<Face> = {}
+  if (tags.includes('dwarf')) Object.assign(face, { shape: 'square', beard: 'full', hair: 'short' })
+  if (tags.includes('southern')) Object.assign(face, { skin: 3, hair: 'cropped' })
+  if (tags.includes('home_robl')) Object.assign(face, { hood: true })
   if (tags.includes('tribe_born')) Object.assign(face, { hair: 'braids', skin: 2 })
   if (tags.includes('noble_born')) Object.assign(face, { hair: 'long', beard: 'none', skin: 0 })
   if (tags.includes('temple_raised') || tags.includes('devout'))

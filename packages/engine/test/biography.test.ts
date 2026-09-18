@@ -90,7 +90,7 @@ describe('шаблоны быстрого старта', () => {
   })
 
   it('находятся по идентификатору', () => {
-    expect(templateOptionIds(BIOGRAPHY, 'fallenNoble')?.[0]).toBe('lordSon')
+    expect(templateOptionIds(BIOGRAPHY, 'fallenNoble')?.[1]).toBe('lordSon')
     expect(templateOptionIds(BIOGRAPHY, 'нет такого')).toBe(null)
   })
 })
@@ -98,14 +98,18 @@ describe('шаблоны быстрого старта', () => {
 describe('прохождение', () => {
   it('в начале предлагает первый этап', () => {
     const progress = progressOf(BIOGRAPHY, [])
-    expect(progress.stage?.id).toBe('origin')
+    expect(progress.stage?.id).toBe('homeland')
     expect(progress.done).toBe(false)
     expect(progress.options.length).toBe(BIOGRAPHY.stages[0]?.options.length)
   })
 
   it('происхождение открывает и закрывает варианты детства', () => {
-    const noble = progressOf(BIOGRAPHY, ['lordSon']).options.map((o: BiographyOption) => o.id)
-    const peasant = progressOf(BIOGRAPHY, ['villager']).options.map((o: BiographyOption) => o.id)
+    const noble = progressOf(BIOGRAPHY, ['homeReEstiz', 'lordSon']).options.map(
+      (o: BiographyOption) => o.id,
+    )
+    const peasant = progressOf(BIOGRAPHY, ['homeReEstiz', 'villager']).options.map(
+      (o: BiographyOption) => o.id,
+    )
 
     expect(noble).toContain('courtPage')
     expect(peasant).not.toContain('courtPage')
@@ -118,7 +122,13 @@ describe('прохождение', () => {
   })
 
   it('заканчивается, когда отвечено на все этапы', () => {
-    const progress = progressOf(BIOGRAPHY, ['lordSon', 'stables', 'levy', 'stableHand'])
+    const progress = progressOf(BIOGRAPHY, [
+      'homeReEstiz',
+      'lordSon',
+      'stables',
+      'levy',
+      'stableHand',
+    ])
     expect(progress.done).toBe(true)
     expect(progress.stage).toBe(null)
     expect(progress.tags).toContain('noble_born')
@@ -127,7 +137,7 @@ describe('прохождение', () => {
 
 describe('сборка персонажа', () => {
   it('складывает атрибуты, навыки, деньги и теги', () => {
-    const draft = draftOf(['merchantChild', 'templeSchool', 'scribeHand', 'copyist'])
+    const draft = draftOf(['homeReEstiz', 'merchantChild', 'templeSchool', 'scribeHand', 'copyist'])
     // Разум: база 3 + 1 за торговый дом + 1 за подручного писца.
     expect(draft.attributes?.mind).toBe(5)
     // Учёность: 2 + 4 + 5 + 3.
@@ -147,7 +157,7 @@ describe('сборка персонажа', () => {
     // Наследник не рос на улице, как бы ни хотелось.
     const result = buildCharacterDraft(
       'Тест',
-      ['lordSon', 'streets', 'levy', 'stableHand'],
+      ['homeReEstiz', 'lordSon', 'streets', 'levy', 'stableHand'],
       BIOGRAPHY,
     )
     expect(result.ok).toBe(false)
@@ -155,8 +165,8 @@ describe('сборка персонажа', () => {
   })
 
   it('различает одинаковую работу при разном происхождении', () => {
-    const noble = draftOf(['lordSon', 'stables', 'levy', 'stableHand'])
-    const peasant = draftOf(['villager', 'stables', 'levy', 'stableHand'])
+    const noble = draftOf(['homeReEstiz', 'lordSon', 'stables', 'levy', 'stableHand'])
+    const peasant = draftOf(['homeReEstiz', 'villager', 'stables', 'levy', 'stableHand'])
 
     // Занятие одно и то же — а персонажи разные.
     expect(noble.tags).toContain('noble_born')

@@ -29,10 +29,11 @@ describe('место определяет, что можно делать', () =
     expect(capital).toBeGreaterThan(village)
   })
 
-  it('в деревне не у кого учиться и некому принимать испытание', () => {
+  it('в деревне учат немногому и никому не принимают испытание', () => {
     const villageId = someplace('village')
-    // Единственное исключение — уличные наговоры, и те не для всякого.
-    expect(coursesAt(gameAt(villageId)).length).toBeLessThanOrEqual(1)
+    // Деревенские наставники — по земле: следопыт в лесу, стрелок в степи,
+    // уличные наговоры. Школ и испытаний здесь нет.
+    expect(coursesAt(gameAt(villageId)).length).toBeLessThanOrEqual(3)
     expect(examsAt(gameAt(villageId)).length).toBe(0)
   })
 

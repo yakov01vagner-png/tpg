@@ -7,6 +7,9 @@ import {
   type SkillId,
   WORKSHOP_COST,
   canApply,
+  chainDef,
+  chainsOfferedAt,
+  currentStep,
   describeQuest,
   formatDuration,
   formatWindowShort,
@@ -16,6 +19,7 @@ import {
 } from '@tpg/engine'
 import { ScrollView, StyleSheet } from 'react-native'
 import { Icon } from '../art/icons'
+import { Portrait } from '../art/portrait'
 import { dispatch } from '../game/store'
 import { palette, spacing } from '../theme'
 import { Card, Dim, Empty, Section } from '../ui/parts'
@@ -60,6 +64,55 @@ export function EarnSheet({ game }: { game: GameState }) {
           })}
         </Section>
       ))}
+
+      <Section title="Люди просят">
+        {game.chains.length === 0 && chainsOfferedAt(game).length === 0 ? (
+          <Empty text="Здесь к тебе никто не подошёл." />
+        ) : null}
+        {game.chains.map((progress) => {
+          const chain = chainDef(progress.chainId)
+          const step = currentStep(progress)
+          if (!chain) return null
+          return (
+            <Card
+              key={chain.id}
+              glyph={
+                <Portrait
+                  seed={chain.giver.seed}
+                  size={36}
+                  age={44}
+                  kingdomId={chain.giver.kingdomId ?? null}
+                />
+              }
+              title={chain.title}
+              description={step ? step.text : 'Сделано.'}
+              meta={`${chain.giver.name} · шаг ${progress.step + 1} из ${chain.steps.length}`}
+              tone="gold"
+            />
+          )
+        })}
+        {chainsOfferedAt(game).map((chain) => {
+          const command: Command = { type: 'startChain', chainId: chain.id }
+          return (
+            <Card
+              key={chain.id}
+              glyph={
+                <Portrait
+                  seed={chain.giver.seed}
+                  size={36}
+                  age={44}
+                  kingdomId={chain.giver.kingdomId ?? null}
+                />
+              }
+              title={chain.title}
+              description={chain.intro}
+              meta={`${chain.giver.name} · ${chain.reward.money} монет`}
+              reason={reasonFor(command)}
+              onPress={() => dispatch(command)}
+            />
+          )
+        })}
+      </Section>
 
       <Section title="Поручения">
         {taken.length === 0 && offers.length === 0 ? (

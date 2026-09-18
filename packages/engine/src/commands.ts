@@ -12,6 +12,8 @@ import {
   unformUp,
   unitsSize,
 } from './battle'
+import type { ChainProgress } from './chain'
+import { chainDef, chainsOfferedAt, stepDone } from './chain'
 import type { Character } from './character'
 import {
   FATIGUE_MAX,
@@ -24,17 +26,19 @@ import {
 } from './character'
 import type { CompanionRole } from './companion'
 import type { Companion } from './companion'
-import { bestSkill, companionDef, hireCompanion } from './companion'
+import { bestSkill, companionDef, following, hireCompanion, witness } from './companion'
 import type { Availability, Content, Requirements } from './content'
 import { CONTENT } from './content'
 import type { BuildingId } from './content/buildings'
 import { BUILDINGS } from './content/buildings'
-import type { CompanionDef } from './content/companions'
-import { COMPANIONS } from './content/companions'
+import type { ChainDef } from './content/chains'
+import type { CompanionDef, DeedId } from './content/companions'
+import { COMPANIONS, TEMPERS } from './content/companions'
 import type { SlotId } from './content/equipment'
 import { ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
+import { TEMPER_LINES } from './content/lines'
 import type { TroopId } from './content/troops'
 import { TROOPS, TROOP_FOOD_PER_DAY } from './content/troops'
 import { tickDiplomacy } from './diplomacy'
@@ -146,6 +150,10 @@ export type Command =
   /** Позвать с собой именного человека. */
   | { readonly type: 'recruitCompanion'; readonly companionId: string }
   | { readonly type: 'dismissCompanion'; readonly companionId: string }
+  /** Взяться за поручение с лицом. */
+  | { readonly type: 'startChain'; readonly chainId: string }
+  /** Выкупить пленного спутника: дорого, зато сразу. */
+  | { readonly type: 'ransomCompanion'; readonly companionId: string }
   /** Поручить спутнику дело: держать лен или вести караван. */
   | { readonly type: 'assignCompanion'; readonly companionId: string; readonly role: CompanionRole }
   /** Завести своё дело. */
@@ -273,6 +281,10 @@ export function applyCommand(
       return attackBand(state, command.bandId)
     case 'recruitCompanion':
       return recruitCompanion(state, command.companionId)
+    case 'startChain':
+      return startChain(state, command.chainId)
+    case 'ransomCompanion':
+      return ransomCompanion(state, command.companionId)
     case 'dismissCompanion':
       return dismissCompanion(state, command.companionId)
     case 'assignCompanion':
@@ -433,6 +445,7 @@ function travel(state: GameState, toLocationId: string): CommandResult {
   practice(draft, 'athletics', roadHoursNow * 2.5)
   practice(draft, 'survival', roadHoursNow * 1.5)
   draft.locationId = toLocationId
+  roadTalk(draft)
   ambush(draft, toLocationId)
   return close(draft)
 }
@@ -567,7 +580,7 @@ function battleOrders(state: GameState, orders: Readonly<Record<GroupId, OrderId
     draft.rng,
   )
   draft.rng = result.rng
-  draft.battle = result.battle
+  draft.battle = battleTalk(draft, result.battle)
   draft.party = {
     ...draft.party,
     units: unformUp(result.battle.groups),
@@ -690,6 +703,8 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
   if (battle.outcome === 'won') {
     addMoney(draft, battle.spoils.money)
     draft.renown += 1
+    draft.battlesWon += 1
+    seeDeed(draft, 'winBattle')
 
     // Побитая шайка — это меньше разбоя в округе и доброе слово в месте.
     if (!battle.stake) {
@@ -720,6 +735,7 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
           },
         }
         notice(draft, `${name} взят. Людей поубавилось, и они это запомнят.`)
+        seeDeed(draft, 'sack')
         draft.reputation = withPlaceRep(draft.reputation, battle.stake.locationId, -45)
         if (taken.owner && !taken.owner.startsWith('crown:') && taken.owner !== PLAYER) {
           draft.reputation = withLordRep(draft.reputation, taken.owner, -25)
@@ -748,6 +764,7 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
       } else {
         draft.party = { ...draft.party, morale: Math.min(100, draft.party.morale + 5) }
         notice(draft, 'Пленных отпустили восвояси.')
+        seeDeed(draft, 'sparePrisoners')
       }
     }
     draft.party = { ...draft.party, morale: Math.min(100, draft.party.morale + 10) }
@@ -1054,6 +1071,7 @@ function askForFief(state: GameState): CommandResult {
   const draft = open(state)
   const name = state.world.locations[granted.locationId]?.name ?? 'земля'
   notice(draft, `Пожалован лен: ${name}.`)
+  seeDeed(draft, 'takeFief')
   advance(draft, hours(3))
   draft.settlements = {
     ...draft.settlements,
@@ -1231,6 +1249,7 @@ function giveFood(state: GameState, amount: number): CommandResult {
       : quest,
   )
   notice(draft, hungry ? 'Хлеб роздан. Здесь это запомнят.' : 'Хлеб оставлен в амбаре.')
+  if (hungry) seeDeed(draft, 'feedHungry')
   advance(draft, hours(2))
   return close(draft)
 }
@@ -1278,6 +1297,7 @@ function abandonQuest(state: GameState, questId: string): CommandResult {
   if (!quest) return fail('unknownAction', 'Ты такого не брал.')
   const draft = open(state)
   notice(draft, 'Дело брошено. Об этом узнают.')
+  seeDeed(draft, 'abandonQuest')
   draft.reputation = withPlaceRep(draft.reputation, quest.issuerLocationId, -8)
   draft.quests = draft.quests.filter((candidate) => candidate.id !== questId)
   return close(draft)
@@ -1541,9 +1561,186 @@ export function companionsAt(
   if (!location) return []
   const population = state.settlements[locationId]?.population ?? location.population
   const taken = new Set(state.companions.map((one) => one.id))
+  const kingdom = kingdomOf(state.world, locationId)?.id ?? null
   return Object.values(COMPANIONS).filter(
-    (def) => !taken.has(def.id) && isAvailableAt(def.where, location, population),
+    (def) =>
+      !taken.has(def.id) &&
+      isAvailableAt(def.where, location, population) &&
+      (!def.kingdomId || def.kingdomId === kingdom),
   )
+}
+
+/**
+ * Поступок на виду у спутников: нрав считает, реплики — говорят.
+ *
+ * До этого нрав только лежал в данных: `witness` никто не звал, и спутники
+ * терпели всё. Теперь каждый заметный поступок проходит через них: кто-то
+ * скажет слово, кто-то уйдёт — и об этом будет строка в летописи.
+ */
+function seeDeed(draft: Draft, deed: DeedId): void {
+  const present = following(draft.companions)
+  if (present.length === 0) return
+  const result = witness(draft.companions, deed)
+  draft.companions = result.companions
+  // Говорит тот, кого поступок задел сильнее всего.
+  let speaker: Companion | null = null
+  let strongest = 0
+  for (const companion of present) {
+    const shift = Math.abs(TEMPERS[companion.temper]?.feels[deed] ?? 0)
+    if (shift > strongest) {
+      strongest = shift
+      speaker = companion
+    }
+  }
+  if (speaker) {
+    const lines = TEMPER_LINES[speaker.temper].onDeed[deed] ?? []
+    const line = pickLine(draft, lines)
+    if (line) notice(draft, `${speaker.name}: «${line}»`, 'people')
+  }
+  for (const gone of result.left) {
+    notice(draft, `${gone.name} уходит: «${TEMPER_LINES[gone.temper].leaving}»`, 'people')
+  }
+}
+
+/** В дороге спутники иногда говорят — не каждый переход, чтобы не надоесть. */
+function roadTalk(draft: Draft): void {
+  const present = following(draft.companions)
+  if (present.length === 0) return
+  const [talks, afterTalk] = rollChance(draft.rng, 0.12)
+  draft.rng = afterTalk
+  if (!talks) return
+  const [index, afterPick] = nextInt(draft.rng, 0, present.length - 1)
+  draft.rng = afterPick
+  const who = present[index]
+  if (!who) return
+  const line = pickLine(draft, TEMPER_LINES[who.temper].onRoad)
+  if (line) notice(draft, `${who.name}: «${line}»`, 'people')
+}
+
+/** В бою между раундами: реплика ложится в рассказ боя. */
+function battleTalk(draft: Draft, battle: Battle): Battle {
+  const present = following(draft.companions)
+  if (present.length === 0 || battle.outcome !== 'ongoing') return battle
+  const [talks, afterTalk] = rollChance(draft.rng, 0.2)
+  draft.rng = afterTalk
+  if (!talks) return battle
+  const [index, afterPick] = nextInt(draft.rng, 0, present.length - 1)
+  draft.rng = afterPick
+  const who = present[index]
+  if (!who) return battle
+  const line = pickLine(draft, TEMPER_LINES[who.temper].inBattle)
+  if (!line) return battle
+  return { ...battle, log: [...battle.log, `${who.name.split(' ')[0]}: «${line}»`] }
+}
+
+function pickLine(draft: Draft, lines: readonly string[]): string | null {
+  if (lines.length === 0) return null
+  const [index, next] = nextInt(draft.rng, 0, lines.length - 1)
+  draft.rng = next
+  return lines[index] ?? null
+}
+
+/** Выкуп пленного спутника: сто монет и сутки — и он снова с тобой. */
+function ransomCompanion(state: GameState, companionId: string): CommandResult {
+  const companion = state.companions.find((one) => one.id === companionId)
+  if (!companion) return fail('invalid', 'Такого спутника у тебя нет.')
+  if (!companion.captive) return fail('invalid', `${companion.name} не в плену.`)
+  if (state.character.money < COMPANION_RANSOM) {
+    return fail('noMoney', `За него просят ${COMPANION_RANSOM}, а у тебя ${state.character.money}.`)
+  }
+  const draft = open(state)
+  addMoney(draft, -COMPANION_RANSOM)
+  draft.companions = draft.companions.map((one) =>
+    one.id === companionId ? { ...one, captive: false, mood: Math.min(100, one.mood + 10) } : one,
+  )
+  notice(draft, `${companion.name} выкуплен за ${COMPANION_RANSOM} и снова с тобой.`, 'people')
+  advance(draft, hours(6))
+  return close(draft)
+}
+
+export const COMPANION_RANSOM = 100
+
+// --- поручения руками -------------------------------------------------------
+
+function startChain(state: GameState, chainId: string): CommandResult {
+  const chain = chainDef(chainId)
+  if (!chain) return fail('unknownAction', 'Такого поручения нет.')
+  if (!chainsOfferedAt(state).some((one) => one.id === chainId)) {
+    return fail('unavailableHere', 'Здесь этого не просят.')
+  }
+  const draft = open(state)
+  draft.chains = [
+    ...draft.chains,
+    {
+      chainId,
+      step: 0,
+      startedDay: dayOf(state.time),
+      winsAtStart: state.battlesWon,
+      givenAt: state.locationId,
+    },
+  ]
+  notice(draft, `${chain.giver.name}: «${chain.intro}»`, 'people')
+  const first = chain.steps[0]
+  if (first) notice(draft, first.text, 'notice')
+  advance(draft, 30)
+  return close(draft)
+}
+
+/**
+ * Шаги цепочек проверяются после каждой команды: мир решает, сделано ли.
+ * Доставка забирает товар; последний шаг — награда и строка на прощание.
+ */
+function advanceChains(draft: Draft): void {
+  if (draft.chains.length === 0) return
+  const still: ChainProgress[] = []
+  for (const progress of draft.chains) {
+    const chain = chainDef(progress.chainId)
+    if (!chain) continue
+    let current = progress
+    for (;;) {
+      const step = chain.steps[current.step]
+      if (!step || !stepDone(snapshotOf(draft), step, current)) break
+      if (step.type === 'deliver') addGoods(draft, step.good, -step.amount)
+      current = { ...current, step: current.step + 1 }
+      const next = chain.steps[current.step]
+      if (next) notice(draft, `${chain.title}: ${next.text}`, 'notice')
+    }
+    if (current.step >= chain.steps.length) {
+      rewardChain(draft, chain)
+      draft.doneChains = [...draft.doneChains, chain.id]
+      continue
+    }
+    still.push(current)
+  }
+  draft.chains = still
+}
+
+function rewardChain(draft: Draft, chain: ChainDef): void {
+  notice(draft, `${chain.giver.name}: «${chain.outro}»`, 'people')
+  if (chain.reward.money > 0) addMoney(draft, chain.reward.money)
+  if (chain.reward.renown) draft.renown += chain.reward.renown
+  if (chain.reward.placeRep) {
+    draft.reputation = withPlaceRep(draft.reputation, draft.locationId, chain.reward.placeRep)
+  }
+  if (chain.reward.tag && !draft.character.tags.includes(chain.reward.tag)) {
+    patch(draft, { tags: [...draft.character.tags, chain.reward.tag] })
+  }
+  notice(draft, `Поручение «${chain.title}» исполнено: ${chain.reward.money} монет.`, 'money')
+}
+
+/** Состояние как его видят чистые проверки, собранное из черновика. */
+function snapshotOf(draft: Draft): GameState {
+  return {
+    ...draft.base,
+    world: draft.world,
+    character: draft.character,
+    locationId: draft.locationId,
+    settlements: draft.settlements,
+    companions: draft.companions,
+    chains: draft.chains,
+    doneChains: draft.doneChains,
+    battlesWon: draft.battlesWon,
+  }
 }
 
 function recruitCompanion(state: GameState, companionId: string): CommandResult {
@@ -2128,6 +2325,9 @@ interface Draft {
   world: World
   plagues: readonly Plague[]
   priceLog: PriceLog
+  chains: readonly ChainProgress[]
+  doneChains: readonly string[]
+  battlesWon: number
   bands: readonly Band[]
   companions: readonly Companion[]
   enterprises: readonly Enterprise[]
@@ -2155,6 +2355,9 @@ function open(state: GameState): Draft {
     world: state.world,
     plagues: state.plagues,
     priceLog: state.priceLog,
+    chains: state.chains,
+    doneChains: state.doneChains,
+    battlesWon: state.battlesWon,
     bands: state.bands,
     companions: state.companions,
     enterprises: state.enterprises,
@@ -2271,6 +2474,8 @@ function close(draft: Draft): CommandResult {
     healAndFree(draft, daysPassed)
   }
 
+  advanceChains(draft)
+
   // Записная книжка купца: цены там, где стоишь, и там, где стоит караван.
   const today = dayOf(draft.time)
   draft.priceLog = recordPrices(
@@ -2294,6 +2499,9 @@ function close(draft: Draft): CommandResult {
     world: draft.world,
     plagues: draft.plagues,
     priceLog: draft.priceLog,
+    chains: draft.chains,
+    doneChains: draft.doneChains,
+    battlesWon: draft.battlesWon,
     time: draft.time,
     rng: draft.rng,
     character: draft.character,
@@ -2516,6 +2724,10 @@ function payUpkeep(draft: Draft, days: number): void {
 
   if (unpaid > 0) notice(draft, `Жалованье не плачено ${unpaid} сут. — люди ропщут.`)
   if (unfed > 0) notice(draft, `Отряд голодал ${unfed} сут.`)
+  // Спутники видят и то, как ты держишь людей: исправная плата за неделю —
+  // повод для доброго слова, голод — для худого.
+  if (unfed > 0) seeDeed(draft, 'starve')
+  else if (unpaid === 0 && days >= 7) seeDeed(draft, 'payWell')
   if (deserted > 0) notice(draft, `Ушло по-тихому: ${deserted}.`)
 }
 

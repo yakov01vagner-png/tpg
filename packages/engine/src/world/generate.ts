@@ -209,6 +209,31 @@ function buildRoads(roll: Roller, world: Omit<World, 'roads'>): Record<string, r
  * игра должна начинаться в глуши, чтобы дорога до столицы была событием, а не
  * прогулкой после завтрака.
  */
+/**
+ * Где начинать по биографии: тег родины выбирает королевство, а внутри него
+ * — деревню подальше от столицы, как и в Ре-Эстизе. Гном начинает под горой,
+ * степняк — в степи, и первые дни у них разные.
+ */
+export function startLocationFor(world: World, tags: readonly string[]): string {
+  const home = tags.find((tag) => tag.startsWith('home_'))?.slice('home_'.length)
+  if (!home || !world.kingdoms[home]) return defaultStartLocationId(world)
+  const capitalId = world.kingdoms[home]?.capitalId
+  const villages = Object.values(world.locations).filter(
+    (location) => location.archetype === 'village' && location.id.startsWith(`${home}.`),
+  )
+  if (!capitalId || villages.length === 0) return defaultStartLocationId(world)
+  let best = villages[0]
+  let bestDistance = -1
+  for (const village of villages) {
+    const distance = hopsBetween(world, capitalId, village.id) ?? -1
+    if (distance > bestDistance) {
+      best = village
+      bestDistance = distance
+    }
+  }
+  return best?.id ?? defaultStartLocationId(world)
+}
+
 export function defaultStartLocationId(world: World): string {
   const all = Object.values(world.locations)
   const capitalId = world.kingdoms.reEstiz?.capitalId

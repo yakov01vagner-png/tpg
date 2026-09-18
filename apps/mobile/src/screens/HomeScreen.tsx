@@ -7,6 +7,7 @@ import {
   canApply,
   companionsAt,
   coursesAt,
+  dayOf,
   examsAt,
   foeName,
   foodSecurity,
@@ -16,6 +17,7 @@ import {
   jobsAt,
   kingdomOf,
   lordById,
+  lordSays,
   matchesAt,
   offersAt,
   plagueAt,
@@ -211,6 +213,11 @@ export function HomeScreen({ game }: { game: GameState }) {
               </View>
             ))}
           </View>
+          {holder ? (
+            <Text
+              style={styles.speech}
+            >{`${holder.title} ${holder.name}: «${lordSays(game, holder, dayOf(game.time))}»`}</Text>
+          ) : null}
         </Section>
       ) : null}
 
@@ -414,6 +421,13 @@ function plural(n: number, one: string, few: string, many: string): string {
 }
 
 const styles = StyleSheet.create({
+  speech: {
+    color: palette.dim,
+    fontSize: font.small,
+    fontStyle: 'italic',
+    lineHeight: lineHeight.small,
+    marginTop: spacing.sm,
+  },
   captiveActions: { gap: spacing.sm, marginTop: spacing.sm },
   built: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginTop: spacing.sm },
   builtOne: { alignItems: 'center', minWidth: 48 },

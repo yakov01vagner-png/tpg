@@ -1,4 +1,5 @@
 import {
+  COMPANION_RANSOM,
   type Command,
   type Companion,
   type GameState,
@@ -11,7 +12,9 @@ import {
   companionsAt,
   dailyFood,
   dailyWages,
+  dayOf,
   lordById,
+  lordSays,
   matchesAt,
   partyCapacity,
   partySize,
@@ -114,7 +117,7 @@ export function PeopleScreen({ game }: { game: GameState }) {
                 key={lord.id}
                 glyph={<Portrait seed={lord.id} size={36} age={48} kingdomId={lord.kingdomId} />}
                 title={`Посвататься к дому ${lord.name}`}
-                description="Брак — это союз и приданое. Дом смотрит на славу и на то, что о тебе помнят."
+                description={`«${lordSays(game, lord, dayOf(game.time))}» Брак — это союз и приданое. Дом смотрит на славу и на то, что о тебе помнят.`}
                 meta="сватовство"
                 reason={check.ok ? null : check.message}
                 onPress={() => dispatch(command)}
@@ -136,11 +139,22 @@ export function PeopleScreen({ game }: { game: GameState }) {
                 <Portrait seed={companion.id} size={36} overrides={COMPANION_FACES[companion.id]} />
               }
               title={companion.name}
-              subtitle={`${TEMPERS[companion.temper]?.label ?? ''} · ${roleWord(companion.role)}`}
+              subtitle={`${TEMPERS[companion.temper]?.label ?? ''} · ${companion.captive ? 'в плену' : roleWord(companion.role)}`}
               right={
                 <>
                   <Badge text={moodWord(companion.mood)} tone={moodTone(companion.mood)} />
-                  {companion.role.type !== 'party' ? (
+                  {companion.captive ? (
+                    <Button
+                      compact
+                      label={`Выкуп ${COMPANION_RANSOM}`}
+                      disabled={
+                        !canApply(game, { type: 'ransomCompanion', companionId: companion.id }).ok
+                      }
+                      onPress={() =>
+                        dispatch({ type: 'ransomCompanion', companionId: companion.id })
+                      }
+                    />
+                  ) : companion.role.type !== 'party' ? (
                     <Button
                       compact
                       label="Вернуть"
