@@ -59,14 +59,17 @@ export function layoutOf(world: World): Readonly<Record<string, Point>> {
           y: regionCenter.y + Math.sin(provinceAngle) * 58,
         }
 
-        province.locationIds.forEach((locationId, locationIndex) => {
-          const spot = jitter(locationId, 30)
-          const ring = (locationIndex / Math.max(1, province.locationIds.length)) * Math.PI * 2
+        for (const locationId of province.locationIds) {
+          // Место стоит там, куда его кладёт собственное имя, — не там, где оно
+          // оказалось в списке. Пока положение считалось от номера в провинции,
+          // основание одной деревни двигало на карте все соседние: мир нельзя
+          // было пополнить, не перерисовав его целиком (DESIGN.md, п.3.1).
+          const spot = jitter(locationId, 40)
           points[locationId] = separate(taken, {
-            x: clamp(provinceCenter.x + Math.cos(ring) * 24 + spot.x),
-            y: clamp(provinceCenter.y + Math.sin(ring) * 24 + spot.y),
+            x: clamp(provinceCenter.x + spot.x),
+            y: clamp(provinceCenter.y + spot.y),
           })
-        })
+        }
       })
     })
   }
@@ -76,8 +79,9 @@ export function layoutOf(world: World): Readonly<Record<string, Point>> {
 
 /**
  * Два поселения в одной точке — это поселение, которого на карте нет. Слишком
- * близкую точку отводим по спирали, пока она не встанет отдельно; порядок обхода
- * мира неизменен, поэтому результат остаётся тем же от запуска к запуску.
+ * близкую точку отводим по спирали, пока она не встанет отдельно. Отводят
+ * всегда того, кто пришёл позже: списки мест пополняются с конца, поэтому
+ * основанное сегодня никогда не сдвинет стоявшее вчера.
  */
 const MIN_GAP = 16
 

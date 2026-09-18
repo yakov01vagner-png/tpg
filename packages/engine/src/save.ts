@@ -63,6 +63,19 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
     }
   },
   /**
+   * v8 → v9: земля стала уставать, а места — появляться и умирать. Старым
+   * поселениям приписывается свежая земля: сколько её вытоптали до сих пор,
+   * узнать неоткуда, а начинать с усталости было бы наказанием ни за что.
+   */
+  8: (data) => {
+    const settlements = (data.settlements ?? {}) as Record<string, Record<string, unknown>>
+    const rested: Record<string, unknown> = {}
+    for (const [id, settlement] of Object.entries(settlements)) {
+      rested[id] = { ...settlement, strain: settlement.strain ?? 0 }
+    }
+    return { ...data, settlements: rested, plagues: data.plagues ?? [] }
+  },
+  /**
    * v7 → v8: появились спутники, дела, возраст и договоры между коронами.
    * Герою приписывается двадцать лет от начала мира: точнее из старого сейва
    * не узнать, а без возраста он не сможет ни состариться, ни оставить имя.

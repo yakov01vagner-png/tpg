@@ -97,9 +97,14 @@ describe('договор и союз', () => {
     expect(beaten?.from).toBe(first)
     expect(beaten?.perDay).toBeGreaterThan(0)
     expect(beaten?.untilDay).toBeGreaterThan(100)
-    // Чем слабее — тем дороже мир.
-    const worse = peaceTerms(first, second, 0.1, 100)
-    expect(worse?.perDay ?? 0).toBeGreaterThan(beaten?.perDay ?? 0)
+    // Чем слабее — тем дороже мир, но до предела: с разбитого в прах берут
+    // вполовину меньше и вдвое меньший срок. Иначе малое королевство доедали
+    // до конца — Дор-Хазад терял всю землю на двух зёрнах из трёх.
+    const worse = peaceTerms(first, second, 0.5, 100)
+    expect(worse?.perDay ?? 0).toBeLessThan(beaten?.perDay ?? 0)
+    const beggared = peaceTerms(first, second, 0.1, 100)
+    expect(beggared?.perDay ?? 0).toBeLessThan(beaten?.perDay ?? 0)
+    expect(beggared?.untilDay ?? 0).toBeLessThan(beaten?.untilDay ?? 0)
   })
 
   it('союз распадается, когда отношения испортились', () => {

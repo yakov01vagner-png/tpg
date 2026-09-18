@@ -14,7 +14,10 @@ import { tickDiplomacy } from '../packages/engine/src/diplomacy'
 import { createSettlements, priceOf } from '../packages/engine/src/economy'
 import type { Settlement } from '../packages/engine/src/economy'
 import { foodSecurity, tickDays } from '../packages/engine/src/life'
+import type { Plague } from '../packages/engine/src/plague'
+import { tickPlague } from '../packages/engine/src/plague'
 import { createRng } from '../packages/engine/src/rng'
+import { tickSettling } from '../packages/engine/src/settle'
 import { createPolitics, isRebel, tickPolitics } from '../packages/engine/src/war'
 import type { Politics, War } from '../packages/engine/src/war'
 import { generateWorld } from '../packages/engine/src/world/generate'
@@ -79,6 +82,13 @@ interface Run {
   readonly tributes: number
   readonly alliancesAtEnd: number
   readonly tributesAtEnd: number
+  readonly outbreaks: number
+  readonly plagueDeaths: number
+  readonly founded: number
+  readonly resettledNew: number
+  readonly grew: number
+  readonly placesAtEnd: number
+  readonly strainAvg: number
 }
 
 function population(settlements: Settlements): number {
@@ -92,7 +102,7 @@ function alive(settlements: Settlements): number {
 }
 
 function run(seed: number, years: number): Run {
-  const world = generateWorld(seed)
+  let world = generateWorld(seed)
   let settlements = createSettlements(world)
   const [politicsStart, owned] = createPolitics(world, settlements, createRng(seed))
   settlements = owned
@@ -167,6 +177,12 @@ function run(seed: number, years: number): Run {
   let alliancesBroken = 0
   let joinedWars = 0
   let tributes = 0
+  let outbreaks = 0
+  let plagueDeaths = 0
+  let founded = 0
+  let resettledNew = 0
+  let grew = 0
+  let plagues: readonly Plague[] = []
 
   const began = Date.now()
   for (let day = 1; day <= years * 365; day += 1) {
@@ -186,7 +202,28 @@ function run(seed: number, years: number): Run {
     settlements = turn.settlements
     rng = turn.rng
 
-    const talks = tickDiplomacy(world, politics, day, rng)
+    const sick = tickPlague(world, settlements, plagues, rng)
+    plagues = sick.plagues
+    settlements = sick.settlements
+    rng = sick.rng
+    for (const event of sick.events) {
+      if (event.type === 'plagueBegan') outbreaks += 1
+      else if (event.type === 'plagueDeaths') plagueDeaths += event.deaths
+    }
+
+    if (day % 365 === 0) {
+      const settled = tickSettling(world, settlements, day, rng)
+      world = settled.world
+      settlements = settled.settlements
+      rng = settled.rng
+      for (const event of settled.events) {
+        if (event.type === 'founded') founded += 1
+        else if (event.type === 'resettled') resettledNew += 1
+        else if (event.type === 'grew') grew += 1
+      }
+    }
+
+    const talks = tickDiplomacy(world, politics, day, rng, settlements)
     politics = talks.politics
     rng = talks.rng
     for (const event of talks.events) {
@@ -315,6 +352,15 @@ function run(seed: number, years: number): Run {
     lordsFell,
     landStart,
     landEnd: landOf(),
+    outbreaks,
+    plagueDeaths,
+    founded,
+    resettledNew,
+    grew,
+    placesAtEnd: Object.keys(world.locations).length,
+    strainAvg:
+      Object.values(settlements).reduce((sum, one) => sum + one.strain, 0) /
+      Math.max(1, Object.keys(settlements).length),
     alliancesMade,
     alliancesBroken,
     joinedWars,
@@ -383,7 +429,8 @@ console.log(
   `Пик / дно:      ${first.peak.population} (год ${first.peak.year}) / ${first.trough.population} (год ${first.trough.year})`,
 )
 console.log(
-  `Живых мест:     ${first.snapshots[first.snapshots.length - 1]?.alive} из ${Object.keys(world.locations).length}`,
+  `Живых мест:     ${first.snapshots[first.snapshots.length - 1]?.alive} из ${first.placesAtEnd}` +
+    ` (было ${Object.keys(world.locations).length})`,
 )
 console.log(`Запустело:      ${first.abandoned}, заселено заново: ${first.resettled}`)
 console.log(`Голод:          ${first.famines} случаев, ${first.faminesDeaths} умерших`)
@@ -408,6 +455,12 @@ console.log(
     `${first.taken} мест взято осадой, ${first.submitted} мятежников присягнули заново, ` +
     `${first.lordsFell} лордов пало`,
 )
+console.log(`Мор:            ${first.outbreaks} вспышек, ${first.plagueDeaths} умерших`)
+console.log(
+  `Расселение:     основано ${first.founded}, заселено заново ${first.resettledNew}, ` +
+    `переросло ${first.grew}; мест стало ${first.placesAtEnd}`,
+)
+console.log(`Усталость земли: в среднем ${(first.strainAvg * 100).toFixed(0)}%`)
 console.log(
   `Договоры:       ${first.tributes} раз положили дань, союзов ${first.alliancesMade} ` +
     `(распалось ${first.alliancesBroken}), по союзу вступили в войну ${first.joinedWars} раз; ` +

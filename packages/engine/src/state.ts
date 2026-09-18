@@ -10,6 +10,7 @@ import type { GameEvent } from './events'
 import { describeEvent } from './events'
 import type { Party } from './party'
 import { EMPTY_PARTY } from './party'
+import type { Plague } from './plague'
 import type { Quest } from './quest'
 import type { Reputation } from './reputation'
 import { NO_REPUTATION } from './reputation'
@@ -23,7 +24,7 @@ import { defaultStartLocationId, generateWorld } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 8
+export const SCHEMA_VERSION = 9
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -81,6 +82,8 @@ export interface GameState {
   readonly companions: readonly Companion[]
   /** Караваны и мастерские: доход, который идёт без игрока. */
   readonly enterprises: readonly Enterprise[]
+  /** Где идёт мор. Пусто почти всегда — и тем страшнее, когда не пусто. */
+  readonly plagues: readonly Plague[]
   /** Игра кончена: герой погиб. Пермадэт редкий, но настоящий. */
   readonly over: boolean
   readonly log: readonly LogEntry[]
@@ -115,6 +118,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     quests: [],
     companions: [],
     enterprises: [],
+    plagues: [],
     over: false,
     log: [
       {

@@ -277,7 +277,19 @@ export function tickPolitics(
       generator = afterSecond
       const a = kingdomIds[first]
       const b = kingdomIds[second]
-      if (a && b && a !== b && !wars.some((war) => sameWar(war, a, b))) {
+      // На добитого не идут. Пока это было можно, малое королевство доедали
+      // вчетвером: Дор-Хазад оставался с одним местом из тринадцати в двух
+      // мирах из трёх. Огрызок никому не стоит войны — и соседи не хотят, чтобы
+      // победитель поднялся ещё выше.
+      // Считать огрызком можно только там, где вообще видно, кто чем владеет:
+      // иначе при неразданной земле правило запрещает войну всем сразу, и мир
+      // застывает в вечном мире.
+      const alive = Object.values(current).filter((one) => one.population > 0).length
+      const known = Object.values(current).filter(
+        (one) => one.population > 0 && one.owner !== null,
+      ).length
+      const rump = (side: string) => known > 0 && alive > 0 && heldBy(current, side) / alive < 0.08
+      if (a && b && a !== b && !rump(a) && !rump(b) && !wars.some((war) => sameWar(war, a, b))) {
         const [reasonIndex, afterReason] = nextInt(generator, 0, WAR_REASONS.length - 1)
         generator = afterReason
         const war: War = {
@@ -295,7 +307,13 @@ export function tickPolitics(
     // ничего: объявили, помирились, всё как было. Теперь проигравший платит
     // дань, и она видна в состоянии, а не только в журнале.
     for (const war of [...wars]) {
-      const [peace, afterPeace] = rollChance(generator, PEACE_CHANCE)
+      // Добивать мелкого никто не рвётся: с тем, у кого почти ничего не
+      // осталось, мирятся охотнее. Без этого малое королевство доедали до
+      // конца — Дор-Хазад терял всю землю на двух зёрнах из трёх.
+      const smallest = Math.min(heldBy(current, war.a), heldBy(current, war.b))
+      const total = Object.values(current).filter((one) => one.population > 0).length
+      const tiny = total > 0 && smallest / total < 0.12
+      const [peace, afterPeace] = rollChance(generator, PEACE_CHANCE * (tiny ? 5 : 1))
       generator = afterPeace
       if (!peace) continue
       wars = wars.filter((other) => other !== war)
@@ -442,6 +460,15 @@ function tickLords(
     if (hunger < 0.3) drift -= 0.08
     if (unrest > 0.3) drift -= 0.04
     if (kingdomAtWar) drift -= 0.015
+
+    // Честолюбие. Пока верность держалась на одном голоде, она качалась из
+    // крайности в крайность вместе с урожаем: сытый век — ни одного мятежа за
+    // сто лет, голодный — пятьсот. Между тем вассалы восстают не только от
+    // нужды: тот, кто держит земли больше своего сюзерена, рано или поздно
+    // спросит, почему он вассал.
+    const crownLand = (ownedBy.get(`crown:${lord.kingdomId}`) ?? []).length
+    const ownLand = (ownedBy.get(lord.id) ?? []).length
+    if (ownLand >= 3 && ownLand >= crownLand) drift -= 0.035
     const loyalty = Math.max(0, Math.min(100, lord.loyalty + drift * days))
 
     // Момент для мятежа: верности нет, а архимаг короны занят своим.
@@ -585,6 +612,14 @@ export function peaceTerms(
   day: number,
 ): Tribute | null {
   if (strengthRatio >= 0.85) return null
-  const perDay = Math.max(1, Math.round((1 - strengthRatio) * 12))
-  return { from: loser, to: winner, perDay, untilDay: day + TRIBUTE_DAYS }
+  // С разбитого в прах много не возьмёшь, да и соседи не хотят, чтобы
+  // победитель поднялся ещё выше: с совсем слабого берут вполовину меньше.
+  const beggared = strengthRatio < 0.2
+  const perDay = Math.max(1, Math.round((1 - strengthRatio) * (beggared ? 6 : 12)))
+  return {
+    from: loser,
+    to: winner,
+    perDay,
+    untilDay: day + (beggared ? Math.round(TRIBUTE_DAYS / 2) : TRIBUTE_DAYS),
+  }
 }

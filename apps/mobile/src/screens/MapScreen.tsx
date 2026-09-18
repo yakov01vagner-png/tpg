@@ -17,6 +17,7 @@ import {
   hours,
   layoutOf,
   lordById,
+  plagueAt,
   regionColors,
   roadsFrom,
   worldGrid,
@@ -387,7 +388,11 @@ export function MapScreen({ game }: { game: GameState }) {
           <Text style={styles.dim}>
             {TERRAIN_LABELS[chosen.terrain]} · {foodWord(foodSecurity(chosenSettlement))}
             {chosenSettlement.banditry > 0.3 ? ' · неспокойно' : ''}
+            {chosenSettlement.strain > 0.4 ? ' · земля истощена' : ''}
           </Text>
+          {plagueAt(game.plagues, chosen.id) ? (
+            <Text style={styles.plague}>Здесь мор. Ехать туда — своей волей.</Text>
+          ) : null}
           {hosts.get(chosen.id) ? (
             <Text style={styles.host}>
               {`Войско: ${hosts.get(chosen.id)?.size ?? 0} чел.${
@@ -530,4 +535,5 @@ const styles = StyleSheet.create({
   dim: { color: colors.dim, fontSize: font.small },
   here: { color: colors.gold, fontSize: font.small },
   host: { color: '#d8cdbb', fontSize: font.small },
+  plague: { color: '#c0533a', fontSize: font.small },
 })

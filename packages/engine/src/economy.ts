@@ -37,6 +37,16 @@ export interface Settlement {
   readonly building: { readonly id: BuildingId; readonly daysLeft: number } | null
   /** Кто стоит гарнизоном. */
   readonly garrison: Readonly<Partial<Record<TroopId, number>>>
+  /**
+   * Усталость земли, 0..1.
+   *
+   * Поле, с которого снимают каждый год без отдыха, родит всё хуже; брошенное
+   * — отходит. Из-за этого предел населения перестаёт быть константой: мир,
+   * упёршийся в потолок, сам себе его опускает, а потом земля отдыхает и
+   * потолок возвращается. Без этого сто лет подряд население стояло прямой
+   * линией между 214 и 248 тысячами.
+   */
+  readonly strain: number
 }
 
 /** Какая доля населения вообще способна взять оружие и уйти с чужаком. */
@@ -106,6 +116,7 @@ export function createSettlement(world: World, locationId: string): Settlement {
     buildings: [],
     building: null,
     garrison: {},
+    strain: 0,
   }
 }
 

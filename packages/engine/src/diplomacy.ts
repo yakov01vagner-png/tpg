@@ -1,5 +1,6 @@
+import type { Settlement } from './economy'
 import { type Rng, nextInt, rollChance } from './rng'
-import type { Alliance, Politics, Tribute, War } from './war'
+import type { Alliance, Politics, War } from './war'
 import { allied, atWar, pairOf } from './war'
 import type { World } from './world/types'
 
@@ -11,7 +12,6 @@ import type { World } from './world/types'
  * данью, землёй или союзом, — иначе воевать незачем и мириться незачем тоже.
  */
 export type DiplomacyEvent =
-  | { readonly type: 'tributeAgreed'; readonly tribute: Tribute }
   | { readonly type: 'allianceMade'; readonly alliance: Alliance }
   | { readonly type: 'allianceBroken'; readonly a: string; readonly b: string }
   | { readonly type: 'joinedWar'; readonly ally: string; readonly against: string }
@@ -30,17 +30,60 @@ const JOIN_WINDOW = 20
 /** Отношение, выше которого о союзе вообще заговаривают. */
 const ALLIANCE_FLOOR_TO_MAKE = 35
 
+/**
+ * Кто слишком разросся.
+ *
+ * Три прогона на век подряд кончались одинаково: Дор-Хазад терял всю землю на
+ * двух зёрнах из трёх. Сила дружины выводится из населения, поэтому
+ * проигравший слабеет и проигрывает дальше — обратной связи не было ни одной.
+ * Теперь она есть: у корон появляется общий страх перед тем, кто забрал
+ * слишком много, и этот страх портит отношение к нему у всех сразу.
+ */
+export function overgrown(
+  world: World,
+  settlements: Readonly<Record<string, Settlement>>,
+): string | null {
+  const held = new Map<string, number>()
+  let total = 0
+  for (const settlement of Object.values(settlements)) {
+    if (settlement.population <= 0 || !settlement.owner) continue
+    const side = sideOf(settlement.owner)
+    if (!side || !world.kingdoms[side]) continue
+    held.set(side, (held.get(side) ?? 0) + 1)
+    total += 1
+  }
+  if (total === 0) return null
+  let biggest: string | null = null
+  let most = 0
+  for (const [side, count] of held) {
+    if (count > most) {
+      most = count
+      biggest = side
+    }
+  }
+  // Чуть больше четверти карты — это уже страх соседей, а не просто удача.
+  return most / total > 0.28 ? biggest : null
+}
+
+function sideOf(owner: string): string | null {
+  if (owner.startsWith('crown:')) return owner.slice('crown:'.length)
+  const parts = owner.split(':')
+  return parts[0] === 'lord' ? (parts[1] ?? null) : null
+}
+
 export function tickDiplomacy(
   world: World,
   politics: Politics,
   day: number,
   rng: Rng,
+  settlements?: Readonly<Record<string, Settlement>>,
 ): DiplomacyResult {
   let generator = rng
   const events: DiplomacyEvent[] = []
   const kingdoms = Object.keys(world.kingdoms)
   if (kingdoms.length < 2) return { politics, rng: generator, events }
 
+  const giant = settlements ? overgrown(world, settlements) : null
   const relations: Record<string, number> = { ...politics.relations }
   let alliances = [...politics.alliances]
   let wars = [...politics.wars]
@@ -53,7 +96,13 @@ export function tickDiplomacy(
       const b = kingdoms[j] as string
       const key = pairOf(a, b)
       const current = relations[key] ?? 0
-      const shift = atWar(politics, a, b) ? -0.25 : 0.05
+      let shift = atWar(politics, a, b) ? -0.25 : 0.05
+      // Против того, кто забрал треть карты, сходятся остальные: отношение к
+      // нему портится у всех, а между собой они, наоборот, теплеют.
+      if (giant) {
+        if (a === giant || b === giant) shift -= 0.12
+        else shift += 0.06
+      }
       relations[key] = Math.max(-100, Math.min(100, current + shift))
     }
   }

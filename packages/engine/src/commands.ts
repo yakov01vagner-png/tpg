@@ -73,6 +73,8 @@ import {
   withUnits,
 } from './party'
 import { isAvailableAt } from './place'
+import type { Plague, PlagueEvent } from './plague'
+import { tickPlague } from './plague'
 import { PROGRESSION, applyCharacterXp, applySkillXp } from './progression'
 import { describeQuest, isComplete, offersAt } from './quest'
 import type { Quest } from './quest'
@@ -80,10 +82,13 @@ import { isShunned, lordRep, placeRep, priceFactor, withLordRep, withPlaceRep } 
 import type { Reputation } from './reputation'
 import type { Rng } from './rng'
 import { nextInt, rollChance } from './rng'
+import type { SettleEvent } from './settle'
+import { tickSettling } from './settle'
 import type { SkillId } from './skills'
 import { SKILLS } from './skills'
 import type { GameState } from './state'
 import { appendLog } from './state'
+import { DAYS_PER_YEAR } from './time'
 import type { GameTime } from './time'
 import type { TimeWindow } from './time'
 import {
@@ -103,6 +108,7 @@ import type { Politics } from './war'
 import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
 import { kingdomOf, regionOf, roadsFrom } from './world/queries'
+import type { World } from './world/types'
 
 /**
  * Команды — единственный способ изменить состояние (п.2 дизайн-документа).
@@ -1726,6 +1732,9 @@ interface Draft {
   party: Party
   battle: Battle | null
   politics: Politics
+  /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
+  world: World
+  plagues: readonly Plague[]
   bands: readonly Band[]
   companions: readonly Companion[]
   enterprises: readonly Enterprise[]
@@ -1750,6 +1759,8 @@ function open(state: GameState): Draft {
     party: state.party,
     battle: state.battle,
     politics: state.politics,
+    world: state.world,
+    plagues: state.plagues,
     bands: state.bands,
     companions: state.companions,
     enterprises: state.enterprises,
@@ -1803,8 +1814,35 @@ function close(draft: Draft): CommandResult {
       draft.events.push(...bandNews(draft.base, draft.locationId, march.events))
     }
 
-    // Договоры корон: отношение, союзы, дань.
-    const talks = tickDiplomacy(draft.base.world, draft.politics, dayOf(draft.time), draft.rng)
+    // Мор идёт своими сутками: он не ждёт, пока игрок что-то сделает.
+    for (let i = 0; i < daysPassed; i += 1) {
+      const sick = tickPlague(draft.base.world, draft.settlements, draft.plagues, draft.rng)
+      draft.plagues = sick.plagues
+      draft.settlements = sick.settlements
+      draft.rng = sick.rng
+      draft.events.push(...plagueNews(draft.base, draft.locationId, sick.events))
+    }
+
+    // Расселение считается раз в год: основание деревни — не суточное дело.
+    const yearBefore = Math.floor(dayOf(draft.base.time) / DAYS_PER_YEAR)
+    const yearNow = Math.floor(dayOf(draft.time) / DAYS_PER_YEAR)
+    for (let year = yearBefore; year < yearNow; year += 1) {
+      const settled = tickSettling(draft.world, draft.settlements, dayOf(draft.time), draft.rng)
+      draft.world = settled.world
+      draft.settlements = settled.settlements
+      draft.rng = settled.rng
+      draft.events.push(...settleNews(draft.world, draft.locationId, settled.events))
+    }
+
+    // Договоры корон: отношение, союзы, дань — и общий страх перед тем, кто
+    // забрал слишком много.
+    const talks = tickDiplomacy(
+      draft.base.world,
+      draft.politics,
+      dayOf(draft.time),
+      draft.rng,
+      draft.settlements,
+    )
     draft.politics = talks.politics
     draft.rng = talks.rng
 
@@ -1838,6 +1876,8 @@ function close(draft: Draft): CommandResult {
 
   const state: GameState = {
     ...draft.base,
+    world: draft.world,
+    plagues: draft.plagues,
     time: draft.time,
     rng: draft.rng,
     character: draft.character,
@@ -2212,6 +2252,51 @@ function succeed(draft: Draft, day: number): void {
     draft,
     `${before} умирает. Имя и земли принимает ${heir.name} — славу придётся нажить заново.`,
   )
+}
+
+/** Мор слышно издалека: о нём говорят все, кого он миновал. */
+function plagueNews(
+  state: GameState,
+  locationId: string,
+  events: readonly PlagueEvent[],
+): readonly GameEvent[] {
+  const news: GameEvent[] = []
+  const here = regionOf(state.world, locationId)?.id
+  for (const event of events) {
+    const place = 'locationId' in event ? event.locationId : event.to
+    const name = state.world.locations[place]?.name ?? 'соседнее селение'
+    const near = regionOf(state.world, place)?.id === here
+    if (event.type === 'plagueBegan') {
+      news.push({ type: 'notice', text: `Говорят, в месте ${name} открылся мор.` })
+    } else if (event.type === 'plagueSpread' && near) {
+      news.push({ type: 'notice', text: `Мор дошёл до ${name}.` })
+    } else if (event.type === 'plagueEnded' && near) {
+      news.push({ type: 'notice', text: `В месте ${name} мор отступил.` })
+    }
+  }
+  return news
+}
+
+/** Новые места и выросшие: то, ради чего стоит вернуться туда, где был. */
+function settleNews(
+  world: World,
+  locationId: string,
+  events: readonly SettleEvent[],
+): readonly GameEvent[] {
+  const news: GameEvent[] = []
+  const here = world.locations[locationId]?.provinceId
+  for (const event of events) {
+    const name = world.locations[event.locationId]?.name ?? 'новое место'
+    const near = world.locations[event.locationId]?.provinceId === here
+    if (event.type === 'founded' && near) {
+      news.push({ type: 'notice', text: `Поставлены новые выселки: ${name}.` })
+    } else if (event.type === 'resettled' && near) {
+      news.push({ type: 'notice', text: `В ${name} вернулись люди.` })
+    } else if (event.type === 'grew' && near) {
+      news.push({ type: 'notice', text: `${name} разрослось: теперь это не деревня.` })
+    }
+  }
+  return news
 }
 
 function notice(draft: Draft, text: string): void {

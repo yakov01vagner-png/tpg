@@ -110,7 +110,55 @@ export function carryingCapacity(
   const fertility = world.provinces[location.provinceId]?.fertility ?? 0.5
   const base = landCapacityOf(location.archetype, location.terrain, fertility)
   // Мельница кормит больше ртов с той же земли — значит, и предел выше.
+  // Усталость земли сюда не входит: она бьёт по урожаю, а не по тому, сколько
+  // народу тут поместится. Когда било по пределу, мир вставал намертво — все
+  // места оказывались выше него, расти было некуда, а голода всё равно не было.
   return Math.round(base * (settlement && hasBuilding(settlement, 'mill') ? 1.18 : 1))
+}
+
+/**
+ * Во что усталость обходится земле.
+ *
+ * Выжатое досуха поле кормит вдвое меньше целины. Половина — не случайное
+ * число: при меньшем провале мир по-прежнему упирался в потолок и стоял, при
+ * большем — вымирал начисто после первой же тесноты.
+ */
+export function landHealth(strain: number): number {
+  return 1 - Math.max(0, Math.min(1, strain)) * 0.3
+}
+
+/** Насколько быстро усталость догоняет ту, какой заслуживает нынешняя пашня. */
+const STRAIN_SPEED = 0.0025
+
+/**
+ * Запас, с которым живёт мир.
+ *
+ * Люди перестают множиться раньше, чем съедят последнее зерно. Без этого мир
+ * стоял ровно на ста процентах своей еды, и **любая** потеря урожая тут же
+ * оборачивалась голодом: усталость земли в шесть процентов давала сорок три
+ * тысячи голодных случаев за век вместо двух. Десятая часть запаса — это то,
+ * что отличает тяжёлый год от мора.
+ */
+const GROWTH_HEADROOM = 0.85
+
+/**
+ * Какой усталости заслуживает нынешняя нагрузка.
+ *
+ * Считается от **исходного** предела земли, а не от нынешнего: иначе выходит
+ * замкнутый круг — устала земля, предел упал, нагрузка выросла, земля устала
+ * сильнее. Первый прогон так и кончился: восемьдесят один процент усталости по
+ * всему миру и население, срезанное втрое.
+ */
+function strainTarget(load: number): number {
+  // Порог высокий нарочно. При 0.7 усталость садилась на сорок пять процентов
+  // по всему миру и не отпускала: земля была не «уставшей», а навсегда вдвое
+  // худшей, голод шёл непрерывно (78 тысяч случаев за век), а с ним и мятеж
+  // становился погодой — 452 за век. Устаёт только то поле, которое и правда
+  // жмут к пределу.
+  // Порог чуть ниже запаса, с которым живёт мир (GROWTH_HEADROOM): иначе
+  // усталость просыпается только в мгновения, когда место превысило свой
+  // предел, и за век земля устаёт на четыре процента — то есть никак.
+  return Math.max(0, Math.min(1, (load - 0.75) / 0.4))
 }
 
 /** Сколько еды место производит за сутки. */
@@ -120,7 +168,11 @@ export function foodCapacity(
   config: LifeConfig = LIFE,
   settlement?: Settlement,
 ): number {
-  return carryingCapacity(world, locationId, settlement) * config.foodPerPerson
+  // Вот где усталость земли видна: выжатое поле родит меньше. Дальше всё
+  // работает само — нехватка идёт в голод, голод в разбой и недовольство,
+  // люди уходят, пашни отдыхают, урожай возвращается.
+  const health = landHealth(settlement?.strain ?? 0)
+  return carryingCapacity(world, locationId, settlement) * config.foodPerPerson * health
 }
 
 export function foodStock(settlement: Settlement): number {
@@ -194,7 +246,8 @@ function produceAndEat(
 
     const stock = { ...settlement.stock }
     // Что даёт земля. Мельница выжимает из того же поля больше.
-    const produced = foodCapacity(world, id, config) * (hasBuilding(settlement, 'mill') ? 1.18 : 1)
+    const produced =
+      foodCapacity(world, id, config, settlement) * (hasBuilding(settlement, 'mill') ? 1.18 : 1)
     const location = world.locations[id]
     const seaside = location?.terrain === 'coast' || location?.terrain === 'marsh'
     if (seaside) {
@@ -243,6 +296,13 @@ function produceAndEat(
       recruitPool(settlement.population) * (hasBuilding(settlement, 'barracks') ? 1.5 : 1)
     const recruits = Math.min(pool, settlement.recruits + pool * RECRUIT_RECOVERY)
 
+    // Земля устаёт от того, что с неё берут. Пашут в полную силу — беднеет;
+    // людей мало, поля под паром — отходит. Отсюда и колебание вместо потолка:
+    // упёршийся в предел мир сам себе его опускает, а потом земля отдыхает.
+    const ceiling = carryingCapacity(world, id, settlement)
+    const target = strainTarget(settlement.population / Math.max(1, ceiling))
+    const strain = settlement.strain + (target - settlement.strain) * STRAIN_SPEED
+
     let population = settlement.population
     if (hunger > 0) {
       const deaths = Math.round(population * config.starvationDeaths * hunger)
@@ -253,7 +313,7 @@ function produceAndEat(
         const refuge = bestFedNeighbour(world, settlements, id, config)
         if (refuge) arrivals[refuge] = (arrivals[refuge] ?? 0) + leaving
       }
-    } else if (population < carryingCapacity(world, id, settlement)) {
+    } else if (population < ceiling * GROWTH_HEADROOM) {
       population += Math.max(1, Math.round(population * config.growth))
     }
 
@@ -270,6 +330,7 @@ function produceAndEat(
       // до целого съело бы её полностью — рекруты не восполнялись бы никогда.
       recruits: Math.round(recruits * 100) / 100,
       banditry: Math.round(banditry * 1000) / 1000,
+      strain: Math.round(strain * 10000) / 10000,
       building,
       buildings,
     }
