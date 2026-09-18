@@ -9,6 +9,7 @@ import { type Rng, nextFloat, nextInt, rollChance } from './rng'
 import type { Lord, Politics } from './war'
 import { atWar, isRebel } from './war'
 import { neighbourSettlements, roadsFrom } from './world/queries'
+import { fordShut } from './world/rivers'
 import type { Terrain, World } from './world/types'
 
 /**
@@ -206,8 +207,19 @@ export function retinue(strength: number, rng: Rng): [Units, Rng] {
   return [units, next]
 }
 
-/** Следующий шаг по дороге к цели. Дорог мало, поиск дешёвый. */
-export function nextHop(world: World, fromId: string, toId: string): string | null {
+/**
+ * Следующий шаг по дороге к цели. Дорог мало, поиск дешёвый.
+ *
+ * День нужен из-за половодья: весной брод под водой, и войско обходит его так
+ * же, как обходит герой (rivers.ts). Без дня — время неизвестно, и река не
+ * разливается: так ходят тесты и старые вызовы.
+ */
+export function nextHop(
+  world: World,
+  fromId: string,
+  toId: string,
+  day: number | null = null,
+): string | null {
   if (fromId === toId) return null
   const cameFrom = new Map<string, string>()
   const queue = [fromId]
@@ -216,6 +228,7 @@ export function nextHop(world: World, fromId: string, toId: string): string | nu
     const current = queue.shift() as string
     for (const road of roadsFrom(world, current)) {
       if (seen.has(road.to)) continue
+      if (fordShut(world, road.to, day)) continue
       seen.add(road.to)
       cameFrom.set(road.to, current)
       if (road.to === toId) {
@@ -531,6 +544,7 @@ export function tickBands(
   settlements: Readonly<Record<string, Settlement>>,
   bands: readonly Band[],
   rng: Rng,
+  day: number | null = null,
 ): BandResult {
   let generator = rng
   let places = settlements
@@ -915,7 +929,7 @@ export function tickBands(
       finished.push({ ...band, goal })
       continue
     }
-    const step = nextHop(world, band.locationId, target)
+    const step = nextHop(world, band.locationId, target, day)
     if (!step) {
       finished.push({ ...band, goal: { type: 'muster' } })
       continue

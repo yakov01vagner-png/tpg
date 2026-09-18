@@ -8,17 +8,22 @@ import {
   NAME_QUALIFIERS,
   PROVINCE_NAMES,
   PROVINCE_PREFIXES,
+  RIVER_NAMES,
   SETTLEMENT_NAMES,
   TERRAIN_FERTILITY,
 } from '../content/world'
 import { landCapacityOf } from '../life'
 import type { Rng } from '../rng'
 import { createRng, nextFloat, nextInt } from '../rng'
-import { MAP_SIZE, SITE_GAP, Spacer, placeLocations, provinceCentersOf } from './layout'
+import type { Point } from './layout'
+import { MAP_SIZE, MIN_GAP, SITE_GAP, Spacer, placeLocations, provinceCentersOf } from './layout'
 import { hopsBetween } from './queries'
+import type { River, RiverMask } from './rivers'
+import { buildRivers, onRiver, riverCrossing, riverMask } from './rivers'
+import type { Spot } from './roads'
 import { buildRoads, hoursBetweenPlaces, neighbourPairs, spotOf } from './roads'
 import type { Sea } from './sea'
-import { buildSea, onShore } from './sea'
+import { buildSea, crossesWater, onShore } from './sea'
 import { FRONTIER, isSettlement, isSite } from './types'
 import type {
   Kingdom,
@@ -224,20 +229,132 @@ export function generateWorld(
   // Вода кладётся после мест и до дорог: суша — это то, что вокруг людей и
   // вдоль дорог между ними, а дорога по морю не идёт (sea.ts). Соседство
   // считается заранее и тем же правилом, каким его потом посчитают дороги.
-  const links = neighbourPairs(Object.values(placed).map(spotOf)).map(
-    (pair) => [pair.from, pair.to] as const,
-  )
-  const sea = buildSea(
-    Object.values(placed),
-    links,
-    Object.values(provinceCentersOf({ kingdoms, regions, provinces } as World)),
-    seed,
-  )
+  const pairs = neighbourPairs(Object.values(placed).map(spotOf))
+  const links = pairs.map((pair) => [pair.from, pair.to] as const)
+  const centres = provinceCentersOf({ kingdoms, regions, provinces } as World)
+  const sea = buildSea(Object.values(placed), links, Object.values(centres), seed)
+
+  // Реки текут по уже готовой суше к уже готовому морю, а броды встают там,
+  // где их переходит дорога: иначе переправа оказывается местом с дурной
+  // репутацией, но без реки (rivers.ts). Соседство берётся то же самое — море
+  // его не меняет, а только отнимает у него переходы через воду.
+  const rivers = buildRivers(sea, riverSources(sea, centres, provinces), RIVER_NAMES)
+  const currents = riverMask(rivers)
+  const dry = pairs.filter((pair) => !crossesWater(sea, pair.from, pair.to))
+  fillFords(names, spacer, { provinces, locations: placed }, dry, currents)
 
   settlePorts(placed, provinces, regions, sea)
 
-  const skeleton = { kingdoms, regions, provinces, locations: placed, sea }
+  const skeleton = { kingdoms, regions, provinces, locations: placed, sea, rivers }
   return { ...skeleton, roads: buildRoads(skeleton) }
+}
+
+/**
+ * Откуда берутся реки.
+ *
+ * Исток — в горах и холмах, подальше от моря: река, начинающаяся в получасе от
+ * прибоя, — это ручей, и дорогу она не режет. Истоки разводятся друг от друга,
+ * иначе с одной гряды сходит десяток русел в одну сторону.
+ */
+const SOURCE_GAP = 260
+const INLAND = 220
+const MAX_RIVERS = 12
+
+function riverSources(
+  sea: Sea,
+  centres: Readonly<Record<string, Point>>,
+  provinces: Readonly<Record<string, Province>>,
+): Point[] {
+  const highland: Point[] = []
+  const lowland: Point[] = []
+  for (const [provinceId, point] of Object.entries(centres)) {
+    const terrain = provinces[provinceId]?.terrain
+    if (!terrain || onShore(sea, point, INLAND)) continue
+    if (terrain === 'mountains' || terrain === 'hills') highland.push(point)
+    else lowland.push(point)
+  }
+  const chosen: Point[] = []
+  // Сперва горы: река идёт с высоты. Если гор мало, исток берётся с суши
+  // подальше от воды — родник бьёт и на равнине.
+  for (const point of [...highland, ...lowland]) {
+    if (chosen.length >= MAX_RIVERS) break
+    if (chosen.some((other) => Math.hypot(other.x - point.x, other.y - point.y) < SOURCE_GAP)) {
+      continue
+    }
+    chosen.push(point)
+  }
+  return chosen
+}
+
+/**
+ * Броды на руслах.
+ *
+ * Дорога переходит реку только там, где на русле стоит место, — значит это
+ * место должно там стоять. Поэтому сперва считается соседство без рек (те
+ * двое, между которыми никто не стоит), а потом на каждый отрезок, который
+ * упирается в русло, кладётся брод ровно в точке перехода. После этого сам
+ * отрезок перестаёт быть прямым: брод ближе к обоим концам, чем они друг к
+ * другу, и дорога идёт через него (roads.ts).
+ *
+ * Вид места выбирает земля: в топях это гать, у воды — переправа с паромом, а
+ * на прочей земле брод. Разница не косметическая: брод весной уходит под воду,
+ * а паром ходит и в половодье (`isFlood`).
+ */
+const FORD_GAP = 36
+
+function fillFords(
+  names: Namer,
+  spacer: Spacer,
+  world: { provinces: Record<string, Province>; locations: Record<string, Location> },
+  pairs: readonly { from: Spot; to: Spot }[],
+  currents: RiverMask,
+): void {
+  const counters = new Map<string, number>()
+  for (const province of Object.values(world.provinces)) {
+    counters.set(province.id, province.siteIds.length)
+  }
+  const placed: Point[] = []
+
+  for (const pair of pairs) {
+    const from = world.locations[pair.from.id]
+    const to = world.locations[pair.to.id]
+    if (!from || !to) continue
+    const crossing = riverCrossing(currents, from, to)
+    if (!crossing) continue
+    // Один брод на переход: соседние пары переходят реку в одном и том же
+    // месте, и ставить там три брода подряд незачем.
+    if (placed.some((one) => Math.hypot(one.x - crossing.x, one.y - crossing.y) < FORD_GAP)) {
+      continue
+    }
+    const host =
+      Math.hypot(from.x - crossing.x, from.y - crossing.y) <
+      Math.hypot(to.x - crossing.x, to.y - crossing.y)
+        ? from
+        : to
+    const province = world.provinces[host.provinceId]
+    if (!province) continue
+    const kind: SiteKind =
+      province.terrain === 'marsh' ? 'causeway' : province.terrain === 'coast' ? 'crossing' : 'ford'
+    // Распорядитель может отвести точку от русла, если тут уже тесно, — тогда
+    // брод не брод: он обязан стоять на реке, иначе через реку не пройти.
+    const spaced = spacer.place(crossing, MIN_GAP)
+    const point = onRiver(currents, spaced.x, spaced.y) ? spaced : crossing
+    const next = (counters.get(province.id) ?? 0) + 1
+    counters.set(province.id, next)
+    const id = `${province.id}.s${next - 1}`
+    world.locations[id] = {
+      id,
+      provinceId: province.id,
+      name: names.forSite(kind),
+      archetype: kind,
+      terrain: province.terrain,
+      population: 0,
+      x: point.x,
+      y: point.y,
+    }
+    world.provinces[province.id] = { ...province, siteIds: [...province.siteIds, id] }
+    placed.push(point)
+  }
 }
 
 /**

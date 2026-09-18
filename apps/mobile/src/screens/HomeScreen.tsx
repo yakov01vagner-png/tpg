@@ -15,6 +15,7 @@ import {
   examsAt,
   foeName,
   foodSecurity,
+  fordShut,
   formatDuration,
   hours,
   isOwnedByPlayer,
@@ -282,13 +283,16 @@ export function HomeScreen({ game }: { game: GameState }) {
             // жителей это его собственная дурная слава, а не разбой округи.
             const wild = isSite(target.archetype) ? SITES[target.archetype] : null
             const grim = (wild?.danger ?? 0) >= 0.35
+            // Весной брод под водой: чип остаётся на месте, но говорит почему
+            // (этап 34).
+            const flooded = fordShut(game.world, road.to, dayOf(game.time))
             return (
               <Road
                 key={road.to}
                 name={target.name}
                 kind={target.archetype}
-                meta={`${formatDuration(hours(dead ? road.hours * 2 : road.hours))}${danger ? ' · разбой' : ''}${grim ? ' · недоброе место' : ''}${plagueThere ? ' · мор' : ''}${dead ? ' · заросла' : ''}`}
-                warn={danger || plagueThere || grim}
+                meta={`${formatDuration(hours(dead ? road.hours * 2 : road.hours))}${danger ? ' · разбой' : ''}${grim ? ' · недоброе место' : ''}${plagueThere ? ' · мор' : ''}${dead ? ' · заросла' : ''}${flooded ? ' · половодье' : ''}`}
+                warn={danger || plagueThere || grim || flooded}
                 blocked={!canApply(game, command).ok}
                 onPress={() => dispatch(command)}
               />

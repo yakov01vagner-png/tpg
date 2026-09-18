@@ -33,6 +33,8 @@ import {
   plagueAt,
   pointBetween,
   regionColors,
+  riverAt,
+  riversOf,
   roadsFrom,
   routeTo,
   worldGrid,
@@ -40,7 +42,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { GestureResponderEvent } from 'react-native'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
-import Svg, { Circle, G, Line, Rect, Text as SvgText } from 'react-native-svg'
+import Svg, { Circle, G, Line, Path, Rect, Text as SvgText } from 'react-native-svg'
 import { openSheet } from '../game/nav'
 import { dispatch } from '../game/store'
 import { colors, font, radius, spacing } from '../theme'
@@ -239,6 +241,20 @@ export function MapScreen({ game }: { game: GameState }) {
     return out
   }, [game.enterprises, points])
 
+  // Реки: то, что было на земле до всех дорог. Рисуются под дорогами и видны
+  // на всех уровнях — река не перестаёт быть рекой оттого, что смотришь на
+  // мир целиком (этап 34).
+  const rivers = useMemo(
+    () =>
+      riversOf(game.world).map((river) => ({
+        id: river.id,
+        d: river.points
+          .map((knee, index) => `${index === 0 ? 'M' : 'L'} ${knee.x} ${knee.y}`)
+          .join(' '),
+      })),
+    [game.world],
+  )
+
   // Дороги: отрезок между соседями. Рисуются один раз на пару, цвет — от того,
   // чего он стоит: тракт по равнине бледный и тонкий, гать через топь толще и
   // темнее. До 0.4 карта дорог не показывала вовсе — а дорога и есть земля.
@@ -315,6 +331,10 @@ export function MapScreen({ game }: { game: GameState }) {
   const road = selected
     ? roadsFrom(game.world, game.locationId).find((candidate) => candidate.to === selected)
     : undefined
+  // Почему туда нельзя пойти прямо сейчас: весной брод под водой, и кнопка
+  // «идти» должна не молчать, а сказать это (этап 34).
+  const travelGate =
+    selected && road ? canApply(game, { type: 'travel', toLocationId: selected }) : null
 
   // «Мир» — это всё полотно целиком в окне, поэтому масштаб считается от окна, а
   // не назначается числом: на узком телефоне и на широком он разный.
@@ -434,6 +454,31 @@ export function MapScreen({ game }: { game: GameState }) {
                     width={band.width}
                     height={grid.cell}
                     fill={band.fill}
+                  />
+                ))}
+              </G>
+
+              <G>
+                {rivers.map((river) => (
+                  <Path
+                    key={`bank${river.id}`}
+                    d={river.d}
+                    stroke={SEA_COLOR}
+                    strokeWidth={5 * mark}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    fill="none"
+                  />
+                ))}
+                {rivers.map((river) => (
+                  <Path
+                    key={river.id}
+                    d={river.d}
+                    stroke={RIVER_COLOR}
+                    strokeWidth={2.4 * mark}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    fill="none"
                   />
                 ))}
               </G>
@@ -756,6 +801,9 @@ export function MapScreen({ game }: { game: GameState }) {
               ) : null}
             </>
           )}
+          {riverAt(game.world, chosen) ? (
+            <Text style={styles.dim}>{`На реке ${riverAt(game.world, chosen)?.name ?? ''}`}</Text>
+          ) : null}
           {route && route.steps.length > 0 ? (
             <Text style={styles.dim}>
               {`Путь: ${route.steps.length} ${stepWord(route.steps.length)} · ${formatDuration(hours(route.hours))}${
@@ -811,7 +859,9 @@ export function MapScreen({ game }: { game: GameState }) {
               onPress={() => dispatch({ type: 'foundCaravan', awayId: chosen.id })}
             />
           ) : null}
-          {road ? (
+          {road && travelGate && !travelGate.ok && travelGate.code === 'flood' ? (
+            <Text style={styles.plague}>{travelGate.message}</Text>
+          ) : road ? (
             <Button
               label={`Идти сюда — ${formatDuration(hours(road.hours))}`}
               tone="primary"
@@ -845,6 +895,15 @@ const NOBODY_COLOR = '#4a453e'
  * а вода на ней фон, но фон, у которого есть край.
  */
 const SEA_COLOR = '#1b2a38'
+
+/**
+ * Цвет реки.
+ *
+ * Русло рисуется дважды: тёмный берег цветом моря и светлая вода поверх него.
+ * Одной линией река терялась — на карте корон земля бывает синей, и русло
+ * сливалось с ней в тень под холмами.
+ */
+const RIVER_COLOR = '#5f9dc0'
 
 function colorOf(
   cell: GridCell | null | undefined,

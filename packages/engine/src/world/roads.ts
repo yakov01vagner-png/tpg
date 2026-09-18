@@ -1,5 +1,7 @@
 import { SITES } from '../content/sites'
 import { TERRAIN_TRAVEL } from '../content/world'
+import type { RiverMask } from './rivers'
+import { NO_RIVERS, crossesRiver, riverMaskOf } from './rivers'
 import type { Sea } from './sea'
 import { crossesWater } from './sea'
 import type { Location, Road, Terrain, World } from './types'
@@ -50,6 +52,7 @@ export function buildRoads(world: Omit<World, 'roads'>): Record<string, readonly
   const spots = Object.values(world.locations).map(toSpot)
   const roads: Record<string, Road[]> = {}
   const sea = world.sea ?? null
+  const rivers = riverMaskOf(world)
 
   const connect = (a: Spot, b: Spot) => {
     const forward = roads[a.id] ?? []
@@ -63,7 +66,7 @@ export function buildRoads(world: Omit<World, 'roads'>): Record<string, readonly
   }
 
   const union = new Union(spots.map((spot) => spot.id))
-  for (const pair of neighbourPairs(spots, sea)) {
+  for (const pair of neighbourPairs(spots, sea, rivers)) {
     connect(pair.from, pair.to)
     union.join(pair.from.id, pair.to.id)
   }
@@ -71,7 +74,7 @@ export function buildRoads(world: Omit<World, 'roads'>): Record<string, readonly
   // Острова сшиваются кратчайшим переходом посуху: мир должен быть связен,
   // даже если между двумя его кусками пусто. Через воду перемычку не тянут —
   // туда плывут (этап 35).
-  bridgeIslands(spots, union, connect, sea)
+  bridgeIslands(spots, union, connect, sea, rivers)
 
   return roads
 }
@@ -86,6 +89,7 @@ export function buildRoads(world: Omit<World, 'roads'>): Record<string, readonly
 export function neighbourPairs(
   spots: readonly Spot[],
   sea: Sea | null = null,
+  rivers: RiverMask = NO_RIVERS,
 ): { from: Spot; to: Spot }[] {
   const index = new Grid(spots)
   const pairs: { from: Spot; to: Spot }[] = []
@@ -97,6 +101,9 @@ export function neighbourPairs(
       // По воде дороги не бывает: залив обходят берегом или переплывают, но
       // тракта через него нет (этап 33).
       if (sea && crossesWater(sea, a, b)) return true
+      // И через реку тракт идёт только бродом: отрезок, переходящий русло
+      // мимо места, стоящего на нём, — это дорога вплавь (этап 34).
+      if (crossesRiver(rivers, a, b)) return true
       pairs.push({ from: a, to: b })
       return true
     })
@@ -163,6 +170,7 @@ function bridgeIslands(
   union: Union,
   connect: (a: Spot, b: Spot) => void,
   sea: Sea | null = null,
+  rivers: RiverMask = NO_RIVERS,
 ): void {
   for (let guard = 0; guard < 64; guard += 1) {
     const islands = new Map<string, Spot[]>()
@@ -184,6 +192,7 @@ function bridgeIslands(
       for (const to of spots) {
         if (mine.has(to.id)) continue
         if (sea && crossesWater(sea, from, to)) continue
+        if (crossesRiver(rivers, from, to)) continue
         const span = distance(from, to)
         if (!best || span < best.span) best = { from, to, span }
       }

@@ -91,6 +91,7 @@ export function tickEnterprises(
   enterprises: readonly Enterprise[],
   managerSkill: (enterprise: Enterprise) => number,
   rng: Rng,
+  day: number | null = null,
 ): EnterpriseResult {
   if (enterprises.length === 0) return { enterprises, income: 0, rng, events: [] }
   let generator = rng
@@ -180,7 +181,8 @@ export function tickEnterprises(
       next.push(enterprise)
       continue
     }
-    const step = nextHop(world, enterprise.locationId, target)
+    // Обоз тоже стоит перед разлившейся рекой: возчик не полезет в воду.
+    const step = nextHop(world, enterprise.locationId, target, day)
     if (!step) {
       next.push(enterprise)
       continue

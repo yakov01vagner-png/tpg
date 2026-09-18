@@ -127,6 +127,7 @@ import type { Politics } from './war'
 import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
 import { kingdomOf, regionOf, roadsFrom } from './world/queries'
+import { fordShut } from './world/rivers'
 import type { World } from './world/types'
 import { TERRAIN_LABELS, isSettlement, isSite } from './world/types'
 import { bedridden, defeatOutcome, healWound } from './wounds'
@@ -223,6 +224,7 @@ export type FailureCode =
   | 'captive'
   | 'wounded'
   | 'onTheRoad'
+  | 'flood'
   | 'invalid'
 
 export type CommandResult =
@@ -488,6 +490,12 @@ function travel(state: GameState, toLocationId: string): CommandResult {
     (candidate) => candidate.to === toLocationId,
   )
   if (!road) return fail('unknownAction', `Отсюда нет прямой дороги в ${destination.name}.`)
+
+  // Весной брод уходит под воду: мелкое место — не мост (rivers.ts). Обход
+  // есть всегда, потому что реку переходят не в одном месте.
+  if (fordShut(state.world, toLocationId, dayOf(state.time))) {
+    return fail('flood', `Половодье: ${destination.name} под большой водой, вброд не пройти.`)
+  }
 
   // К мёртвому месту дорога заросла: идти вдвое дольше (band.ts, OVERGROWN).
   const roadHoursNow = roadHours(state.world, state.settlements, state.locationId, road.to)
@@ -2776,6 +2784,7 @@ function close(draft: Draft): CommandResult {
         draft.settlements,
         draft.bands,
         draft.rng,
+        dayOf(draft.time),
       )
       draft.bands = march.bands
       draft.settlements = march.settlements
@@ -2836,6 +2845,7 @@ function close(draft: Draft): CommandResult {
           return manager?.skills.trade ?? 0
         },
         draft.rng,
+        dayOf(draft.time),
       )
       draft.enterprises = trade.enterprises
       draft.rng = trade.rng

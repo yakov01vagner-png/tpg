@@ -1,4 +1,5 @@
 import { layoutOf, provinceCentersOf } from './layout'
+import { landPieces, pieceAt, riverMaskOf } from './rivers'
 import { isWater } from './sea'
 import type { Terrain, World } from './types'
 import { isSettlement } from './types'
@@ -104,6 +105,18 @@ export function worldGrid(world: World, mapSize: number, reach: number = REACH):
     if (provinceId) pushAnchor(point, provinceId)
   }
 
+  // Река — рубеж (этап 34). Земля делится руслами и морем на куски, и клетка
+  // достаётся тому якорю, до которого от неё можно дойти, не переплывая: иначе
+  // провинция перешагивает реку, и граница на карте идёт мимо того самого
+  // рубежа, из-за которого воюют. Там, где своего берега не нашлось, правило
+  // отступает: клетка остаётся у ближайшего якоря, лишь бы не пропадала земля.
+  const sea = world.sea ?? null
+  const currents = riverMaskOf(world)
+  const pieces = sea && currents.size > 1 ? landPieces(sea, currents) : null
+  const anchorPiece = pieces
+    ? anchorX.map((x, index) => pieceAt(pieces, sea?.size ?? 1, x, anchorY[index] ?? 0))
+    : null
+
   // Поселения по провинциям: внутри своей земли ищем ближайшее, чтобы знать
   // округу. Места без жителей сюда не идут: они держат землю, но не околицу —
   // возле кургана люди не живут, и глушь вокруг него остаётся глушью.
@@ -122,7 +135,6 @@ export function worldGrid(world: World, mapSize: number, reach: number = REACH):
   const described = new Map<string, Omit<GridCell, 'locationId' | 'wilds'>>()
   const cells: (GridCell | null)[] = []
   const water: boolean[] = []
-  const sea = world.sea ?? null
   for (let row = 0; row < GRID_SIZE; row += 1) {
     const cy = (row + 0.5) * cell
     for (let column = 0; column < GRID_SIZE; column += 1) {
@@ -138,17 +150,27 @@ export function worldGrid(world: World, mapSize: number, reach: number = REACH):
       // Сравниваем квадраты: корень на каждую пару «клетка — якорь» стоил
       // тридцати миллисекунд на открытие карты, а порядок не меняет.
       const limit = reach * wobble(column, row)
+      const mine = pieces && sea ? pieceAt(pieces, sea.size, cx, cy) : -1
       let best = -1
       let bestDistance = limit * limit
+      // Ближайший якорь вообще — на случай, если на своём берегу якорей нет.
+      let anyBest = -1
+      let anyDistance = limit * limit
       for (let i = 0; i < anchorX.length; i += 1) {
         const dx = (anchorX[i] ?? 0) - cx
         const dy = (anchorY[i] ?? 0) - cy
         const distance = dx * dx + dy * dy
+        if (distance < anyDistance) {
+          anyDistance = distance
+          anyBest = i
+        }
+        if (mine >= 0 && anchorPiece && anchorPiece[i] !== mine) continue
         if (distance < bestDistance) {
           bestDistance = distance
           best = i
         }
       }
+      if (best < 0) best = anyBest
       if (best < 0) {
         cells.push(null)
         continue
