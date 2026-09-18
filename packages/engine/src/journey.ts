@@ -55,6 +55,15 @@ export function paceOf(party: Party, wounded: boolean): number {
   return Math.round(speed * crowd * (wounded ? 1.35 : 1) * 100) / 100
 }
 
+/**
+ * Шаг войска и шаг обоза.
+ *
+ * Те же числа, что у отряда игрока, только считать состав дружины незачем:
+ * войско идёт обозом всегда. Обоз купца — ещё медленнее: телега не человек.
+ */
+export const ARMY_PACE = 1.35
+export const WAGON_PACE = 1.5
+
 /** Часы отрезка для этого отряда: дорога плюс то, кто по ней идёт. */
 export function legHoursFor(roadHours: number, pace: number): number {
   return Math.max(1, Math.round(roadHours * pace))

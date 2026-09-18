@@ -1,7 +1,7 @@
 import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
 import type { Band, BandEvent } from './band'
-import { bandSize, clash, nextHop, roadHours, tickBands } from './band'
+import { bandSize, bandsOnLeg, clash, nextHop, roadHours, tickBands } from './band'
 import type { Battle, BattleSide, GroupId, OrderId } from './battle'
 import {
   ROUT_MORALE,
@@ -561,6 +561,7 @@ function walk(draft: Draft, minutes: number): void {
     // идёшь медленнее, и ждут чаще, поэтому ночной переход стоит вдвое дороже
     // дневного при той же земле.
     roadAmbush(draft, journey, minutes / MINUTES_PER_HOUR)
+    roadMeet(draft, journey, minutes / MINUTES_PER_HOUR)
     return
   }
 
@@ -589,6 +590,46 @@ function roadWatch(draft: Draft, journey: Journey): void {
     `Впереди на дороге войско: ${foeName(draft.base, host.lordId)} у ${where}.`,
     'world',
   )
+}
+
+/**
+ * Насколько часто на отрезке сходятся лицом к лицу.
+ *
+ * Не каждый час: дорога широка, обозы расходятся, войско видит путника раньше,
+ * чем путник войско. Но за долгий переход мимо чужой рати не пройти.
+ */
+const MEET_CHANCE = 0.2
+
+/**
+ * Встреча с чужой дружиной на отрезке.
+ *
+ * Перехват работает в обе стороны: не только игрок ловит идущих грабить, но и
+ * его самого можно поймать в поле. Воюющие берут в бой, прочие расходятся — и о
+ * них говорят.
+ */
+function roadMeet(draft: Draft, journey: Journey, hoursOnRoad: number): void {
+  if (draft.battle || hoursOnRoad <= 0) return
+  const met = bandsOnLeg(draft.bands, journey.fromId, journey.toId)[0]
+  if (!met) return
+  const [meets, afterMeet] = rollChance(draft.rng, Math.min(0.6, MEET_CHANCE * hoursOnRoad))
+  draft.rng = afterMeet
+  if (!meets) return
+
+  const side = draft.service ?? draft.realm?.name ?? null
+  const theirs = met.kingdomId ?? met.lordId
+  const hostile = side !== null && atWar(draft.politics, side, theirs)
+  const who = foeName(draft.base, met.lordId)
+  if (!hostile || partySize(draft.party) < 2) {
+    notice(draft, `Разминулись на дороге: ${who} идёт своей дорогой.`, 'world')
+    return
+  }
+  const ahead = draft.base.world.locations[journey.toId]
+  draft.bands = draft.bands.filter((one) => one.id !== met.id)
+  const enemy: BattleSide = { name: who, units: met.units, morale: met.morale, fatigue: 0 }
+  draft.battle = startBattle(draft.party, enemy, ahead?.terrain ?? 'plains', {
+    foeId: met.kingdomId ? `crown:${met.kingdomId}` : met.lordId,
+  })
+  notice(draft, `На дороге встретились: ${who}. Расходиться поздно.`)
 }
 
 /** Сколько народу «водится» в глуши: у места без жителей своего населения нет. */
@@ -1643,7 +1684,14 @@ function attackBand(state: GameState, bandId: string): CommandResult {
   if (state.battle) return fail('invalid', 'Сначала кончи бой, который идёт.')
   const band = state.bands.find((candidate) => candidate.id === bandId)
   if (!band) return fail('invalid', 'Этого войска здесь уже нет.')
-  if (band.locationId !== state.locationId || band.travel) {
+  // В пути перехватывают тех, кто на том же отрезке: стоит на его конце или
+  // идёт по нему навстречу. Это и есть перехват — встретить до того, как дошли.
+  const onLeg = state.journey
+    ? bandsOnLeg(state.bands, state.journey.fromId, state.journey.toId).some(
+        (one) => one.id === bandId,
+      )
+    : false
+  if (!onLeg && (band.locationId !== state.locationId || band.travel)) {
     return fail('unavailableHere', 'Это войско не здесь.')
   }
   if (partySize(state.party) < 2) {

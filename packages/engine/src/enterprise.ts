@@ -4,6 +4,7 @@ import { GOODS } from './content/goods'
 import { SITES } from './content/sites'
 import type { Settlement } from './economy'
 import { priceOf } from './economy'
+import { WAGON_PACE, legHoursFor } from './journey'
 import { foodSecurity } from './life'
 import { type Rng, rollChance } from './rng'
 import { roadsFrom } from './world/queries'
@@ -126,13 +127,15 @@ export function tickEnterprises(
       }
       const arrived = enterprise.travel.toLocationId
       const place = settlements[arrived]
-      // Разбой на дорогах: обоз доходит не всегда. Опасность берётся у земли,
-      // как и для самого героя: в урочище грабят и там, где нет ни души, —
-      // иначе обоз, идущий через глушь, был неуязвим просто потому, что в
-      // глуши некому держать разбой.
-      const kind = world.locations[arrived]?.archetype
-      const wild = kind && isSite(kind) ? SITES[kind].danger : 0
-      const danger = Math.max((place?.banditry ?? 0) * 0.5, wild * 0.5)
+      // Разбой на дорогах: обоз доходит не всегда. Опасность берётся у земли —
+      // у всего отрезка, а не у его конца: обоз идёт по дороге целиком, и
+      // грабят его там, где удобно грабить. В урочище грабят и там, где нет ни
+      // души, иначе обоз, идущий через глушь, был бы неуязвим просто потому,
+      // что в глуши некому держать разбой.
+      const danger = Math.max(
+        landDanger(world, settlements, arrived),
+        landDanger(world, settlements, enterprise.locationId),
+      )
       const [robbed, afterRoll] = rollChance(generator, danger)
       generator = afterRoll
       if (robbed) {
@@ -186,11 +189,24 @@ export function tickEnterprises(
     next.push({
       ...enterprise,
       travelTarget: target,
-      travel: { toLocationId: step, hoursLeft: Math.round((road?.hours ?? 12) * 1.5) },
+      // Часы отрезка считает то же правило, что у героя и у дружины: обоз
+      // просто медленнее (journey.ts).
+      travel: { toLocationId: step, hoursLeft: legHoursFor(road?.hours ?? 12, WAGON_PACE) },
     })
   }
 
   return { enterprises: next, income, rng: generator, events }
+}
+
+/** Насколько опасна земля места для обоза: разбой округи и слава самой глуши. */
+function landDanger(
+  world: World,
+  settlements: Readonly<Record<string, Settlement>>,
+  locationId: string,
+): number {
+  const kind = world.locations[locationId]?.archetype
+  const wild = kind && isSite(kind) ? SITES[kind].danger : 0
+  return Math.max((settlements[locationId]?.banditry ?? 0) * 0.5, wild * 0.5)
 }
 
 /**

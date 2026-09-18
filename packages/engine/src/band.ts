@@ -3,6 +3,7 @@ import type { GroupId, OrderId } from './battle'
 import type { TroopId } from './content/troops'
 import type { Settlement } from './economy'
 import { takeLand } from './holding'
+import { ARMY_PACE, legHoursFor } from './journey'
 import type { Party } from './party'
 import { type Rng, nextFloat, nextInt, rollChance } from './rng'
 import type { Lord, Politics } from './war'
@@ -110,8 +111,6 @@ const MUSTER_CHANCE = 0.6
  * передышки. Раз в месяц — это уже война, а не погода.
  */
 const CAMPAIGN_CHANCE = 0.03
-/** Скорость войска: обоз медленнее одинокого путника. */
-const ARMY_SLOWDOWN = 1.35
 
 export function bandSize(band: Band): number {
   return unitsSize(band.units)
@@ -277,9 +276,28 @@ function distancesFrom(world: World, fromId: string, limit = MAX_MARCH_HOURS): M
   return distance
 }
 
+/** Часы отрезка для войска: то же правило, что у героя (journey.ts). */
 function hoursTo(world: World, fromId: string, toId: string): number {
   const road = roadsFrom(world, fromId).find((candidate) => candidate.to === toId)
-  return Math.round((road?.hours ?? 12) * ARMY_SLOWDOWN)
+  return legHoursFor(road?.hours ?? 12, ARMY_PACE)
+}
+
+/**
+ * Кто сейчас на этом отрезке дороги.
+ *
+ * Отрезок — это не точка: на нём стоят те, кто задержался на его концах, и идут
+ * те, кто идёт по нему в любую сторону. С версии 0.4 по дорогам ходят все
+ * одинаково, поэтому встретиться можно не только в деревне — и перехватить
+ * войско можно до того, как оно дошло.
+ */
+export function bandsOnLeg(bands: readonly Band[], fromId: string, toId: string): readonly Band[] {
+  return bands.filter((band) => {
+    if (band.travel) {
+      const ends = [band.locationId, band.travel.toLocationId]
+      return ends.includes(fromId) && ends.includes(toId)
+    }
+    return band.locationId === fromId || band.locationId === toId
+  })
 }
 
 /** Дорога к мёртвому месту зарастает: идти туда вдвое дольше. */
