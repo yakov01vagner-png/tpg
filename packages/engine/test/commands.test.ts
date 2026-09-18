@@ -8,6 +8,7 @@ import { createGame } from '../src/state'
 import { WORLD_START, dayOf, hourOf, hours } from '../src/time'
 import { generateWorld } from '../src/world/generate'
 import { roadsFrom } from '../src/world/queries'
+import { walkOut } from './road'
 
 // Один мир на весь файл: генерировать семьдесят локаций в каждом тесте незачем.
 const WORLD = generateWorld(1)
@@ -275,13 +276,18 @@ describe('дорога', () => {
     return road
   }
 
-  it('переносит в соседнее место и берёт за это время и силы', () => {
+  it('доводит до соседнего места и берёт за это время и силы', () => {
     const before = home()
     const road = neighbourOf(before)
-    const after = ok(applyCommand(before, { type: 'travel', toLocationId: road.to }))
+    // Дорога больше не переносит: она ставит на дорогу, а дальше идут часы.
+    const started = ok(applyCommand(before, { type: 'travel', toLocationId: road.to }))
+    expect(started.locationId).toBe(before.locationId)
+    expect(started.journey?.toId).toBe(road.to)
+    const after = walkOut(started)
 
     expect(after.locationId).toBe(road.to)
-    expect(after.time).toBe(before.time + hours(road.hours))
+    expect(after.journey).toBeNull()
+    expect(after.time).toBeGreaterThanOrEqual(before.time + hours(road.hours))
     expect(after.character.fatigue).toBeGreaterThan(0)
     expect(progress(after, 'athletics')).toBeGreaterThan(progress(before, 'athletics'))
   })

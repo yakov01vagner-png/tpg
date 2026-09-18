@@ -10,6 +10,7 @@ import type { GameState } from '../src/state'
 import { createGame } from '../src/state'
 import { NO_POLITICS, atWar, tickPolitics } from '../src/war'
 import { generateWorld } from '../src/world/generate'
+import { goTo } from './road'
 
 const world = generateWorld(1)
 const start = createSettlements(world)
@@ -121,7 +122,7 @@ describe('дорога', () => {
         0.9,
         seed,
       )
-      const after = ok(applyCommand(state, { type: 'travel', toLocationId: firstRoad(state) }))
+      const after = goTo(state, firstRoad(state))
       if (after.battle) ambushed = true
     }
     expect(ambushed).toBe(true)
@@ -146,7 +147,7 @@ describe('дорога', () => {
     let robbed = false
     for (let seed = 1; seed <= 12 && !robbed; seed += 1) {
       const state = traveller({ units: {}, morale: 60, hungryDays: 0, gear: 0 }, 0.9, seed)
-      const after = ok(applyCommand(state, { type: 'travel', toLocationId: firstRoad(state) }))
+      const after = goTo(state, firstRoad(state))
       if (after.character.money < state.character.money) {
         robbed = true
         expect(after.battle).toBe(null)

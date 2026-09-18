@@ -9,6 +9,7 @@ import { createSettlements } from './economy'
 import type { Enterprise } from './enterprise'
 import type { GameEvent, LogKind } from './events'
 import { describeEvent, kindOf } from './events'
+import type { Journey } from './journey'
 import { EMPTY_PRICE_LOG, type PriceLog } from './market'
 import type { Party } from './party'
 import { EMPTY_PARTY } from './party'
@@ -26,7 +27,7 @@ import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 18
+export const SCHEMA_VERSION = 19
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -56,8 +57,20 @@ export interface GameState {
    * а вот это меняется каждый игровой день.
    */
   readonly settlements: Readonly<Record<string, Settlement>>
-  /** Где сейчас находится игрок. */
+  /**
+   * Где сейчас находится игрок. Пока идёт путь (`journey`) — место, откуда он
+   * вышел: герой числится в дороге от него, а не в пустоте.
+   */
   readonly locationId: string
+  /**
+   * Путь между местами, если герой в дороге.
+   *
+   * До 0.4 перемещение было мгновенным, и «где ты» всегда было точкой. Теперь
+   * между точками можно находиться, и почти всё, что спрашивает место, в пути
+   * отвечает отказом: работать, торговать и говорить с людьми под открытым
+   * небом не с кем (`ROAD_COMMANDS`).
+   */
+  readonly journey: Journey | null
   /** Люди под началом игрока. */
   readonly party: Party
   /** Идущий бой. Пока он есть, мир стоит: время боя своё (DESIGN.md, п.2). */
@@ -118,6 +131,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     world,
     settlements,
     locationId,
+    journey: null,
     party: EMPTY_PARTY,
     battle: null,
     politics,

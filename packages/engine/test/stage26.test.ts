@@ -3,7 +3,6 @@ import { generateWorld } from '../src/world/generate'
 import { MAP_SIZE } from '../src/world/layout'
 import { neighbourSettlements, roadsFrom } from '../src/world/queries'
 import { isSettlement, isSite } from '../src/world/types'
-import type { World } from '../src/world/types'
 
 /**
  * Этап 26: земля гуще.
@@ -148,9 +147,3 @@ describe('густой мир рождается быстро', () => {
     expect(best).toBeLessThan(160)
   })
 })
-
-/** Сколько мест лежит между двумя поселениями по кратчайшему пути. */
-export function placesBetween(world: World, from: string, to: string): number {
-  const near = neighbourSettlements(world, from).find((one) => one.id === to)
-  return near ? near.hops - 1 : 0
-}

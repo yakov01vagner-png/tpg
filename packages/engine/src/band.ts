@@ -239,23 +239,38 @@ export function nextHop(world: World, fromId: string, toId: string): string | nu
 /**
  * Докуда войско вообще смотрит.
  *
- * Обходить весь мир незачем и дорого: дружина не ходит за добычей через
- * материк, и это уже записано в выборе цели. Предел в переходах держит счёт
- * суток в бюджете — мир версии 0.3 вдвое больше прежнего, и полный обход
- * дорожал вместе с ним.
+ * Меряется сутками пути, а не переходами. Двенадцать переходов было мерой
+ * прежнего мира: в нём отрезок занимал полдня, и дюжина шагов складывалась в
+ * неделю марша. С версии 0.4 между поселениями лежит земля, отрезок стоит
+ * три-четыре часа, и те же двенадцать шагов стали двумя сутками — войска
+ * перестали находить друг друга. За век это видно числом: набегов 962 вместо
+ * 3496 при том же числе объявленных войн. Десять суток марша — это и есть
+ * расстояние, на которое сосед ходит воевать.
  */
-const MAX_MARCH = 12
+const MAX_MARCH_HOURS = 240
 
-function distancesFrom(world: World, fromId: string, limit = MAX_MARCH): Map<string, number> {
+function distancesFrom(world: World, fromId: string, limit = MAX_MARCH_HOURS): Map<string, number> {
+  // Дейкстра по часам: дорога через горы дальше, чем та же дорога по равнине,
+  // и войско это чувствует.
   const distance = new Map<string, number>([[fromId, 0]])
-  const queue = [fromId]
+  const queue: string[] = [fromId]
   while (queue.length > 0) {
-    const current = queue.shift() as string
-    const step = (distance.get(current) ?? 0) + 1
-    if (step > limit) continue
+    let bestIndex = 0
+    for (let i = 1; i < queue.length; i += 1) {
+      if (
+        (distance.get(queue[i] as string) ?? 0) < (distance.get(queue[bestIndex] as string) ?? 0)
+      ) {
+        bestIndex = i
+      }
+    }
+    const current = queue.splice(bestIndex, 1)[0] as string
+    const spent = distance.get(current) ?? 0
     for (const road of roadsFrom(world, current)) {
-      if (distance.has(road.to)) continue
-      distance.set(road.to, step)
+      const reached = spent + road.hours
+      if (reached > limit) continue
+      const known = distance.get(road.to)
+      if (known !== undefined && known <= reached) continue
+      distance.set(road.to, reached)
       queue.push(road.to)
     }
   }

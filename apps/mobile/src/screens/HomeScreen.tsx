@@ -20,6 +20,7 @@ import {
   isOwnedByPlayer,
   isSite,
   jobsAt,
+  journeyLeft,
   kingdomOf,
   landHolderOf,
   lordById,
@@ -48,6 +49,7 @@ import {
   Chips,
   Dim,
   Faint,
+  Meter,
   Panel,
   Section,
   Tile,
@@ -146,6 +148,11 @@ export function HomeScreen({ game }: { game: GameState }) {
 
   const dismissed = useDismissedHints()
   const hint = nextHint(game, dismissed)
+
+  // В пути дом выглядит иначе: не место, а дорога. Всё, что требует места —
+  // торг, работа, люди, — под открытым небом недоступно (ROAD_COMMANDS в ядре),
+  // поэтому и показывать его незачем.
+  if (game.journey) return <OnTheRoad game={game} dispatch={dispatch} width={width} />
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -501,6 +508,90 @@ function ownerName(game: GameState, owner: string | null): string {
   return lord ? `держит ${lord.title} ${lord.name}` : 'чужая земля'
 }
 
+/**
+ * Дорога.
+ *
+ * Путь занимает часы, и эти часы видно: полоса, сколько осталось, через что
+ * идёшь. Отсюда же два решения, которых у мгновенного перемещения быть не
+ * могло: повернуть назад и встать лагерем прямо на дороге.
+ */
+function OnTheRoad({
+  game,
+  dispatch,
+  width,
+}: {
+  game: GameState
+  dispatch: (command: Command) => void
+  width: number
+}) {
+  const journey = game.journey
+  if (!journey) return null
+  const from = game.world.locations[journey.fromId]
+  const to = game.world.locations[journey.toId]
+  const left = journeyLeft(journey)
+  const wild = to && isSite(to.archetype) ? SITES[to.archetype] : null
+  return (
+    <ScrollView contentContainerStyle={styles.content}>
+      <View style={styles.scene}>
+        <View style={styles.sceneArt}>
+          <Scene
+            archetype={to?.archetype ?? 'village'}
+            timeOfDay={timeOfDay(game.time)}
+            width={Math.max(200, width - spacing.lg * 2)}
+            height={96}
+          />
+        </View>
+        <View style={styles.sceneKind}>
+          <Icon name="road" size={18} color={palette.faint} />
+          <Icon name={to?.terrain ?? 'plains'} size={18} color={palette.faint} />
+          <Faint>{`В ПУТИ · ${TERRAIN_LABELS[to?.terrain ?? 'plains']}`}</Faint>
+        </View>
+        <Title>{to?.name ?? '…'}</Title>
+        <Dim>{`из ${from?.name ?? '…'} · осталось ${formatDuration(hours(Math.ceil(left)))}`}</Dim>
+        <View style={styles.roadMeter}>
+          {/* Полоса в часах, а не в процентах: игрок считает дорогу часами. */}
+          <Meter
+            value={journey.hours - left}
+            max={journey.hours}
+            label={`Пройдено из ${journey.hours} ч`}
+          />
+        </View>
+        {wild ? <Dim>{wild.description}</Dim> : null}
+      </View>
+
+      <Section title="Что делают в пути">
+        <Card
+          glyph={<Icon name="road" size={20} color={palette.gold} />}
+          title="Идти дальше"
+          description="Часы идут сами: ускорь время наверху, и дорога кончится."
+          meta={`${formatDuration(hours(Math.ceil(left)))} до места`}
+          onPress={() => dispatch({ type: 'tick', minutes: 60 })}
+        />
+        <Card
+          glyph={<Icon name="rest" size={20} color={palette.info} />}
+          title="Встать лагерем"
+          description="Ночёвка под небом прямо на дороге: отдохнёшь хуже, чем под крышей, и неизвестно, кто выйдет на огонь."
+          meta={`${CAMP_HOURS} ч`}
+          reason={reasonOf(canApply(game, { type: 'camp' }))}
+          onPress={() => dispatch({ type: 'camp' })}
+        />
+        <Card
+          glyph={<Icon name="map" size={20} color={palette.dim} />}
+          title="Повернуть назад"
+          description={`Обратно в ${from?.name ?? 'откуда вышел'}: столько же, сколько уже прошёл.`}
+          meta={formatDuration(hours(Math.ceil(journey.hours - left)))}
+          onPress={() => dispatch({ type: 'turnBack' })}
+        />
+      </Section>
+    </ScrollView>
+  )
+}
+
+/** Почему нельзя — если нельзя. */
+function reasonOf(verdict: ReturnType<typeof canApply>): string | undefined {
+  return verdict.ok ? undefined : verdict.message
+}
+
 function formatPopulation(value: number): string {
   // Ядро считает людей дробью: суточная прибавка деревни меньше человека, и
   // округление съедало бы её целиком (life.ts). Игроку дробь показывать нечего.
@@ -516,6 +607,7 @@ function plural(n: number, one: string, few: string, many: string): string {
 }
 
 const styles = StyleSheet.create({
+  roadMeter: { marginTop: spacing.sm, width: '100%' },
   hint: {
     alignItems: 'center',
     backgroundColor: palette.raised,

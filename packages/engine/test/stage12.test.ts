@@ -178,6 +178,7 @@ describe('дороги к мёртвым местам', () => {
       },
     }
     const overgrown = ok(applyCommand(ruined, { type: 'travel', toLocationId: road.to }))
-    expect(overgrown.time - ruined.time).toBeGreaterThan(alive.time - base.time)
+    // Путь считается на выходе: заросшая дорога — это больше часов впереди.
+    expect(overgrown.journey?.hours ?? 0).toBeGreaterThan(alive.journey?.hours ?? 0)
   })
 })

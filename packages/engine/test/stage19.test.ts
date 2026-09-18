@@ -10,6 +10,7 @@ import { roadsFrom } from '../src/world/queries'
 import { UNITS_PER_HOUR, hoursBetweenPlaces } from '../src/world/roads'
 import { isSite } from '../src/world/types'
 import type { SiteKind, World } from '../src/world/types'
+import { walkLog } from './road'
 
 /**
  * Этап 19: дорога через землю.
@@ -122,9 +123,11 @@ describe('встреча в пути — по земле, а не по разб�
     let met = 0
     for (let seed = 1; seed <= seeds; seed += 1) {
       const state: GameState = { ...base, locationId: road.to, rng: createRng(seed) }
-      const after = applyCommand(state, { type: 'travel', toLocationId: site.id })
-      if (!after.ok) continue
-      const events = after.events.map((one) => ('text' in one ? String(one.text) : ''))
+      // Встреча случается в конце пути, а путь теперь занимает часы: идём.
+      const started = applyCommand(state, { type: 'travel', toLocationId: site.id })
+      if (!started.ok) continue
+      const after = walkLog(started.state)
+      const events = after.lines
       if (events.some((line) => line.includes('Разбойники') || line.includes('дороге ждали'))) {
         met += 1
       }

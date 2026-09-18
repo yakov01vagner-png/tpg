@@ -71,6 +71,8 @@ import {
   isOwnedByPlayer,
   takeLand,
 } from './holding'
+import type { Journey } from './journey'
+import { journeyLeft, legHoursFor, paceOf } from './journey'
 import type { HarvestEvent, LifeEvent } from './life'
 import { foodSecurity, rollHarvest, tickDays } from './life'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
@@ -197,6 +199,7 @@ export type Command =
   | { readonly type: 'takeExam'; readonly examId: string }
   | { readonly type: 'rest'; readonly hours: number }
   | { readonly type: 'sleep' }
+  | { readonly type: 'turnBack' }
   | { readonly type: 'spendSkillPoint'; readonly skillId: SkillId }
   | { readonly type: 'spendAttributePoint'; readonly attributeId: AttributeId }
 
@@ -219,6 +222,7 @@ export type FailureCode =
   | 'overloaded'
   | 'captive'
   | 'wounded'
+  | 'onTheRoad'
   | 'invalid'
 
 export type CommandResult =
@@ -230,6 +234,36 @@ export const REST_RECOVERY_PER_HOUR = 6
 export const SLEEP_RECOVERY_PER_HOUR = 12
 /** Максимум, который можно «переждать» одной командой. */
 export const MAX_REST_HOURS = 12
+
+/**
+ * Что можно делать в пути.
+ *
+ * Всё остальное требует места, а места под ногами нет: под открытым небом не с
+ * кем торговать, некому платить за учёбу и негде наниматься. Список нарочно
+ * лежит одним куском, а не проверками по всем пятидесяти командам: так видно,
+ * чем дорога отличается от деревни.
+ */
+const ROAD_COMMANDS: ReadonlySet<Command['type']> = new Set([
+  'tick',
+  'turnBack',
+  'camp',
+  'rest',
+  'sleep',
+  'battleOrders',
+  'battleFlee',
+  'battleEnd',
+  'duel',
+  'payRansom',
+  'attackBand',
+  'assignCompanion',
+  'dismissCompanion',
+  'disband',
+  'giveFood',
+  'outfitParty',
+  'abandonQuest',
+  'spendSkillPoint',
+  'spendAttributePoint',
+])
 
 export function applyCommand(
   state: GameState,
@@ -259,12 +293,22 @@ export function applyCommand(
   if (wound && bedridden(wound) && BEDRIDDEN_BLOCKS.has(command.type)) {
     return fail('wounded', `Рана не пускает: ещё ${wound.daysLeft} суток в постели.`)
   }
+  // В пути — только то, что делают в пути.
+  if (state.journey && !ROAD_COMMANDS.has(command.type)) {
+    const to = state.world.locations[state.journey.toId]?.name ?? 'дальше'
+    return fail(
+      'onTheRoad',
+      `Ты в пути в ${to}: осталось ${formatDuration(hours(Math.ceil(journeyLeft(state.journey))))}.`,
+    )
+  }
 
   switch (command.type) {
     case 'tick':
       return tick(state, command.minutes)
     case 'travel':
       return travel(state, command.toLocationId)
+    case 'turnBack':
+      return turnBack(state)
     case 'hire':
       return hire(state, command.troop, command.count)
     case 'disband':
@@ -429,6 +473,13 @@ export function foeName(state: GameState, foeId: string | null): string {
  * без переделки. Ходить можно только к соседу, дальний путь складывается из
  * нескольких переходов — потом в них будет чему случаться.
  */
+/**
+ * Выйти в путь.
+ *
+ * Команда больше не переносит героя: она ставит его на дорогу. Дальше идут
+ * часы — те же самые, которыми живёт мир, — и путь двигается вместе с ними
+ * (`walk`). Прийти можно только дойдя.
+ */
 function travel(state: GameState, toLocationId: string): CommandResult {
   const destination = state.world.locations[toLocationId]
   if (!destination) return fail('unknownAction', 'Такого места нет.')
@@ -440,26 +491,66 @@ function travel(state: GameState, toLocationId: string): CommandResult {
 
   // К мёртвому месту дорога заросла: идти вдвое дольше (band.ts, OVERGROWN).
   const roadHoursNow = roadHours(state.world, state.settlements, state.locationId, road.to)
-  const cost = travelFatigue(roadHoursNow)
-  const blocked = checkFatigue(state.character, cost)
+  const walking = legHoursFor(roadHoursNow, paceOf(state.party, state.character.wound !== null))
+  const blocked = checkFatigue(state.character, travelFatigue(walking))
   if (blocked) return blocked
 
   const from = state.world.locations[state.locationId]
   const draft = open(state)
   notice(
     draft,
-    `Дорога${from ? ` из ${from.name}` : ''} в ${destination.name}: ${formatDuration(hours(roadHoursNow))} пути${
+    `Дорога${from ? ` из ${from.name}` : ''} в ${destination.name}: ${formatDuration(hours(walking))} пути${
       roadHoursNow > road.hours ? ' — заросла, идти дольше' : ''
     }.`,
   )
-  advance(draft, hours(roadHoursNow))
-  addFatigue(draft, cost)
-  practice(draft, 'athletics', roadHoursNow * 2.5)
-  practice(draft, 'survival', roadHoursNow * 1.5)
-  draft.locationId = toLocationId
-  roadTalk(draft)
-  ambush(draft, toLocationId)
+  draft.journey = { fromId: state.locationId, toId: toLocationId, hours: walking, done: 0 }
   return close(draft)
+}
+
+/** Повернуть назад: то, чего у мгновенного перемещения быть не могло. */
+function turnBack(state: GameState): CommandResult {
+  const journey = state.journey
+  if (!journey) return fail('invalid', 'Ты никуда не идёшь.')
+  const draft = open(state)
+  const home = state.world.locations[journey.fromId]?.name ?? 'откуда вышел'
+  notice(draft, `Поворот назад: обратно в ${home}.`)
+  // Пройденное становится оставшимся: назад идти ровно столько, сколько прошёл.
+  draft.journey = {
+    fromId: journey.toId,
+    toId: journey.fromId,
+    hours: journey.hours,
+    done: journey.hours - journey.done,
+  }
+  return close(draft)
+}
+
+/**
+ * Часы пути.
+ *
+ * Дорога идёт вместе с миром: сколько прошло времени, столько и прошли. Отсюда
+ * же берутся усталость и навык — не разом на выходе, а по мере ходьбы.
+ */
+function walk(draft: Draft, minutes: number): void {
+  const journey = draft.journey
+  if (!journey || minutes <= 0) return
+  const walked = Math.min(minutes / MINUTES_PER_HOUR, journeyLeft(journey))
+  if (walked <= 0) return
+  addFatigue(draft, travelFatigue(walked))
+  practice(draft, 'athletics', walked * 2.5)
+  practice(draft, 'survival', walked * 1.5)
+  const done = Math.round((journey.done + walked) * 100) / 100
+  if (done < journey.hours) {
+    draft.journey = { ...journey, done }
+    return
+  }
+
+  // Пришли.
+  draft.journey = null
+  draft.locationId = journey.toId
+  const place = draft.world.locations[journey.toId]
+  notice(draft, `Пришли: ${place?.name ?? 'место'}.`)
+  roadTalk(draft)
+  ambush(draft, journey.toId)
 }
 
 /** Сколько народу «водится» в глуши: у места без жителей своего населения нет. */
@@ -525,7 +616,12 @@ function tick(state: GameState, minutes: number): CommandResult {
   }
   const draft = open(state)
   advance(draft, Math.round(minutes))
-  addFatigue(draft, (-REST_RECOVERY_PER_HOUR / 2) * (minutes / MINUTES_PER_HOUR))
+  // Час часов — это час ходьбы, если герой в пути. Отдых и лагерь время тратят,
+  // но с места не двигают: идут тогда, когда идут.
+  walk(draft, Math.round(minutes))
+  if (!state.journey) {
+    addFatigue(draft, (-REST_RECOVERY_PER_HOUR / 2) * (minutes / MINUTES_PER_HOUR))
+  }
   return close(draft)
 }
 
@@ -1716,18 +1812,26 @@ export const CAMP_HOURS = 8
 function camp(state: GameState): CommandResult {
   const here = state.world.locations[state.locationId]
   if (!here) return fail('invalid', 'Непонятно, где находится герой.')
-  if (state.settlements[state.locationId]) {
+  // В пути крыши нет по определению: заночевать можно прямо на дороге, и это
+  // то решение, которого у мгновенного перемещения быть не могло.
+  if (!state.journey && state.settlements[state.locationId]) {
     return fail('unavailableHere', 'Здесь есть крыша: лагерем встают там, где её нет.')
   }
 
   const draft = open(state)
-  notice(draft, 'Костёр, котелок и очередь караулить.')
+  notice(
+    draft,
+    state.journey
+      ? 'Ночёвка у дороги: костёр и очередь караулить.'
+      : 'Костёр, котелок и очередь караулить.',
+  )
   advance(draft, hours(CAMP_HOURS))
   // Под небом отдыхают хуже, чем под крышей: три четверти от сна в доме.
   addFatigue(draft, -Math.round(SLEEP_RECOVERY_PER_HOUR * CAMP_HOURS * 0.75))
   practice(draft, 'survival', 18)
-  // Ночь в глуши — это ещё и ночь в глуши.
-  ambush(draft, state.locationId)
+  // Ночь в глуши — это ещё и ночь в глуши. В пути опасность берётся у той
+  // земли, к которой идёшь: она и лежит вокруг костра.
+  ambush(draft, state.journey ? state.journey.toId : state.locationId)
   return close(draft)
 }
 
@@ -2451,6 +2555,7 @@ interface Draft {
   rng: Rng
   character: Character
   locationId: string
+  journey: Journey | null
   settlements: Readonly<Record<string, Settlement>>
   party: Party
   battle: Battle | null
@@ -2483,6 +2588,7 @@ function open(state: GameState): Draft {
     rng: state.rng,
     character: state.character,
     locationId: state.locationId,
+    journey: state.journey,
     settlements: state.settlements,
     party: state.party,
     battle: state.battle,
@@ -2650,6 +2756,7 @@ function close(draft: Draft): CommandResult {
     rng: draft.rng,
     character: draft.character,
     locationId: draft.locationId,
+    journey: draft.journey,
     settlements: draft.settlements,
     party: draft.party,
     battle: draft.battle,

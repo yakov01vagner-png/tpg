@@ -11,6 +11,7 @@ import { generateWorld } from '../src/world/generate'
 import { roadsFrom } from '../src/world/queries'
 import { isSettlement, isSite } from '../src/world/types'
 import type { SiteKind, World } from '../src/world/types'
+import { goTo } from './road'
 
 /**
  * Этап 18: места без жителей.
@@ -160,7 +161,7 @@ describe('до глуши можно дойти', () => {
       isSite(world.locations[one.to]?.archetype ?? 'village'),
     )
     if (!road) return
-    const after = ok(applyCommand(base, { type: 'travel', toLocationId: road.to }))
+    const after = goTo(base, road.to)
     expect(after.locationId).toBe(road.to)
     expect(after.time).toBeGreaterThan(base.time)
     expect(after.settlements[road.to]).toBeUndefined()
