@@ -1,4 +1,5 @@
 import {
+  ARMY_PACE,
   CARAVAN_COST,
   type Command,
   FRONTIER,
@@ -24,17 +25,22 @@ import {
   hours,
   isSettlement,
   isSite,
+  journeyProgress,
   layoutOf,
+  legHoursFor,
   lordById,
+  paceOf,
   plagueAt,
+  pointBetween,
   regionColors,
   roadsFrom,
+  routeTo,
   worldGrid,
 } from '@tpg/engine'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { GestureResponderEvent } from 'react-native'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
-import Svg, { G, Rect, Text as SvgText } from 'react-native-svg'
+import Svg, { Circle, G, Line, Rect, Text as SvgText } from 'react-native-svg'
 import { openSheet } from '../game/nav'
 import { dispatch } from '../game/store'
 import { colors, font, radius, spacing } from '../theme'
@@ -236,6 +242,72 @@ export function MapScreen({ game }: { game: GameState }) {
     return out
   }, [game.enterprises, points])
 
+  // Дороги: отрезок между соседями. Рисуются один раз на пару, цвет — от того,
+  // чего он стоит: тракт по равнине бледный и тонкий, гать через топь толще и
+  // темнее. До 0.4 карта дорог не показывала вовсе — а дорога и есть земля.
+  const legs = useMemo(() => {
+    const out: { id: string; x1: number; y1: number; x2: number; y2: number; hours: number }[] = []
+    for (const [fromId, roads] of Object.entries(game.world.roads)) {
+      const from = points[fromId]
+      if (!from) continue
+      for (const road of roads) {
+        if (fromId > road.to) continue
+        const to = points[road.to]
+        if (!to) continue
+        out.push({
+          id: `${fromId}|${road.to}`,
+          x1: from.x,
+          y1: from.y,
+          x2: to.x,
+          y2: to.y,
+          hours: road.hours,
+        })
+      }
+    }
+    return out
+  }, [game.world.roads, points])
+
+  // Где герой сейчас: в пути — между местами, иначе в месте.
+  const heroAt = useMemo(() => {
+    if (!game.journey) return points[game.locationId] ?? null
+    return pointBetween(
+      game.world,
+      game.journey.fromId,
+      game.journey.toId,
+      journeyProgress(game.journey),
+    )
+  }, [game.journey, game.locationId, game.world, points])
+
+  // Кто сейчас на дороге: войско между двумя местами видно там, где оно идёт.
+  const marching = useMemo(() => {
+    const out: { id: string; x: number; y: number; size: number }[] = []
+    for (const band of game.bands) {
+      if (!band.travel) continue
+      const size = Object.values(band.units).reduce((sum, n) => sum + (n ?? 0), 0)
+      if (size <= 0) continue
+      const road = roadsFrom(game.world, band.locationId).find(
+        (one) => one.to === band.travel?.toLocationId,
+      )
+      const total = legHoursFor(road?.hours ?? 12, ARMY_PACE)
+      const share = total > 0 ? 1 - band.travel.hoursLeft / total : 0
+      const at = pointBetween(game.world, band.locationId, band.travel.toLocationId, share)
+      if (at) out.push({ id: band.id, x: at.x, y: at.y, size })
+    }
+    return out
+  }, [game.bands, game.world])
+
+  // Путь до выбранного места: из каких отрезков сложится и сколько будет стоить
+  // этому отряду. Дальнее место — это маршрут, а не одно нажатие.
+  const route = useMemo(() => {
+    if (!selected || selected === game.locationId) return null
+    return routeTo(
+      game.world,
+      game.locationId,
+      selected,
+      paceOf(game.party, game.character.wound !== null),
+    )
+  }, [selected, game.world, game.locationId, game.party, game.character.wound])
+
   const here = points[game.locationId]
   const neighbours = useMemo(
     () => new Set(roadsFrom(game.world, game.locationId).map((road) => road.to)),
@@ -383,6 +455,45 @@ export function MapScreen({ game }: { game: GameState }) {
                   ))}
                 </G>
               )}
+
+              {level === 'world' ? null : (
+                <G opacity={0.5}>
+                  {legs.map((leg) => (
+                    <Line
+                      key={leg.id}
+                      x1={leg.x1}
+                      y1={leg.y1}
+                      x2={leg.x2}
+                      y2={leg.y2}
+                      stroke={leg.hours >= 8 ? '#4b3b2a' : '#5d5140'}
+                      strokeWidth={(leg.hours >= 8 ? 1.6 : 1) * mark}
+                      strokeLinecap="round"
+                    />
+                  ))}
+                </G>
+              )}
+
+              {route && route.steps.length > 0 ? (
+                <G opacity={0.85}>
+                  {[game.locationId, ...route.steps].slice(0, -1).map((stepId, index) => {
+                    const from = points[stepId]
+                    const to = points[[game.locationId, ...route.steps][index + 1] ?? '']
+                    if (!from || !to) return null
+                    return (
+                      <Line
+                        key={`route${stepId}`}
+                        x1={from.x}
+                        y1={from.y}
+                        x2={to.x}
+                        y2={to.y}
+                        stroke="#c9a227"
+                        strokeWidth={1.8 * mark}
+                        strokeLinecap="round"
+                      />
+                    )
+                  })}
+                </G>
+              ) : null}
 
               <G>
                 {(level === 'world'
@@ -574,15 +685,34 @@ export function MapScreen({ game }: { game: GameState }) {
                 })}
               </G>
 
-              {here ? (
+              {/* Идущие видны там, где идут: войско между двумя местами — это
+                  то, что можно перехватить, а не то, что появится потом. */}
+              <G>
+                {marching.map((host) => (
+                  <Circle
+                    key={host.id}
+                    cx={host.x}
+                    cy={host.y}
+                    r={Math.max(2, Math.min(5, host.size / 12)) * mark}
+                    fill="#b4452f"
+                    fillOpacity={0.75}
+                    stroke="#17140f"
+                    strokeWidth={0.6 * mark}
+                  />
+                ))}
+              </G>
+
+              {heroAt ? (
                 <Rect
-                  x={here.x - 11 * mark}
-                  y={here.y - 11 * mark}
+                  x={heroAt.x - 11 * mark}
+                  y={heroAt.y - 11 * mark}
                   width={22 * mark}
                   height={22 * mark}
                   fill="none"
                   stroke="#ffffff"
                   strokeWidth={2 * mark}
+                  // В пути метка героя идёт по дороге, а не ждёт в месте выхода.
+                  transform={game.journey ? `rotate(45 ${heroAt.x} ${heroAt.y})` : undefined}
                 />
               ) : null}
 
@@ -629,6 +759,15 @@ export function MapScreen({ game }: { game: GameState }) {
               ) : null}
             </>
           )}
+          {route && route.steps.length > 0 ? (
+            <Text style={styles.dim}>
+              {`Путь: ${route.steps.length} ${stepWord(route.steps.length)} · ${formatDuration(hours(route.hours))}${
+                route.steps.length > 1
+                  ? ` · через ${game.world.locations[route.steps[0] as string]?.name ?? '…'}`
+                  : ''
+              }`}
+            </Text>
+          ) : null}
           {plagueAt(game.plagues, chosen.id) ? (
             <Text style={styles.plague}>Здесь мор. Ехать туда — своей волей.</Text>
           ) : null}
@@ -773,6 +912,15 @@ function speckle(x: number, y: number): number {
   hash = Math.imul(hash ^ (x + 17), 16777619)
   hash = Math.imul(hash ^ (y + 31), 16777619)
   return ((hash >>> 11) % 1000) / 1000
+}
+
+/** «переход», «перехода», «переходов» — по числу. */
+function stepWord(count: number): string {
+  const ten = count % 10
+  const hundred = count % 100
+  if (ten === 1 && hundred !== 11) return 'переход'
+  if (ten >= 2 && ten <= 4 && (hundred < 12 || hundred > 14)) return 'перехода'
+  return 'переходов'
 }
 
 function ownerWord(game: GameState, owner: string | null): string {

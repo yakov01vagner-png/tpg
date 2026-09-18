@@ -69,6 +69,78 @@ export function legHoursFor(roadHours: number, pace: number): number {
   return Math.max(1, Math.round(roadHours * pace))
 }
 
+/**
+ * Путь до дальнего места: из каких отрезков он складывается.
+ *
+ * Дальнее место выбирается целью, а не одним нажатием: до него надо дойти через
+ * то, что лежит между. Считается Дейкстрой по часам — тем же, чем считает
+ * дорогу войско, — и теми же часами, которыми пойдёт этот отряд.
+ */
+export interface Route {
+  /** Места по порядку, начиная со следующего шага и кончая целью. */
+  readonly steps: readonly string[]
+  /** Часы для того, кто пойдёт: дорога, умноженная на шаг отряда. */
+  readonly hours: number
+}
+
+export function routeTo(world: World, fromId: string, toId: string, pace = 1): Route | null {
+  if (fromId === toId) return { steps: [], hours: 0 }
+  const spent = new Map<string, number>([[fromId, 0]])
+  const back = new Map<string, string>()
+  const queue: string[] = [fromId]
+  while (queue.length > 0) {
+    let bestIndex = 0
+    for (let i = 1; i < queue.length; i += 1) {
+      const one = queue[i] as string
+      const other = queue[bestIndex] as string
+      if ((spent.get(one) ?? 0) < (spent.get(other) ?? 0)) bestIndex = i
+    }
+    const current = queue.splice(bestIndex, 1)[0] as string
+    if (current === toId) break
+    const done = spent.get(current) ?? 0
+    for (const road of world.roads[current] ?? []) {
+      const reached = done + legHoursFor(road.hours, pace)
+      const known = spent.get(road.to)
+      if (known !== undefined && known <= reached) continue
+      spent.set(road.to, reached)
+      back.set(road.to, current)
+      queue.push(road.to)
+    }
+  }
+  if (!spent.has(toId)) return null
+  const steps: string[] = []
+  let current = toId
+  while (current !== fromId) {
+    steps.unshift(current)
+    const previous = back.get(current)
+    if (!previous) break
+    current = previous
+  }
+  return { steps, hours: spent.get(toId) ?? 0 }
+}
+
+/**
+ * Где идущий находится сейчас — между двумя точками карты.
+ *
+ * Тем же считается положение дружины и обоза: на карте видно не только тех, кто
+ * стоит, но и тех, кто идёт.
+ */
+export function pointBetween(
+  world: World,
+  fromId: string,
+  toId: string,
+  share: number,
+): { readonly x: number; readonly y: number } | null {
+  const from = world.locations[fromId]
+  const to = world.locations[toId]
+  if (!from || !to) return null
+  const part = Math.max(0, Math.min(1, share))
+  return {
+    x: Math.round(from.x + (to.x - from.x) * part),
+    y: Math.round(from.y + (to.y - from.y) * part),
+  }
+}
+
 /** Куда ведёт этот путь — словами. */
 export function describeJourney(world: World, journey: Journey): string {
   const to = world.locations[journey.toId]?.name ?? 'неизвестно куда'
