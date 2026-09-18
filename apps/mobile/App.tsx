@@ -17,6 +17,7 @@ import { LearnSheet } from './src/screens/LearnSheet'
 import { MapScreen } from './src/screens/MapScreen'
 import { OwnSheet } from './src/screens/OwnSheet'
 import { PeopleScreen } from './src/screens/PeopleScreen'
+import { SavesScreen } from './src/screens/SavesScreen'
 import { TradeScreen } from './src/screens/TradeScreen'
 import { WorldScreen } from './src/screens/WorldScreen'
 import { font, lineHeight, palette, radii, spacing } from './src/theme'
@@ -45,6 +46,8 @@ function sheetBody(id: SheetId, game: GameState) {
       return <MapScreen game={game} />
     case 'world':
       return <WorldScreen game={game} />
+    case 'saves':
+      return <SavesScreen />
   }
 }
 
@@ -82,7 +85,15 @@ export default function App() {
       <SafeAreaView style={styles.root}>
         {state.phase === 'loading' ? <Text style={styles.loading}>Загрузка…</Text> : null}
 
-        {state.phase === 'create' ? <CreateCharacterScreen error={state.error} /> : null}
+        {state.phase === 'create' ? (
+          top === 'saves' ? (
+            <Sheet title={SHEET_TITLES.saves} onClose={closeSheet}>
+              <SavesScreen />
+            </Sheet>
+          ) : (
+            <CreateCharacterScreen error={state.error} />
+          )
+        ) : null}
 
         {state.phase === 'play' && state.game.over ? (
           <View style={styles.over}>

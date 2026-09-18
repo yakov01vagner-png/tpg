@@ -23,6 +23,7 @@ import {
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Icon } from '../art/icons'
 import { Portrait, heroFace } from '../art/portrait'
+import { openSheet } from '../game/nav'
 import { abandonGame, dispatch } from '../game/store'
 import { font, palette, radii, spacing, touch } from '../theme'
 import { Button, Dim, Faint, Panel, Row, Section, Stat, Stats, Title } from '../ui/parts'
@@ -210,6 +211,7 @@ export function CharacterScreen({ game }: { game: GameState }) {
         </Section>
       ) : null}
 
+      <Button label="Сейвы и перенос" tone="quiet" onPress={() => openSheet('saves')} />
       <Button
         label="Начать заново"
         tone="quiet"

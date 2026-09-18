@@ -29,6 +29,8 @@ import { useWindowDimensions } from 'react-native'
 import { Icon } from '../art/icons'
 import { COMPANION_FACES, Portrait } from '../art/portrait'
 import { Scene } from '../art/scene'
+import { dismissHint, useDismissedHints } from '../game/hintState'
+import { nextHint } from '../game/hints'
 import { openSheet } from '../game/nav'
 import { dispatch } from '../game/store'
 import { font, lineHeight, palette, radii, spacing, touch } from '../theme'
@@ -125,8 +127,22 @@ export function HomeScreen({ game }: { game: GameState }) {
           ? `Служба: ${kingdom.name}`
           : 'Здесь некому служить'
 
+  const dismissed = useDismissedHints()
+  const hint = nextHint(game, dismissed)
+
   return (
     <ScrollView contentContainerStyle={styles.content}>
+      {hint ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => dismissHint(hint.id)}
+          style={styles.hint}
+        >
+          <Icon name="journal" size={16} color={palette.gold} />
+          <Text style={styles.hintText}>{hint.text}</Text>
+          <Text style={styles.hintClose}>✕</Text>
+        </Pressable>
+      ) : null}
       <View style={[styles.scene, sick ? styles.sceneSick : null]}>
         <View style={styles.sceneArt}>
           <Scene
@@ -421,6 +437,19 @@ function plural(n: number, one: string, few: string, many: string): string {
 }
 
 const styles = StyleSheet.create({
+  hint: {
+    alignItems: 'center',
+    backgroundColor: palette.raised,
+    borderLeftColor: palette.gold,
+    borderLeftWidth: 3,
+    borderRadius: radii.md,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+    padding: spacing.sm,
+  },
+  hintText: { color: palette.text, flex: 1, fontSize: font.small, lineHeight: lineHeight.small },
+  hintClose: { color: palette.faint, fontSize: font.small, paddingHorizontal: spacing.xs },
   speech: {
     color: palette.dim,
     fontSize: font.small,

@@ -11,6 +11,7 @@ import {
 } from '@tpg/engine'
 import { useState } from 'react'
 import { ScrollView, StyleSheet, TextInput, View } from 'react-native'
+import { openSheet } from '../game/nav'
 import { startGame } from '../game/store'
 import { font, palette, radii, spacing, touch } from '../theme'
 import { Body, Button, Card, Dim, Panel, Section, Title } from '../ui/parts'
@@ -71,6 +72,9 @@ export function CreateCharacterScreen({ error }: { error: string | null }) {
             setInBiography(true)
           }}
         />
+        <View style={styles.back}>
+          <Button label="Сейвы и перенос" tone="quiet" onPress={() => openSheet('saves')} />
+        </View>
       </ScrollView>
     )
   }

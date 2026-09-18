@@ -17,6 +17,7 @@ export type SheetId =
   | 'court'
   | 'map'
   | 'world'
+  | 'saves'
 
 export const SHEET_TITLES: Record<SheetId, string> = {
   earn: 'Заработать',
@@ -28,6 +29,7 @@ export const SHEET_TITLES: Record<SheetId, string> = {
   court: 'Двор',
   map: 'Карта',
   world: 'Сводка мира',
+  saves: 'Сейвы',
 }
 
 interface NavState {

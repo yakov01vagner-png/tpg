@@ -27,6 +27,7 @@ import {
   worldGrid,
 } from '@tpg/engine'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { GestureResponderEvent } from 'react-native'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import Svg, { G, Rect, Text as SvgText } from 'react-native-svg'
 import { openSheet } from '../game/nav'
@@ -62,6 +63,11 @@ export function MapScreen({ game }: { game: GameState }) {
   const [mode, setMode] = useState<ModeId>('crowns')
   const [level, setLevel] = useState<ZoomId>('realm')
   const [selected, setSelected] = useState<string | null>(game.locationId)
+  // Щипок: масштаб между «миром» и «вблизи» непрерывный, ступени — только
+  // отправные точки. Двойное касание — прыжок «край ↔ вблизи».
+  const [pinch, setPinch] = useState<number>(1)
+  const pinching = useRef<{ start: number; base: number } | null>(null)
+  const lastTap = useRef<number>(0)
 
   const points = useMemo(() => layoutOf(game.world), [game.world])
   const grid = useMemo(() => worldGrid(game.world, MAP_SIZE), [game.world])
@@ -183,8 +189,46 @@ export function MapScreen({ game }: { game: GameState }) {
   // «Мир» — это всё полотно целиком в окне, поэтому масштаб считается от окна, а
   // не назначается числом: на узком телефоне и на широком он разный.
   const fit = view.width > 0 ? Math.min(view.width, view.height) / MAP_SIZE : 0.3
-  const zoom = level === 'world' ? fit : level === 'realm' ? 1 : 1.7
+  const stepZoom = level === 'world' ? fit : level === 'realm' ? 1 : 1.7
+  const zoom = Math.min(3, Math.max(fit, stepZoom * pinch))
   const size = MAP_SIZE * zoom
+
+  const chooseLevel = (next: ZoomId) => {
+    setLevel(next)
+    setPinch(1)
+  }
+
+  // Два пальца: расстояние между ними — множитель к текущему масштабу.
+  const touchDistance = (touches: readonly { pageX: number; pageY: number }[]): number => {
+    const [a, b] = touches
+    if (!a || !b) return 0
+    return Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY)
+  }
+  const onTouchStart = (event: GestureResponderEvent) => {
+    const touches = event.nativeEvent.touches
+    if (touches.length === 2) {
+      pinching.current = { start: touchDistance(touches), base: pinch }
+      return
+    }
+    if (touches.length === 1) {
+      const now = Date.now()
+      if (now - lastTap.current < 300) {
+        // Двойное касание: вблизи, если далеко; край, если уже близко.
+        if (zoom >= 1.5) chooseLevel('realm')
+        else chooseLevel('near')
+      }
+      lastTap.current = now
+    }
+  }
+  const onTouchMove = (event: GestureResponderEvent) => {
+    const touches = event.nativeEvent.touches
+    if (touches.length !== 2 || !pinching.current || pinching.current.start === 0) return
+    const scale = touchDistance(touches) / pinching.current.start
+    setPinch(Math.min(3, Math.max(0.2, pinching.current.base * scale)))
+  }
+  const onTouchEnd = () => {
+    pinching.current = null
+  }
   // Чем дальше отодвинут мир, тем крупнее должны быть значки: иначе на общем
   // виде поселения превращаются в пыль.
   const mark = Math.max(1, 0.85 / zoom)
@@ -220,206 +264,225 @@ export function MapScreen({ game }: { game: GameState }) {
             key={option.id}
             label={option.label}
             active={option.id === level}
-            onPress={() => setLevel(option.id)}
+            onPress={() => chooseLevel(option.id)}
           />
         ))}
         <Chip label="К себе" onPress={() => centerOn(here)} />
       </Chips>
 
-      <ScrollView
-        ref={horizontal}
-        horizontal
-        contentContainerStyle={styles.canvas}
-        onLayout={(event) =>
-          setView({
-            width: event.nativeEvent.layout.width,
-            height: event.nativeEvent.layout.height,
-          })
-        }
+      <View
+        style={styles.touch}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchEnd}
       >
-        <ScrollView ref={vertical} contentContainerStyle={styles.canvas}>
-          <Svg width={size} height={size} viewBox={`0 0 ${MAP_SIZE} ${MAP_SIZE}`}>
-            <G>
-              {bands.map((band) => (
-                <Rect
-                  key={`${band.x}|${band.y}`}
-                  x={band.x}
-                  y={band.y}
-                  width={band.width}
-                  height={grid.cell}
-                  fill={band.fill}
-                />
-              ))}
-            </G>
-
-            {level === 'world' ? null : (
-              <G opacity={0.14}>
-                {texture.map((spot) => (
+        <ScrollView
+          ref={horizontal}
+          horizontal
+          contentContainerStyle={styles.canvas}
+          scrollEnabled={pinching.current === null}
+          onLayout={(event) =>
+            setView({
+              width: event.nativeEvent.layout.width,
+              height: event.nativeEvent.layout.height,
+            })
+          }
+        >
+          <ScrollView
+            ref={vertical}
+            contentContainerStyle={styles.canvas}
+            scrollEnabled={pinching.current === null}
+          >
+            <Svg width={size} height={size} viewBox={`0 0 ${MAP_SIZE} ${MAP_SIZE}`}>
+              <G>
+                {bands.map((band) => (
                   <Rect
-                    key={`t${spot.x}|${spot.y}`}
-                    x={spot.x}
-                    y={spot.y}
-                    width={grid.cell}
+                    key={`${band.x}|${band.y}`}
+                    x={band.x}
+                    y={band.y}
+                    width={band.width}
                     height={grid.cell}
-                    fill="#000000"
+                    fill={band.fill}
                   />
                 ))}
               </G>
-            )}
 
-            <G>
-              {Object.values(game.world.locations).map((location) => {
-                const point = points[location.id]
-                const settlement = game.settlements[location.id]
-                if (!point || !settlement) return null
-                const mine = settlement.owner === PLAYER
-                const dead = settlement.population <= 0
-                const starving = foodSecurity(settlement) < 0.3
-                const isHere = location.id === game.locationId
-                // На общем виде мелкие деревни сливаются в кашу — показываем то,
-                // по чему мир читается: города, крепости и своё.
-                if (level === 'world' && !notable(location.archetype) && !mine && !isHere) {
-                  return null
-                }
-                const half = (sizeFor(location.archetype) * mark) / 2
-                const outline = mine
-                  ? '#c9a227'
-                  : starving
-                    ? '#c0533a'
-                    : neighbours.has(location.id)
-                      ? '#d8cdbb'
-                      : '#17140f'
-                return (
-                  <G key={location.id}>
+              {level === 'world' ? null : (
+                <G opacity={0.14}>
+                  {texture.map((spot) => (
                     <Rect
-                      x={point.x - half}
-                      y={point.y - half}
-                      width={half * 2}
-                      height={half * 2}
-                      fill={dead ? '#2b2620' : '#efe6d6'}
-                      stroke={outline}
-                      strokeWidth={(mine || starving || neighbours.has(location.id) ? 2 : 1) * mark}
+                      key={`t${spot.x}|${spot.y}`}
+                      x={spot.x}
+                      y={spot.y}
+                      width={grid.cell}
+                      height={grid.cell}
+                      fill="#000000"
                     />
-                    {labelled(location.archetype, level) ? (
-                      // Вблизи подписей много, и сбоку они наезжают друг на друга —
-                      // там имя идёт под значком. Издали их единицы: сбоку компактнее,
-                      // а у правого края подпись разворачивается внутрь полотна.
-                      <SvgText
-                        x={
-                          level === 'near'
-                            ? point.x
-                            : point.x > MAP_SIZE * 0.78
-                              ? point.x - half - 3 * mark
-                              : point.x + half + 3 * mark
-                        }
-                        y={level === 'near' ? point.y + half + 10 * mark : point.y + 3 * mark}
-                        fill="#efe6d6"
-                        fontSize={9 * mark}
-                        textAnchor={
-                          level === 'near' ? 'middle' : point.x > MAP_SIZE * 0.78 ? 'end' : 'start'
-                        }
-                      >
-                        {location.name}
-                      </SvgText>
-                    ) : null}
-                    {/* Палец толще значка: мишень для нажатия шире квадрата и лежит поверх. */}
-                    <Rect
-                      x={point.x - Math.max(half + 5 * mark, 13 * mark)}
-                      y={point.y - Math.max(half + 5 * mark, 13 * mark)}
-                      width={Math.max(half + 5 * mark, 13 * mark) * 2}
-                      height={Math.max(half + 5 * mark, 13 * mark) * 2}
-                      fill="transparent"
-                      onPress={() => setSelected(location.id)}
-                      onPressIn={() => setSelected(location.id)}
-                    />
-                  </G>
-                )
-              })}
-            </G>
+                  ))}
+                </G>
+              )}
 
-            <G>
-              {[...hosts].map(([placeId, host]) => {
-                const point = points[placeId]
-                if (!point) return null
-                const side =
-                  host.side === 'rebel' ? REBEL_COLOR : (KINGDOM_COLORS[host.side] ?? '#8a8172')
-                // Войско — копьё рядом с местом: узкая метка, которая не спорит
-                // с квадратом поселения и растёт от числа людей.
-                const height = Math.min(26, 8 + host.size * 0.22) * mark
-                return (
-                  <G key={`host:${placeId}`}>
+              <G>
+                {Object.values(game.world.locations).map((location) => {
+                  const point = points[location.id]
+                  const settlement = game.settlements[location.id]
+                  if (!point || !settlement) return null
+                  const mine = settlement.owner === PLAYER
+                  const dead = settlement.population <= 0
+                  const starving = foodSecurity(settlement) < 0.3
+                  const isHere = location.id === game.locationId
+                  // На общем виде мелкие деревни сливаются в кашу — показываем то,
+                  // по чему мир читается: города, крепости и своё.
+                  if (level === 'world' && !notable(location.archetype) && !mine && !isHere) {
+                    return null
+                  }
+                  const half = (sizeFor(location.archetype) * mark) / 2
+                  const outline = mine
+                    ? '#c9a227'
+                    : starving
+                      ? '#c0533a'
+                      : neighbours.has(location.id)
+                        ? '#d8cdbb'
+                        : '#17140f'
+                  return (
+                    <G key={location.id}>
+                      <Rect
+                        x={point.x - half}
+                        y={point.y - half}
+                        width={half * 2}
+                        height={half * 2}
+                        fill={dead ? '#2b2620' : '#efe6d6'}
+                        stroke={outline}
+                        strokeWidth={
+                          (mine || starving || neighbours.has(location.id) ? 2 : 1) * mark
+                        }
+                      />
+                      {labelled(location.archetype, level) ? (
+                        // Вблизи подписей много, и сбоку они наезжают друг на друга —
+                        // там имя идёт под значком. Издали их единицы: сбоку компактнее,
+                        // а у правого края подпись разворачивается внутрь полотна.
+                        <SvgText
+                          x={
+                            level === 'near'
+                              ? point.x
+                              : point.x > MAP_SIZE * 0.78
+                                ? point.x - half - 3 * mark
+                                : point.x + half + 3 * mark
+                          }
+                          y={level === 'near' ? point.y + half + 10 * mark : point.y + 3 * mark}
+                          fill="#efe6d6"
+                          fontSize={9 * mark}
+                          textAnchor={
+                            level === 'near'
+                              ? 'middle'
+                              : point.x > MAP_SIZE * 0.78
+                                ? 'end'
+                                : 'start'
+                          }
+                        >
+                          {location.name}
+                        </SvgText>
+                      ) : null}
+                      {/* Палец толще значка: мишень для нажатия шире квадрата и лежит поверх. */}
+                      <Rect
+                        x={point.x - Math.max(half + 5 * mark, 13 * mark)}
+                        y={point.y - Math.max(half + 5 * mark, 13 * mark)}
+                        width={Math.max(half + 5 * mark, 13 * mark) * 2}
+                        height={Math.max(half + 5 * mark, 13 * mark) * 2}
+                        fill="transparent"
+                        onPress={() => setSelected(location.id)}
+                        onPressIn={() => setSelected(location.id)}
+                      />
+                    </G>
+                  )
+                })}
+              </G>
+
+              <G>
+                {[...hosts].map(([placeId, host]) => {
+                  const point = points[placeId]
+                  if (!point) return null
+                  const side =
+                    host.side === 'rebel' ? REBEL_COLOR : (KINGDOM_COLORS[host.side] ?? '#8a8172')
+                  // Войско — копьё рядом с местом: узкая метка, которая не спорит
+                  // с квадратом поселения и растёт от числа людей.
+                  const height = Math.min(26, 8 + host.size * 0.22) * mark
+                  return (
+                    <G key={`host:${placeId}`}>
+                      <Rect
+                        x={point.x + 7 * mark}
+                        y={point.y - height / 2}
+                        width={4 * mark}
+                        height={height}
+                        fill={side}
+                        stroke={host.marching ? '#efe6d6' : '#17140f'}
+                        strokeWidth={0.8 * mark}
+                      />
+                    </G>
+                  )
+                })}
+              </G>
+
+              <G>
+                {ventures.map((venture) => {
+                  // Мастерская — жёлтый квадрат слева от места; караван — ромб,
+                  // на дороге между двумя местами, пока идёт.
+                  const r = 3.5 * mark
+                  return venture.kind === 'workshop' ? (
                     <Rect
-                      x={point.x + 7 * mark}
-                      y={point.y - height / 2}
-                      width={4 * mark}
-                      height={height}
-                      fill={side}
-                      stroke={host.marching ? '#efe6d6' : '#17140f'}
+                      key={venture.id}
+                      x={venture.x - 8 * mark - r}
+                      y={venture.y - r}
+                      width={r * 2}
+                      height={r * 2}
+                      fill="#c9a227"
+                      stroke="#17140f"
                       strokeWidth={0.8 * mark}
                     />
-                  </G>
-                )
-              })}
-            </G>
+                  ) : (
+                    <Rect
+                      key={venture.id}
+                      x={venture.x - r}
+                      y={venture.y - r}
+                      width={r * 2}
+                      height={r * 2}
+                      fill="#c9a227"
+                      stroke="#17140f"
+                      strokeWidth={0.8 * mark}
+                      transform={`rotate(45 ${venture.x} ${venture.y})`}
+                    />
+                  )
+                })}
+              </G>
 
-            <G>
-              {ventures.map((venture) => {
-                // Мастерская — жёлтый квадрат слева от места; караван — ромб,
-                // на дороге между двумя местами, пока идёт.
-                const r = 3.5 * mark
-                return venture.kind === 'workshop' ? (
-                  <Rect
-                    key={venture.id}
-                    x={venture.x - 8 * mark - r}
-                    y={venture.y - r}
-                    width={r * 2}
-                    height={r * 2}
-                    fill="#c9a227"
-                    stroke="#17140f"
-                    strokeWidth={0.8 * mark}
-                  />
-                ) : (
-                  <Rect
-                    key={venture.id}
-                    x={venture.x - r}
-                    y={venture.y - r}
-                    width={r * 2}
-                    height={r * 2}
-                    fill="#c9a227"
-                    stroke="#17140f"
-                    strokeWidth={0.8 * mark}
-                    transform={`rotate(45 ${venture.x} ${venture.y})`}
-                  />
-                )
-              })}
-            </G>
+              {here ? (
+                <Rect
+                  x={here.x - 11 * mark}
+                  y={here.y - 11 * mark}
+                  width={22 * mark}
+                  height={22 * mark}
+                  fill="none"
+                  stroke="#ffffff"
+                  strokeWidth={2 * mark}
+                />
+              ) : null}
 
-            {here ? (
-              <Rect
-                x={here.x - 11 * mark}
-                y={here.y - 11 * mark}
-                width={22 * mark}
-                height={22 * mark}
-                fill="none"
-                stroke="#ffffff"
-                strokeWidth={2 * mark}
-              />
-            ) : null}
-
-            {selected && points[selected] ? (
-              <Rect
-                x={(points[selected]?.x ?? 0) - 15 * mark}
-                y={(points[selected]?.y ?? 0) - 15 * mark}
-                width={30 * mark}
-                height={30 * mark}
-                fill="none"
-                stroke="#c9a227"
-                strokeWidth={1.5 * mark}
-              />
-            ) : null}
-          </Svg>
+              {selected && points[selected] ? (
+                <Rect
+                  x={(points[selected]?.x ?? 0) - 15 * mark}
+                  y={(points[selected]?.y ?? 0) - 15 * mark}
+                  width={30 * mark}
+                  height={30 * mark}
+                  fill="none"
+                  stroke="#c9a227"
+                  strokeWidth={1.5 * mark}
+                />
+              ) : null}
+            </Svg>
+          </ScrollView>
         </ScrollView>
-      </ScrollView>
+      </View>
 
       {chosen && chosenSettlement ? (
         <View style={styles.panel}>
@@ -588,6 +651,7 @@ function knownPrice(game: GameState, locationId: string): string | null {
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, paddingHorizontal: spacing.lg, paddingTop: spacing.md },
+  touch: { flex: 1 },
   canvas: { backgroundColor: '#15120f' },
   panel: {
     backgroundColor: colors.surface,

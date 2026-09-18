@@ -12,7 +12,8 @@ import {
 } from '@tpg/engine'
 import { useSyncExternalStore } from 'react'
 import { AppState as NativeAppState } from 'react-native'
-import { clearSave, readSave, writeSave } from './storage'
+import type { Slot } from './storage'
+import { clearSave, readSave, readSlot, selectSlot, writeSave, writeSlot } from './storage'
 
 /**
  * Состояние приложения поверх состояния игры.
@@ -105,6 +106,44 @@ export function dismissNotice(): void {
 export async function abandonGame(): Promise<void> {
   await clearSave()
   set({ phase: 'create', error: null })
+}
+
+/** Переключиться на слот: что в нём лежит, то и играем; пусто — создаём. */
+export async function switchSlot(slot: Slot): Promise<void> {
+  if (state.phase === 'play') void writeSave(serialize(state.game))
+  await selectSlot(slot)
+  const raw = await readSlot(slot)
+  if (raw === null) {
+    set({ phase: 'create', error: null })
+    return
+  }
+  const loaded = deserialize(raw)
+  set(
+    loaded.ok
+      ? { phase: 'play', game: loaded.state, notice: null, speed: 'paused' }
+      : { phase: 'create', error: loaded.error },
+  )
+}
+
+/** Скопировать текущую игру в другой слот — «на всякий случай». */
+export async function copyToSlot(slot: Slot): Promise<void> {
+  if (state.phase !== 'play') return
+  await writeSlot(slot, serialize(state.game))
+}
+
+/** Сейв строкой: для переноса на другой телефон. */
+export function exportSave(): string | null {
+  return state.phase === 'play' ? serialize(state.game) : null
+}
+
+/** Вставленная строка становится игрой в текущем слоте. Битая — не принимается. */
+export async function importSave(raw: string): Promise<string | null> {
+  const loaded = deserialize(raw.trim())
+  if (!loaded.ok) return loaded.error
+  set({ phase: 'play', game: loaded.state, notice: null, speed: 'paused' })
+  await writeSave(serialize(loaded.state))
+  startClock()
+  return null
 }
 
 // --- ход времени ------------------------------------------------------------
