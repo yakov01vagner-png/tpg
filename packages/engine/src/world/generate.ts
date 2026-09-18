@@ -14,7 +14,9 @@ import {
 import { landCapacityOf } from '../life'
 import type { Rng } from '../rng'
 import { createRng, nextFloat, nextInt } from '../rng'
+import { MAP_SIZE, placeLocations } from './layout'
 import { hopsBetween } from './queries'
+import { buildRoads } from './roads'
 import { FRONTIER, isSite } from './types'
 import type {
   Kingdom,
@@ -27,6 +29,9 @@ import type {
   Terrain,
   World,
 } from './types'
+
+/** Место, ещё не легшее на карту. */
+type Unplaced = Omit<Location, 'x' | 'y'>
 
 /**
  * Генерация мира.
@@ -46,7 +51,9 @@ export function generateWorld(
   const kingdoms: Record<string, Kingdom> = {}
   const regions: Record<string, Region> = {}
   const provinces: Record<string, Province> = {}
-  const locations: Record<string, Location> = {}
+  // Пока карта не разложена, у места нет координаты: она появляется разом для
+  // всех, когда скелет собран (`placeLocations`).
+  const locations: Record<string, Unplaced> = {}
 
   for (const blueprint of blueprints) {
     const regionIds: string[] = []
@@ -213,138 +220,17 @@ export function generateWorld(
     }
   }
 
-  const roads = buildRoads(roll, { kingdoms, regions, provinces, locations })
-  return { kingdoms, regions, provinces, locations, roads }
-}
-
-/**
- * Дороги строятся уровнями: внутри провинции — цепочкой, дальше провинции
- * сшиваются в области, области в королевства, королевства между собой. Так мир
- * заведомо связен, и при этом дальний путь честно состоит из многих переходов.
- */
-function buildRoads(roll: Roller, world: Omit<World, 'roads'>): Record<string, readonly Road[]> {
-  const roads: Record<string, Road[]> = {}
-
-  const connect = (from: string, to: string, hours: number) => {
-    if (from === to) return
-    const forward = roads[from] ?? []
-    const backward = roads[to] ?? []
-    if (forward.some((road) => road.to === to)) return
-    forward.push({ to, hours })
-    backward.push({ to: from, hours })
-    roads[from] = forward
-    roads[to] = backward
+  // Сперва места ложатся на карту, и только потом по ним прокладывают дороги:
+  // дорога — следствие земли, а не списка (roads.ts).
+  const points = placeLocations({ kingdoms, regions, provinces })
+  const placed: Record<string, Location> = {}
+  for (const [id, location] of Object.entries(locations)) {
+    const point = points[id] ?? { x: MAP_SIZE / 2, y: MAP_SIZE / 2 }
+    placed[id] = { ...location, x: point.x, y: point.y }
   }
 
-  const firstLocation = (provinceId: string): string | null =>
-    world.provinces[provinceId]?.locationIds[0] ?? null
-
-  for (const kingdom of Object.values(world.kingdoms)) {
-    let previousRegionHub: string | null = null
-
-    for (const regionId of kingdom.regionIds) {
-      const region = world.regions[regionId]
-      if (!region) continue
-      let previousProvinceHub: string | null = null
-      const provinceHubs: string[] = []
-
-      for (const provinceId of region.provinceIds) {
-        const province = world.provinces[provinceId]
-        if (!province) continue
-
-        // Внутри провинции — цепочка, и места без жителей стоят прямо в ней:
-        // деревня, брод, городок. Прямой дороги в обход брода нет, потому что
-        // брод и есть эта дорога. Пока дорога была одним числом часов, всё
-        // между двумя деревнями было пустотой; теперь путь складывается из
-        // отрезков, и у каждого своя земля.
-        const spare = [...province.siteIds]
-        const chain: string[] = []
-        province.locationIds.forEach((locationId, index) => {
-          chain.push(locationId)
-          const between = index < province.locationIds.length - 1 ? spare.shift() : undefined
-          if (between) chain.push(between)
-        })
-        for (let i = 1; i < chain.length; i += 1) {
-          const from = chain[i - 1]
-          const to = chain[i]
-          if (from && to) connect(from, to, legHours(roll, world.locations, from, to))
-        }
-
-        // Кольцо внутри провинции: из глухого угла есть обходной путь. Если
-        // осталось незанятое место без жителей, оно ложится на этот объезд.
-        const ends = province.locationIds
-        const firstInProvince = ends[0]
-        const lastInProvince = ends[ends.length - 1]
-        if (ends.length >= 3 && firstInProvince && lastInProvince && roll.chance(0.6)) {
-          const detour = spare.shift()
-          if (detour) {
-            connect(lastInProvince, detour, legHours(roll, world.locations, lastInProvince, detour))
-            connect(
-              detour,
-              firstInProvince,
-              legHours(roll, world.locations, detour, firstInProvince),
-            )
-          } else {
-            connect(lastInProvince, firstInProvince, roll.int(4, 9))
-          }
-        }
-
-        // Что не легло в цепочку, становится тупиком при ближайшем поселении:
-        // к кургану в стороне от дороги ходят нарочно, а не по пути.
-        for (const [index, siteId] of spare.entries()) {
-          const host = ends[index % Math.max(1, ends.length)]
-          if (host) connect(host, siteId, legHours(roll, world.locations, host, siteId))
-        }
-
-        const hub = firstLocation(provinceId)
-        if (!hub) continue
-        if (previousProvinceHub) connect(previousProvinceHub, hub, roll.int(9, 18))
-        provinceHubs.push(hub)
-        previousProvinceHub = hub
-      }
-
-      // И кольцо по области: дорога в обход, если на прямой что-то случилось.
-      const firstHub = provinceHubs[0]
-      const lastHub = provinceHubs[provinceHubs.length - 1]
-      if (provinceHubs.length >= 3 && firstHub && lastHub) {
-        connect(lastHub, firstHub, roll.int(12, 22))
-      }
-
-      const regionHub = firstLocation(region.provinceIds[0] ?? '')
-      if (!regionHub) continue
-      if (previousRegionHub) connect(previousRegionHub, regionHub, roll.int(20, 30))
-      previousRegionHub = regionHub
-    }
-  }
-
-  // Королевства сшиваются через пограничье, а не напрямую из столицы в
-  // столицу. Прямая дорога между странами была порталом: между ними не лежало
-  // ничего, и войско переходило границу, не касаясь земли.
-  for (const march of MARCHES) {
-    const [first, second] = march.between
-    const marchProvince = world.provinces[`march.${march.id}.p0`]
-    const hub = marchProvince?.locationIds[0]
-    const fromCapital = world.kingdoms[first]?.capitalId
-    const toCapital = world.kingdoms[second]?.capitalId
-    if (!hub || !fromCapital || !toCapital) continue
-    const gate = marchProvince?.siteIds[0]
-    connect(fromCapital, hub, roll.int(15, 24))
-    if (gate) {
-      // За вольным селом стоит застава: в чужую корону входят через неё.
-      connect(hub, gate, roll.int(3, 6))
-      connect(gate, toCapital, roll.int(13, 21))
-    } else {
-      connect(hub, toCapital, roll.int(15, 24))
-    }
-    // Всё прочее, что стоит в марке, висит отводом от вольного села: там
-    // некому строить тракт, но дойти можно до всего.
-    const far = world.provinces[`march.${march.id}.p1`]
-    for (const siteId of [...(marchProvince?.siteIds.slice(1) ?? []), ...(far?.siteIds ?? [])]) {
-      connect(hub, siteId, legHours(roll, world.locations, hub, siteId))
-    }
-  }
-
-  return roads
+  const skeleton = { kingdoms, regions, provinces, locations: placed }
+  return { ...skeleton, roads: buildRoads(skeleton) }
 }
 
 /**

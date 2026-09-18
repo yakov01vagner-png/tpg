@@ -7,6 +7,7 @@ import type { GameState } from '../src/state'
 import { createGame } from '../src/state'
 import { generateWorld } from '../src/world/generate'
 import { roadsFrom } from '../src/world/queries'
+import { UNITS_PER_HOUR, hoursBetweenPlaces } from '../src/world/roads'
 import { isSite } from '../src/world/types'
 import type { SiteKind, World } from '../src/world/types'
 
@@ -96,8 +97,16 @@ describe('отрезок берёт цену у земли', () => {
       if (site.provinceId.startsWith('march.')) continue
       const slow = SITES[site.archetype as SiteKind].slow
       for (const road of roadsFrom(world, site.id)) {
-        expect(road.hours, `${site.name}`).toBeLessThanOrEqual(Math.round(7 * slow))
-        expect(road.hours).toBeGreaterThanOrEqual(2)
+        // Часы теперь считает земля: расстояние по карте, местность обоих
+        // концов и то, во сколько раз замедляет само место (roads.ts). Сверяем
+        // с той же формулой — она и есть правило.
+        const to = world.locations[road.to]
+        if (!to) continue
+        expect(road.hours, `${site.name} → ${to.name}`).toBe(hoursBetweenPlaces(site, to))
+        expect(road.hours).toBeGreaterThanOrEqual(1)
+        // Замедление места видно в цене: отрезок дороже, чем был бы по ровному.
+        const plain = Math.hypot(site.x - to.x, site.y - to.y) / UNITS_PER_HOUR
+        expect(road.hours, `${site.name}`).toBeGreaterThanOrEqual(Math.floor(plain * slow * 0.9))
       }
     }
   })

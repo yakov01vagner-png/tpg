@@ -26,7 +26,7 @@ import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 17
+export const SCHEMA_VERSION = 18
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200

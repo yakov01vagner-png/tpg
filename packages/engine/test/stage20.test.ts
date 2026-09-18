@@ -30,6 +30,35 @@ const ok = (result: ReturnType<typeof applyCommand>): GameState => {
 
 const marchProvince = (w: World, id: string) => w.provinces[`march.${id}.p0`]
 
+/** Путь от места к месту по дорогам: сам путь, а не только его длина. */
+function routeBetween(world: World, from: string, to: string): readonly string[] {
+  const back = new Map<string, string>([[from, from]])
+  const queue = [from]
+  while (queue.length > 0) {
+    const current = queue.shift() as string
+    if (current === to) break
+    for (const road of roadsFrom(world, current)) {
+      if (back.has(road.to)) continue
+      back.set(road.to, current)
+      queue.push(road.to)
+    }
+  }
+  if (!back.has(to)) return []
+  const route = [to]
+  while (route[0] !== from) {
+    const previous = back.get(route[0] as string)
+    if (!previous) break
+    route.unshift(previous)
+  }
+  return route
+}
+
+/** Чья корона держит место. У ничьей земли это `FRONTIER`. */
+function crownOf(world: World, id: string): string {
+  const province = world.provinces[world.locations[id]?.provinceId ?? '']
+  return world.regions[province?.regionId ?? '']?.kingdomId ?? '?'
+}
+
 describe('земля, которой не держит никто', () => {
   it('марок пять, и ни одна не числится за короной', () => {
     for (const seed of SEEDS) {
@@ -86,17 +115,33 @@ describe('в чужую корону — через землю', () => {
     }
   })
 
-  it('путь в чужую столицу проходит через вольное село марки', () => {
+  it('путь в чужую столицу проходит через ничью землю', () => {
+    // Это больше не проводка дорог руками, а свойство самой земли: марка лежит
+    // между коронами, дорога идёт по земле — значит, в чужую корону входят
+    // через неё. До 0.4 то же правило держалось на прямом отрезке «столица —
+    // вольное село» длиной в четверть мира, то есть на портале.
+    for (const march of MARCHES) {
+      const [first, second] = march.between
+      const from = world.kingdoms[first]?.capitalId ?? ''
+      const to = world.kingdoms[second]?.capitalId ?? ''
+      const route = routeBetween(world, from, to)
+      expect(route.length, `${first} → ${second}: пути нет`).toBeGreaterThan(2)
+      const crowns = route.map((id) => crownOf(world, id))
+      expect(crowns, `${first} → ${second} идёт мимо пограничья`).toContain(FRONTIER)
+    }
+  })
+
+  it('чужая столица теперь далеко: это переход, а не шаг', () => {
     const march = MARCHES[0]
     if (!march) return
     const [first, second] = march.between
     const from = world.kingdoms[first]?.capitalId ?? ''
     const to = world.kingdoms[second]?.capitalId ?? ''
-    const hub = marchProvince(world, march.id)?.locationIds[0] ?? ''
-    expect(roadsFrom(world, from).some((road) => road.to === hub)).toBe(true)
-    // Без марки соседняя столица недостижима по этой дороге.
-    const throughHub = (hopsBetween(world, from, hub) ?? 0) + (hopsBetween(world, hub, to) ?? 0)
-    expect(throughHub).toBeGreaterThan(0)
+    const hops = hopsBetween(world, from, to) ?? 0
+    console.log(`из ${first} в ${second}: ${hops} переходов`)
+    // В 0.3 между столицами было два перехода: столица — вольное село —
+    // чужая столица. Дорога по земле превращает это в две недели пути.
+    expect(hops).toBeGreaterThan(6)
   })
 
   it('мир по-прежнему связен: из любого места можно дойти до любого', () => {

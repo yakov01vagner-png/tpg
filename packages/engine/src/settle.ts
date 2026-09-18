@@ -2,6 +2,8 @@ import type { Settlement } from './economy'
 import { createSettlement, recruitPool } from './economy'
 import { carryingCapacity } from './life'
 import { type Rng, nextInt, rollChance } from './rng'
+import { placeNear } from './world/layout'
+import { hoursBetweenPlaces } from './world/roads'
 import type { Location, LocationArchetype, PlaceKind, Province, World } from './world/types'
 import { isSettlement } from './world/types'
 
@@ -197,6 +199,9 @@ export function tickSettling(
     if (!parent) continue
     const name = uniqueName(locations, NEW_NAMES[nameIndex] ?? 'Новины')
 
+    // Выселок встаёт рядом с матерью-деревней и получает свою точку на карте
+    // сразу: место без координаты — это место, до которого не проложить дорогу.
+    const spot = placeNear({ x: parent.x, y: parent.y }, id)
     const founded: Location = {
       id,
       provinceId: province.id,
@@ -204,6 +209,8 @@ export function tickSettling(
       archetype: 'village',
       terrain: parent.terrain,
       population: SETTLERS_NEEDED,
+      x: spot.x,
+      y: spot.y,
     }
     locations = { ...locations, [id]: founded }
     // Скелет пополняется только с конца: иначе сдвинется вся карта.
@@ -211,13 +218,13 @@ export function tickSettling(
       ...provinces,
       [province.id]: { ...province, locationIds: [...province.locationIds, id] },
     }
-    // Дорога до матери-деревни: без неё выселок не жилец.
-    const [hoursRoll, afterHours] = nextInt(generator, 3, 7)
-    generator = afterHours
+    // Дорога до матери-деревни: без неё выселок не жилец. Часы считает то же
+    // правило, что и при рождении мира, — расстояние и земля, а не кубик.
+    const hours = hoursBetweenPlaces(parent, founded)
     roads = {
       ...roads,
-      [id]: [{ to: biggest.locationId, hours: hoursRoll }],
-      [biggest.locationId]: [...(roads[biggest.locationId] ?? []), { to: id, hours: hoursRoll }],
+      [id]: [{ to: biggest.locationId, hours }],
+      [biggest.locationId]: [...(roads[biggest.locationId] ?? []), { to: id, hours }],
     }
     places = {
       ...places,

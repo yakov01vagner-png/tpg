@@ -114,42 +114,49 @@ describe('дороги', () => {
     }
   })
 
-  it('в чужую корону идут через пограничье, а не из столицы в столицу', () => {
+  it('в чужую корону идут через землю, а не прыжком из столицы', () => {
     for (const march of MARCHES) {
       const [first, second] = march.between
-      const hub = world.provinces[`march.${march.id}.p0`]?.locationIds[0] ?? ''
       const fromCapital = world.kingdoms[first]?.capitalId ?? ''
       const toCapital = world.kingdoms[second]?.capitalId ?? ''
-      // Прямой дороги между столицами больше нет: она шла мимо земли.
+      // Ни прямой дороги между столицами, ни прямой дороги из столицы в чужое
+      // пограничье: и то и другое было отрезком в четверть мира.
       expect(roadsFrom(world, fromCapital).some((road) => road.to === toCapital)).toBe(false)
-      expect(roadsFrom(world, fromCapital).some((road) => road.to === hub)).toBe(true)
-      expect(hopsBetween(world, fromCapital, toCapital) ?? 0).toBeGreaterThan(1)
+      expect(hopsBetween(world, fromCapital, toCapital) ?? 0).toBeGreaterThan(6)
+    }
+  })
+
+  it('из столицы дороги идут к соседям, а не через полмира', () => {
+    for (const kingdom of Object.values(world.kingdoms)) {
+      const capital = world.locations[kingdom.capitalId]
+      if (!capital) continue
+      for (const road of roadsFrom(world, kingdom.capitalId)) {
+        const to = world.locations[road.to]
+        if (!to) continue
+        const span = Math.hypot(capital.x - to.x, capital.y - to.y)
+        // В 0.3 из столицы Ре-Эстиза уходили четыре отрезка по 227–303 единицы
+        // карты — прямо к вольным сёлам чужих марок, мимо 43–67 мест.
+        expect(span, `${capital.name} → ${to.name}`).toBeLessThan(120)
+      }
     }
   })
 
   it('делают соседние места ближе далёких', () => {
-    // Внутри провинции ходьба занимает часы, между королевствами — сутки.
-    // Соседом деревни теперь бывает брод или перевал: дорога идёт через землю,
-    // и отрезок берёт часы у неё — гать вдвое дольше прямой дороги.
-    const withinProvince: number[] = []
-    for (const province of Object.values(world.provinces)) {
-      const [first] = province.locationIds
-      if (!first) continue
-      for (const road of roadsFrom(world, first)) {
-        if (world.locations[road.to]?.provinceId !== province.id) continue
-        withinProvince.push(road.hours)
-      }
-    }
-    expect(withinProvince.length).toBeGreaterThan(0)
-    expect(Math.max(...withinProvince)).toBeLessThanOrEqual(13)
+    // Отрезок — это переход между соседями, а не бросок через землю. Половина
+    // отрезков мира укладывается в рабочий день ходьбы; длинные остаются там,
+    // где между местами и правда пусто.
+    const hours = Object.values(world.roads)
+      .flatMap((list) => list.map((road) => road.hours))
+      .sort((a, b) => a - b)
+    const middle = hours[Math.floor(hours.length / 2)] ?? 0
+    console.log(`часы отрезка: половина ${middle}, самый долгий ${hours[hours.length - 1]}`)
+    expect(middle).toBeLessThanOrEqual(8)
 
-    // До чужой столицы теперь идут через марку, и один её отрезок сам по себе
-    // длиннее любой дороги внутри провинции.
+    // А до чужой столицы — не отрезок, а путь: десяток с лишним переходов.
     const march = MARCHES[0]
-    const hub = world.provinces[`march.${march?.id}.p0`]?.locationIds[0] ?? ''
     const fromCapital = world.kingdoms[march?.between[0] ?? '']?.capitalId ?? ''
-    const leg = roadsFrom(world, fromCapital).find((road) => road.to === hub)
-    expect(leg?.hours).toBeGreaterThanOrEqual(15)
+    const toCapital = world.kingdoms[march?.between[1] ?? '']?.capitalId ?? ''
+    expect(hopsBetween(world, fromCapital, toCapital) ?? 0).toBeGreaterThan(6)
   })
 
   it('держат дальние концы мира далеко друг от друга', () => {

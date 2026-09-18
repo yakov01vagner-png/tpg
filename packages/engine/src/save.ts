@@ -10,6 +10,7 @@ import { SCHEMA_VERSION } from './state'
 import type { Politics } from './war'
 import { NO_POLITICS, createPolitics } from './war'
 import { defaultStartLocationId, generateWorld } from './world/generate'
+import { MAP_SIZE, placeLocations } from './world/layout'
 import type { World } from './world/types'
 
 /**
@@ -80,6 +81,31 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
   },
   /** v15 → v16: в глуши стало что искать. Старый герой ещё нигде не искал. */
   15: (data) => ({ ...data, searchedSites: data.searchedSites ?? [] }),
+  /**
+   * v17 → v18: у места появилась координата на карте.
+   *
+   * Раньше положение выводилось из скелета при каждом обращении; теперь оно
+   * лежит в самом месте, потому что от него считаются дороги. Старому миру
+   * координаты проставляются той же раскладкой, какой он рисовался до сих пор,
+   * — карта у старого героя не сдвинется ни на пиксель. А вот дороги остаются
+   * его прежние: мир лежит в сейве целиком, и перекладывать тракты под ногами
+   * идущего нечестно. Старый герой доигрывает на старых дорогах.
+   */
+  17: (data) => {
+    const world = (data.world ?? {}) as Record<string, unknown>
+    const locations = (world.locations ?? {}) as Record<string, Record<string, unknown>>
+    const points = placeLocations({
+      kingdoms: (world.kingdoms ?? {}) as World['kingdoms'],
+      regions: (world.regions ?? {}) as World['regions'],
+      provinces: (world.provinces ?? {}) as World['provinces'],
+    })
+    const placed: Record<string, unknown> = {}
+    for (const [id, location] of Object.entries(locations)) {
+      const point = points[id] ?? { x: MAP_SIZE / 2, y: MAP_SIZE / 2 }
+      placed[id] = { ...location, x: location.x ?? point.x, y: location.y ?? point.y }
+    }
+    return { ...data, world: { ...world, locations: placed } }
+  },
   /**
    * v16 → v17: у года появился урожай. Старому сейву достаётся обычный год:
    * выдумывать задним числом, что где-то был недород, значит объявить голод в

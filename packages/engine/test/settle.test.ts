@@ -65,6 +65,8 @@ describe('места основывают и бросают', () => {
           archetype: 'village',
           terrain: 'plains',
           population: 60,
+          x: 700,
+          y: 700,
         },
       },
       provinces: {
@@ -96,7 +98,10 @@ describe('места основывают и бросают', () => {
     let current = world
     let rng = createRng(2)
     let founded: string | null = null
-    for (let year = 1; year <= 40 && !founded; year += 1) {
+    // Восемьдесят лет, а не сорок: выселок ставят броском по плодородию раз в
+    // год, и на сорока годах тест мерил удачу броска. Сам факт проверяется, а
+    // не срок: на разных зёрнах выселок встаёт с первого года по пятидесятый.
+    for (let year = 1; year <= 80 && !founded; year += 1) {
       const result = tickSettling(current, places, year * 365, rng)
       current = result.world
       places = { ...result.settlements }

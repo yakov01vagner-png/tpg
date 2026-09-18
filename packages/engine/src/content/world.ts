@@ -242,6 +242,24 @@ export const IMPORT_RELIANCE: Record<LocationArchetype, readonly [number, number
   monastery: [0.9, 1.6],
 }
 
+/**
+ * Во сколько раз дольше идти по этой земле.
+ *
+ * Час пути — это не расстояние, а расстояние по чему-то. По степи идут почти
+ * как по тракту, по горам — вдвое дольше, по топи — чуть меньше. Пока часы
+ * бросал кубик (`roll.int(3, 7)`), сосед в тридцати пяти единицах карты стоил
+ * двадцать девять часов, а место в ста восьмидесяти четырёх — семнадцать.
+ */
+export const TERRAIN_TRAVEL: Record<Terrain, number> = {
+  plains: 1,
+  steppe: 1.05,
+  coast: 1.15,
+  forest: 1.3,
+  hills: 1.4,
+  marsh: 1.7,
+  mountains: 2,
+}
+
 /** Плодородие местности: сколько еды земля способна дать. */
 export const TERRAIN_FERTILITY: Record<Terrain, readonly [number, number]> = {
   plains: [0.7, 1],

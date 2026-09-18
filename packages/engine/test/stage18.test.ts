@@ -29,6 +29,11 @@ const ok = (result: ReturnType<typeof applyCommand>): GameState => {
   return result.state
 }
 
+/** Расстояние между местами по карте. */
+function span(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
 describe('мир, в котором есть не только деревни', () => {
   it('в каждой провинции стоит хотя бы два места без жителей', () => {
     for (const seed of SEEDS) {
@@ -119,15 +124,31 @@ describe('до глуши можно дойти', () => {
     }
   })
 
-  it('дорога в глушь ведёт к своим же соседям по провинции', () => {
+  it('дорога в глушь ведёт к ближайшим соседям, а не к однопровинциальным', () => {
+    // Граница провинции — не стена: дорога из урочища идёт туда, куда ближе.
+    // Пока дороги строились из списков, сосед у места был тот, кто оказался
+    // рядом в перечислении провинции, — отсюда и хорды через полмира.
+    let ownProvince = 0
+    let total = 0
     for (const site of sitesOf(world)) {
-      // Кроме заставы в марке: она нарочно смотрит в чужую корону, через неё
-      // и входят в соседнее королевство (этап 20).
-      if (site.provinceId.startsWith('march.')) continue
-      for (const road of roadsFrom(world, site.id)) {
-        expect(world.locations[road.to]?.provinceId).toBe(site.provinceId)
+      const roads = roadsFrom(world, site.id)
+      expect(roads.length, `${site.name} без дорог`).toBeGreaterThan(0)
+      // Ближайшее место мира обязано быть соседом: иначе дорога прошла мимо.
+      const nearest = Object.values(world.locations)
+        .filter((one) => one.id !== site.id)
+        .sort((a, b) => span(site, a) - span(site, b))[0]
+      expect(
+        roads.some((road) => road.to === nearest?.id),
+        `${site.name}: ближайший сосед ${nearest?.name} не связан дорогой`,
+      ).toBe(true)
+      for (const road of roads) {
+        total += 1
+        if (world.locations[road.to]?.provinceId === site.provinceId) ownProvince += 1
       }
     }
+    // И всё же глушь принадлежит своей земле: большинство её дорог — домашние.
+    console.log(`дорог из глуши: ${total}, из них внутри своей провинции ${ownProvince}`)
+    expect(ownProvince / total).toBeGreaterThan(0.5)
   })
 
   it('туда доходят обычной командой, и время идёт', () => {

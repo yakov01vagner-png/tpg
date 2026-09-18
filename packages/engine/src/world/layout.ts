@@ -4,11 +4,16 @@ import type { World } from './types'
 /**
  * Где что лежит на карте.
  *
- * Координаты не хранятся в сейве: скелет мира неизменен (DESIGN.md, п.3.1),
- * значит положение однозначно выводится из него самого. Королевства стоят там,
- * где им положено по сеттингу, области расходятся от столицы веером, провинции
- * — от центра области, а поселения рассыпаны внутри провинции с небольшим
- * разбросом, чтобы карта не выглядела чертежом.
+ * Королевства стоят там, где им положено по сеттингу, области расходятся от
+ * столицы веером, провинции — от центра области, а места рассыпаны внутри
+ * провинции с небольшим разбросом, чтобы карта не выглядела чертежом.
+ *
+ * Считается это один раз, при рождении мира, и ложится в скелет: у места есть
+ * координата (`Location.x/y`). Раньше положение выводилось из списков при
+ * каждом обращении, а дороги строились из тех же списков, но по другому
+ * правилу, — и карта с дорогой говорили разное: 131 отрезок из 229 проходил
+ * мимо чужих мест. Теперь дорога строится от той же координаты, по которой
+ * место рисуют.
  */
 export interface Point {
   readonly x: number
@@ -104,10 +109,29 @@ export function provinceCentersOf(world: World): Readonly<Record<string, Point>>
   return centers
 }
 
+/** Где стоят места мира: читается из скелета, а не считается заново. */
 export function layoutOf(world: World): Readonly<Record<string, Point>> {
   const points: Record<string, Point> = {}
+  for (const location of Object.values(world.locations)) {
+    points[location.id] = { x: location.x, y: location.y }
+  }
+  return points
+}
+
+/**
+ * Разложить места по карте.
+ *
+ * Зовётся генератором один раз и миграцией — для старых сейвов, где координат
+ * в скелете ещё не было. Порядок обхода важен: от него зависит, кого при
+ * тесноте отводят в сторону, и старый мир должен разложиться ровно так же, как
+ * раскладывался раньше.
+ */
+export function placeLocations(
+  world: Pick<World, 'kingdoms' | 'regions' | 'provinces'>,
+): Readonly<Record<string, Point>> {
+  const points: Record<string, Point> = {}
   const taken: Point[] = []
-  const centers = provinceCentersOf(world)
+  const centers = provinceCentersOf(world as World)
 
   // Обход идёт по всем провинциям сразу, а не по коронам: у пограничья короны
   // нет, но места в нём есть, и раскладываются они по тому же правилу. Порядок
@@ -140,6 +164,23 @@ export function layoutOf(world: World): Readonly<Record<string, Point>> {
   }
 
   return points
+}
+
+/**
+ * Где встанет выселок.
+ *
+ * Новая деревня ставится рядом с материнской — на день пути, не дальше:
+ * выселки не заводят за горами. Точка выводится из имени места, поэтому
+ * основание ничего не двигает на карте (DESIGN.md, п.3.1).
+ */
+export function placeNear(parent: Point, id: string): Point {
+  const spot = jitter(id, 46)
+  const span = Math.max(22, Math.hypot(spot.x, spot.y))
+  const angle = Math.atan2(spot.y, spot.x)
+  return {
+    x: clamp(parent.x + Math.cos(angle) * span),
+    y: clamp(parent.y + Math.sin(angle) * span),
+  }
 }
 
 /**
