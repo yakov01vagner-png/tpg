@@ -9,6 +9,7 @@ import { LIFE, carryingCapacity, foodStock, rollHarvest, tickDays } from '../src
 import { createRng } from '../src/rng'
 import { tickSettling } from '../src/settle'
 import { createGame } from '../src/state'
+import { DAYS_PER_YEAR } from '../src/time'
 import { createPolitics, tickPolitics } from '../src/war'
 import { generateWorld } from '../src/world/generate'
 import { roadsFrom } from '../src/world/queries'
@@ -23,7 +24,13 @@ import type { World } from '../src/world/types'
  * его не трогают, голодает в недород и ходит по земле, а не по воздуху.
  */
 
-const YEAR = 360
+/**
+ * Год здесь — календарный (365 суток), а не круглые 360: с версии 0.5 у года
+ * есть времена (этап 37), и «год» обязан начинаться и кончаться в одном и том
+ * же месте круга. Иначе двадцать лет по 360 суток уводят мир на полгода в
+ * сторону, и «обычный год» считается от осени к осени, а меряется по весне.
+ */
+const YEAR = DAYS_PER_YEAR
 
 /** Сколько людей живёт в мире против того, сколько кормит его земля. */
 /**
@@ -53,7 +60,7 @@ function lived(years: number, seed = 1) {
   let famines = 0
   let deaths = 0
   for (let year = 1; year <= years; year += 1) {
-    const life = tickDays(world, settlements, YEAR)
+    const life = tickDays(world, settlements, YEAR, LIFE, (year - 1) * YEAR + 1)
     settlements = life.settlements
     for (const event of life.events) {
       if (event.type !== 'famine') continue
@@ -190,7 +197,10 @@ describe('год на год не приходится', () => {
     const good = under(1.05)
     const bad = under(0.7)
     console.log(`умерло за год: при хорошем урожае ${good}, при недороде ${bad}`)
-    expect(bad).toBeGreaterThan(good * 5)
+    // Вчетверо, а не впятеро: с версии 0.5 голодная весна есть и в хороший год
+    // (этап 37) — прошлогоднее к травню кончается у всех. Недород эту весну
+    // превращает в мор.
+    expect(bad).toBeGreaterThan(good * 4)
     expect(bad).toBeGreaterThan(1000)
   })
 

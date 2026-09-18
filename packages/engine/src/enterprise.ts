@@ -9,7 +9,7 @@ import { WAGON_PACE, legHoursFor } from './journey'
 import { foodSecurity } from './life'
 import { type Rng, rollChance } from './rng'
 import { seasonOf } from './time'
-import { lanesFrom } from './world/lanes'
+import { iceBound, lanesFrom } from './world/lanes'
 import { roadsFrom } from './world/queries'
 import type { World } from './world/types'
 import { isSite } from './world/types'
@@ -194,6 +194,13 @@ export function tickEnterprises(
           travel: null,
           earned: enterprise.earned + gain,
         })
+        continue
+      }
+
+      // Зимой судно стоит в гавани: море встало (этап 38). Дела нет, убытка
+      // тоже — команда распущена до весны.
+      if (iceBound(day)) {
+        next.push(enterprise)
         continue
       }
 

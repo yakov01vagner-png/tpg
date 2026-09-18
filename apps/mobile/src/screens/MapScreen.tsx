@@ -25,6 +25,7 @@ import {
   formatDuration,
   holderOf,
   hours,
+  iceBound,
   isSettlement,
   isSite,
   journeyProgress,
@@ -140,7 +141,9 @@ export function MapScreen({ game }: { game: GameState }) {
           cell?.locationId ? held[cell.locationId] : undefined,
         )
         const fill = grid.water[row * grid.size + column]
-          ? SEA_COLOR
+          ? season === 'winter'
+            ? ICE_COLOR
+            : SEA_COLOR
           : land === null
             ? null
             : tintBySeason(land, season)
@@ -917,7 +920,9 @@ export function MapScreen({ game }: { game: GameState }) {
               onPress={() => dispatch({ type: 'foundCaravan', awayId: chosen.id })}
             />
           ) : null}
-          {lane ? (
+          {lane && iceBound(dayOf(game.time)) ? (
+            <Text style={styles.plague}>Море встало: до весны туда не уплыть.</Text>
+          ) : lane ? (
             <Button
               label={`Морем сюда — ${formatDuration(hours(seaHours(lane.hours, seaManner(game), game.ship)))}${
                 seaManner(game) === 'own'
@@ -1022,6 +1027,9 @@ const NOBODY_COLOR = '#4a453e'
  * а вода на ней фон, но фон, у которого есть край.
  */
 const SEA_COLOR = '#1b2a38'
+
+/** Лёд: зимой море встаёт, и это видно с одного взгляда (этап 38). */
+const ICE_COLOR = '#34485a'
 
 /**
  * Цвет реки.

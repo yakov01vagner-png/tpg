@@ -1,3 +1,4 @@
+import { seasonOf } from '../time'
 import { MAP_SIZE } from './layout'
 import type { Point } from './layout'
 import type { Sea } from './sea'
@@ -153,6 +154,18 @@ export function buildLanes(
 /** Часы морского пути из пройденной воды. В море нет ни гати, ни перевала. */
 export function laneHours(span: number): number {
   return Math.max(2, Math.round(span / SEA_UNITS_PER_HOUR))
+}
+
+/**
+ * Лёд (этап 38).
+ *
+ * Зимой море встаёт: в гавань не войти, из гавани не выйти, и остров на три
+ * месяца перестаёт быть частью мира. Это не запрет ради запрета — это то, ради
+ * чего на острове держат запас, а торговый год кончается осенью. Ледостав
+ * берёт зиму целиком: студень, сечень и лютень.
+ */
+export function iceBound(day: number | null): boolean {
+  return day !== null && seasonOf(day) === 'winter'
 }
 
 /** Морские пути из этой гавани. Сейвы до 0.5 их не знают. */

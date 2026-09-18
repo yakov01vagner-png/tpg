@@ -23,6 +23,7 @@ import {
   fordShut,
   formatDuration,
   hours,
+  iceBound,
   isOwnedByPlayer,
   isSite,
   jobsAt,
@@ -575,6 +576,9 @@ function SeaSection({
   const lanes = lanesFrom(game.world, game.locationId)
   const [chosen, setChosen] = useState<string | null>(null)
   if (lanes.length === 0) return null
+  // Зимой из гавани не выйти: море встало (этап 38). Пристань при этом живёт —
+  // судно чинят и продают как раз зимой.
+  const ice = iceBound(dayOf(game.time))
   const target = lanes.find((lane) => lane.to === chosen) ?? lanes[0]
   if (!target) return null
   const people = partySize(game.party) + 1
@@ -600,9 +604,14 @@ function SeaSection({
 
   return (
     <>
-      <Section title="Морем отсюда" aside={`${lanes.length} путей`}>
+      <Section title="Морем отсюда" aside={ice ? 'море встало' : `${lanes.length} путей`}>
+        {ice ? (
+          <Dim>
+            Лёд от берега до горизонта. До весны ни одно судно не выйдет, и ни одно не придёт.
+          </Dim>
+        ) : null}
         <Chips>
-          {lanes.map((lane) => {
+          {(ice ? [] : lanes).map((lane) => {
             const place = game.world.locations[lane.to]
             if (!place) return null
             return (
@@ -615,7 +624,7 @@ function SeaSection({
             )
           })}
         </Chips>
-        {manners.map((one) => {
+        {(ice ? [] : manners).map((one) => {
           const command: Command = { type: 'sail', toLocationId: target.to, manner: one.manner }
           const going = seaHours(target.hours, one.manner, game.ship)
           const price = passageCost(one.manner, going, people)

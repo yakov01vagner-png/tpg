@@ -147,7 +147,7 @@ import { allied, pairOf } from './war'
 import type { Politics } from './war'
 import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
-import { lanesFrom } from './world/lanes'
+import { iceBound, lanesFrom } from './world/lanes'
 import { kingdomOf, regionOf, roadsFrom } from './world/queries'
 import { fordShut } from './world/rivers'
 import type { World } from './world/types'
@@ -257,6 +257,7 @@ export type FailureCode =
   | 'wounded'
   | 'onTheRoad'
   | 'flood'
+  | 'ice'
   | 'invalid'
 
 export type CommandResult =
@@ -581,6 +582,10 @@ function sail(state: GameState, toLocationId: string, manner: Passage): CommandR
   if (!destination) return fail('unknownAction', 'Такого места нет.')
   const lane = lanesFrom(state.world, state.locationId).find((one) => one.to === toLocationId)
   if (!lane) return fail('unknownAction', `Отсюда нет морского пути в ${destination.name}.`)
+  // Зимой море встаёт: до весны никто никуда не идёт (этап 38).
+  if (iceBound(dayOf(state.time))) {
+    return fail('ice', 'Море встало. До весны из гавани не выйти.')
+  }
   if (manner === 'own' && !state.ship) {
     return fail('requirements', 'Своего судна у тебя нет.')
   }
@@ -1115,6 +1120,26 @@ function ambush(draft: Draft, locationId: string, onTheRoad = false): void {
       ? `Разбойники вытрясли ${loss} монет и отпустили.`
       : 'Разбойники обшарили и отпустили: взять нечего.',
   )
+}
+
+/**
+ * Мороз забирает своё.
+ *
+ * Ночь в поле зимой — это не «отдохнул хуже»: это отмороженные пальцы у того,
+ * кто не умеет ночевать в снегу. Выживание убирает беду почти совсем, и это тот
+ * случай, когда навык виден не числом в листе, а тем, что с тобой не случилось.
+ */
+function frostbite(draft: Draft): void {
+  if (draft.character.wound) return
+  const skill = skillLevel(draft.character, 'survival')
+  const risk = Math.max(0, 0.3 - skill * 0.04)
+  const [bitten, afterRoll] = rollChance(draft.rng, risk)
+  draft.rng = afterRoll
+  if (!bitten) return
+  const [days, afterDays] = nextInt(draft.rng, 3, 7)
+  draft.rng = afterDays
+  draft.character = { ...draft.character, wound: { daysLeft: days, severity: 0.2 } }
+  notice(draft, 'Мороз достал: пальцы не гнутся, лицо в белых пятнах. Это пройдёт, но не завтра.')
 }
 
 /** Дорога выматывает примерно как работа: три с половиной единицы за час хода. */
@@ -2390,16 +2415,24 @@ function camp(state: GameState): CommandResult {
   }
 
   const draft = open(state)
+  // Зимняя ночёвка — другое дело (этап 38): под открытым небом в мороз не
+  // отдыхают, а пережидают. Выживание здесь не украшение: оно решает, встанешь
+  // ты утром отдохнувшим или отмороженным.
+  const winter = seasonOf(dayOf(state.time)) === 'winter'
   notice(
     draft,
-    state.journey
-      ? 'Ночёвка у дороги: костёр и очередь караулить.'
-      : 'Костёр, котелок и очередь караулить.',
+    winter
+      ? 'Ночёвка в мороз: костёр, лапник и очередь не дать огню погаснуть.'
+      : state.journey
+        ? 'Ночёвка у дороги: костёр и очередь караулить.'
+        : 'Костёр, котелок и очередь караулить.',
   )
   advance(draft, hours(CAMP_HOURS))
-  // Под небом отдыхают хуже, чем под крышей: три четверти от сна в доме.
-  addFatigue(draft, -Math.round(SLEEP_RECOVERY_PER_HOUR * CAMP_HOURS * 0.75))
-  practice(draft, 'survival', 18)
+  // Под небом отдыхают хуже, чем под крышей: три четверти от сна в доме. В
+  // мороз — вдвое хуже того.
+  addFatigue(draft, -Math.round(SLEEP_RECOVERY_PER_HOUR * CAMP_HOURS * (winter ? 0.4 : 0.75)))
+  practice(draft, 'survival', winter ? 30 : 18)
+  if (winter) frostbite(draft)
   // Ночь в глуши — это ещё и ночь в глуши. В пути опасность берётся у той
   // земли, к которой идёшь: она и лежит вокруг костра.
   ambush(draft, state.journey ? state.journey.toId : state.locationId)

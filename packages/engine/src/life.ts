@@ -122,6 +122,21 @@ export const SEASON_FOOD: Record<Season, number> = {
   winter: 0.15,
 }
 
+/**
+ * Сколько съедают в это время года.
+ *
+ * Зимой человек ест больше: холод отнимает то, что летом уходит в работу. Из-за
+ * этих полутора десятых доля голода перестала приходиться на одну весну —
+ * пустеть амбары начинают ещё в лютне, и «дожить до нового хлеба» становится
+ * счётом, который ведут с осени.
+ */
+export const SEASON_EATING: Record<Season, number> = {
+  spring: 1,
+  summer: 0.95,
+  autumn: 1,
+  winter: 1.15,
+}
+
 /** Что земля родит: на равнине много, в горах почти ничего. */
 export const TERRAIN_FOOD: Record<Terrain, number> = {
   plains: 1.2,
@@ -467,8 +482,9 @@ function produceAndEat(
       stock.grain += produced
     }
 
-    // Что съедают люди: сперва рыбу, она не ждёт.
-    const needed = settlement.population * config.foodPerPerson
+    // Что съедают люди: сперва рыбу, она не ждёт. Зимой едят больше — мороз
+    // берёт своё, и печь тоже надо чем-то топить (этап 38).
+    const needed = settlement.population * config.foodPerPerson * SEASON_EATING[season]
     const fromFish = Math.min(stock.fish, needed)
     stock.fish -= fromFish
     const fromGrain = Math.min(stock.grain, needed - fromFish)

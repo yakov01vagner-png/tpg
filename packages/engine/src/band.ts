@@ -900,10 +900,21 @@ export function tickBands(
   }
 
   // 4. Новая цель и шаг в её сторону.
+  //
+  // Зимой походов не бывает (этап 38): дороги стоят, обоз не пройдёт, а войско
+  // надо кормить каждый день. Объявленная война зимой не отменяется — она
+  // просто не идёт: дружины расходятся по своим местам и ждут весны. Отсюда и
+  // весеннее вскипание: к березню накопилось всё, что не решилось осенью.
+  const frozen = day !== null && seasonOf(day) === 'winter'
   const finished: Band[] = []
   for (const band of acted) {
     if (band.travel) {
       finished.push(band)
+      continue
+    }
+    if (frozen) {
+      // Тот, кто в походе, поворачивает домой; тот, кто дома, стоит.
+      finished.push(band.goal.type === 'muster' ? band : { ...band, goal: { type: 'muster' } })
       continue
     }
     let goal = band.goal
