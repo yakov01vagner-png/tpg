@@ -2,6 +2,7 @@ import { type BattleSide, type Units, resolveRound, startBattle, unitsSize } fro
 import type { GroupId, OrderId } from './battle'
 import type { TroopId } from './content/troops'
 import type { Settlement } from './economy'
+import { takeLand } from './holding'
 import type { Party } from './party'
 import { type Rng, nextFloat, nextInt, rollChance } from './rng'
 import type { Lord, Politics } from './war'
@@ -712,10 +713,11 @@ export function tickBands(
           })
           continue
         }
-        places = {
-          ...places,
-          [band.locationId]: { ...held, owner: conquerorSide(lords, band), garrison: {} },
-        }
+        // Провинция следует за главным местом: взяв его, берут и остальное,
+        // что держал прежний хозяин здесь же (holding.ts, `takeLand`).
+        places = takeLand(world, places, band.locationId, conquerorSide(lords, band))
+        const seized = places[band.locationId]
+        if (seized) places = { ...places, [band.locationId]: { ...seized, garrison: {} } }
         // Победа связывает: лорд, берущий города для своей короны, реже уходит
         // от неё. Без этого вечная война обнуляет верность всем подряд.
         lords = lords.map((candidate) =>

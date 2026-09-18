@@ -32,7 +32,9 @@ describe('мир вдвое больше', () => {
       const world = generateWorld(seed)
       const all = Object.values(world.locations)
       const wild = all.filter((one) => isSite(one.archetype))
-      console.log(`зерно ${seed}: мест ${all.length}, без жителей ${wild.length}, провинций ${Object.keys(world.provinces).length}`)
+      console.log(
+        `зерно ${seed}: мест ${all.length}, без жителей ${wild.length}, провинций ${Object.keys(world.provinces).length}`,
+      )
       expect(all.length).toBeGreaterThan(200)
       expect(wild.length / all.length).toBeGreaterThan(0.35)
       expect(Object.keys(world.provinces).length).toBeGreaterThan(40)

@@ -5,17 +5,20 @@ import {
   type Command,
   type GameState,
   LIFE,
+  PLAYER,
   type Settlement,
   TROOPS,
   TROOP_IDS,
   canApply,
   dailyTax,
+  dailyTolls,
   foodSecurity,
   freeSlots,
   garrisonLimit,
   garrisonSize,
   garrisonWages,
   isOwnedByPlayer,
+  isSite,
   kingdomOf,
   lordById,
   warsOf,
@@ -195,6 +198,10 @@ function Holding({ game, settlement }: { game: GameState; settlement: Settlement
   const steward = game.companions.find(
     (one) => one.role.type === 'steward' && one.role.locationId === settlement.locationId,
   )
+  const province =
+    game.world.provinces[game.world.locations[settlement.locationId]?.provinceId ?? '']
+  const own = (province?.locationIds ?? []).filter((id) => game.settlements[id]?.owner === PLAYER)
+  const tolls = dailyTolls(game.world, game.settlements, PLAYER)
   const breadDays = Math.floor(
     (settlement.stock.grain + settlement.stock.fish) /
       Math.max(1, settlement.population * LIFE.foodPerPerson),
@@ -223,6 +230,7 @@ function Holding({ game, settlement }: { game: GameState; settlement: Settlement
             ? `Управляющий: ${steward.name} — торг ${steward.skills.trade ?? 0}`
             : 'Управляющего нет: спутника можно поставить на это место в «Людях».'}
         </Dim>
+        {tolls > 0 ? <Dim tone="gold">{`Пошлины с дорог: +${tolls} в сутки`}</Dim> : null}
         {settlement.building ? (
           <Dim tone="gold">
             {`Строится: ${BUILDINGS[settlement.building.id].label.toLowerCase()} — осталось ${settlement.building.daysLeft} сут.`}
@@ -231,6 +239,28 @@ function Holding({ game, settlement }: { game: GameState; settlement: Settlement
           <Dim>{`Мест под стройку: ${freeSlots(game.world, settlement)}`}</Dim>
         )}
       </Panel>
+
+      <Section title={`Твоя земля: ${province?.name ?? 'провинция'}`}>
+        <Dim>
+          {`Мест в провинции ${(province?.locationIds.length ?? 0) + (province?.siteIds.length ?? 0)}, из них твоих ${own.length}. Провинция следует за главным местом: взяв его, берут и остальное.`}
+        </Dim>
+        {(province?.siteIds.length ?? 0) > 0 ? (
+          <View style={styles.built}>
+            {(province?.siteIds ?? []).map((id) => {
+              const place = game.world.locations[id]
+              if (!place || !isSite(place.archetype)) return null
+              return (
+                <View key={id} style={styles.builtOne}>
+                  <Icon name={place.archetype} size={22} color={palette.dim} />
+                  <Faint>{place.name.split(' ').slice(-1)[0]}</Faint>
+                </View>
+              )
+            })}
+          </View>
+        ) : (
+          <Dim>Глуши в этой провинции не записано.</Dim>
+        )}
+      </Section>
 
       {settlement.buildings.length > 0 ? (
         <View style={styles.built}>

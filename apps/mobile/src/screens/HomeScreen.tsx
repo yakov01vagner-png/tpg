@@ -21,6 +21,7 @@ import {
   isSite,
   jobsAt,
   kingdomOf,
+  landHolderOf,
   lordById,
   lordSays,
   matchesAt,
@@ -179,6 +180,11 @@ export function HomeScreen({ game }: { game: GameState }) {
             ? `${people > 0 ? `${formatPopulation(people)} жителей` : 'заброшено'} · ${ownerName(game, settlement.owner)}`
             : `${addressOf(game.world, game.locationId)}`}
         </Dim>
+        {settlement ? null : (
+          // У кургана хозяина нет, но земля под ним чья-то: держит тот, кто
+          // держит главное место провинции.
+          <Dim>{`Земля: ${ownerName(game, landHolderOf(game.world, game.settlements, game.locationId))}`}</Dim>
+        )}
         {site ? <Dim>{SITES[site].description}</Dim> : null}
         <StateLine game={game} />
         {settlement && settlement.buildings.length > 0 ? (

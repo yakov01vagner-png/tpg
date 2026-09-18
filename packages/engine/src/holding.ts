@@ -72,6 +72,130 @@ export function garrisonWages(settlement: Settlement): number {
   return wages
 }
 
+/**
+ * Главное место провинции для этого держателя: самое людное из тех, что он
+ * здесь держит. По нему провинция и считается взятой.
+ */
+export function provinceSeat(
+  world: World,
+  settlements: Readonly<Record<string, Settlement>>,
+  provinceId: string,
+  owner: string | null,
+): string | null {
+  const province = world.provinces[provinceId]
+  if (!province) return null
+  let seat: string | null = null
+  let most = -1
+  for (const id of province.locationIds) {
+    const settlement = settlements[id]
+    if (!settlement || settlement.owner !== owner || settlement.population <= 0) continue
+    if (settlement.population > most) {
+      most = settlement.population
+      seat = id
+    }
+  }
+  return seat
+}
+
+/**
+ * Взять землю.
+ *
+ * Провинция следует за своим главным местом (DESIGN.md, п.3.2: лорд держит
+ * провинцию, а не точку). Пока каждую деревню приходилось брать отдельно,
+ * владение рассыпалось в чересполосицу: у одного лорда три деревни здесь, у
+ * другого одна там, и «отнять у него землю» не значило ничего.
+ *
+ * Берущий получает всё, что прежний держатель держал в этой провинции, — но
+ * только если взял его главное место. Хутор на отшибе остаётся хутором.
+ */
+export function takeLand(
+  world: World,
+  settlements: Readonly<Record<string, Settlement>>,
+  locationId: string,
+  owner: string,
+): Readonly<Record<string, Settlement>> {
+  const taken = settlements[locationId]
+  if (!taken) return settlements
+  const loser = taken.owner
+  const provinceId = world.locations[locationId]?.provinceId
+  const seat = provinceId ? provinceSeat(world, settlements, provinceId, loser) : null
+
+  const next: Record<string, Settlement> = { ...settlements, [locationId]: { ...taken, owner } }
+  if (!provinceId || seat !== locationId || loser === null || loser === owner) return next
+
+  for (const id of world.provinces[provinceId]?.locationIds ?? []) {
+    const settlement = next[id]
+    if (!settlement || settlement.owner !== loser) continue
+    next[id] = { ...settlement, owner }
+  }
+  return next
+}
+
+/**
+ * Чья это земля.
+ *
+ * У перевала и кургана хозяина нет и быть не может — но земля под ними чья-то.
+ * Держателем считается тот, кто держит главное место провинции: провинция и
+ * есть единица владения (DESIGN.md, п.3.2).
+ */
+export function landHolderOf(
+  world: World,
+  settlements: Readonly<Record<string, Settlement>>,
+  locationId: string,
+): string | null {
+  const provinceId = world.locations[locationId]?.provinceId
+  if (!provinceId) return null
+  let owner: string | null = null
+  let most = 0
+  for (const id of world.provinces[provinceId]?.locationIds ?? []) {
+    const settlement = settlements[id]
+    if (!settlement || settlement.population <= most) continue
+    most = settlement.population
+    owner = settlement.owner
+  }
+  return owner
+}
+
+/** Сколько застава в своей провинции даёт в сутки, когда на дорогах спокойно. */
+export const TOLL_PER_OUTPOST = 7
+
+/**
+ * Пошлина с дорог.
+ *
+ * Дорога — тоже хозяйство: застава в провинции берёт с проезжих, и берёт тем
+ * больше, чем спокойнее вокруг. В разбойной округе обозы идут в объезд или не
+ * идут вовсе, и застава не берёт ничего.
+ */
+export function dailyTolls(
+  world: World,
+  settlements: Readonly<Record<string, Settlement>>,
+  owner: string,
+): number {
+  const held = new Set(
+    Object.values(settlements)
+      .filter((one) => one.owner === owner && one.population > 0)
+      .map((one) => world.locations[one.locationId]?.provinceId ?? ''),
+  )
+  let toll = 0
+  for (const provinceId of held) {
+    const province = world.provinces[provinceId]
+    if (!province) continue
+    const gates = province.siteIds.filter(
+      (id) => world.locations[id]?.archetype === 'outpost',
+    ).length
+    if (gates === 0) continue
+    const around = province.locationIds
+      .map((id) => settlements[id])
+      .filter((one): one is Settlement => one !== undefined && one.owner === owner)
+    const peace =
+      around.length === 0
+        ? 0
+        : 1 - around.reduce((sum, one) => sum + one.banditry, 0) / around.length
+    toll += gates * TOLL_PER_OUTPOST * Math.max(0, peace)
+  }
+  return Math.floor(toll)
+}
+
 /** Во что обходится постройка и сколько её ждать. */
 export function buildingCost(building: BuildingId): number {
   return BUILDINGS[building].cost

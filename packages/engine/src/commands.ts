@@ -61,6 +61,7 @@ import type { GameEvent, LogKind } from './events'
 import {
   PLAYER,
   dailyTax,
+  dailyTolls,
   freeSlots,
   garrisonLimit,
   garrisonSize,
@@ -68,6 +69,7 @@ import {
   hasBuilding,
   holdingsOf,
   isOwnedByPlayer,
+  takeLand,
 } from './holding'
 import type { LifeEvent } from './life'
 import { foodSecurity, tickDays } from './life'
@@ -749,6 +751,15 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
       const taken = draft.settlements[battle.stake.locationId]
       const name = state.world.locations[battle.stake.locationId]?.name ?? 'место'
       if (taken) {
+        // Провинция следует за главным местом: взяв его, берёшь и остальное,
+        // что держал прежний хозяин здесь же (holding.ts, `takeLand`).
+        const before = holdingsOf(draft.settlements, PLAYER).length
+        draft.settlements = takeLand(
+          draft.base.world,
+          draft.settlements,
+          battle.stake.locationId,
+          PLAYER,
+        )
         draft.settlements = {
           ...draft.settlements,
           [battle.stake.locationId]: {
@@ -760,7 +771,11 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
             stock: { ...taken.stock, grain: Math.round(taken.stock.grain * 0.6) },
           },
         }
+        const gained = holdingsOf(draft.settlements, PLAYER).length - before
         notice(draft, `${name} взят. Людей поубавилось, и они это запомнят.`)
+        if (gained > 1) {
+          notice(draft, `С ним пошла вся провинция: мест стало на ${gained} больше.`, 'world')
+        }
         seeDeed(draft, 'sack')
         draft.reputation = withPlaceRep(draft.reputation, battle.stake.locationId, -45)
         if (taken.owner && !taken.owner.startsWith('crown:') && taken.owner !== PLAYER) {
@@ -2884,11 +2899,16 @@ function collectHoldings(draft: Draft, days: number): void {
     }
   }
 
+  // Дорога — тоже хозяйство: застава в своей провинции берёт с проезжих.
+  const tolls = dailyTolls(draft.base.world, settlements, PLAYER) * days
+
   draft.settlements = settlements
-  const net = Math.round(income - wages)
+  const net = Math.round(income + tolls - wages)
   if (net !== 0) addMoney(draft, net)
   if (net < 0) notice(draft, `Земля не окупает гарнизон: ушло ${Math.abs(net)}.`)
-  else if (net > 0) notice(draft, `Подати с владений: ${net}.`)
+  else if (net > 0) {
+    notice(draft, tolls > 0 ? `Подати и пошлины: ${net}.` : `Подати с владений: ${net}.`)
+  }
 }
 
 /** Просроченное дело не прощают: сгорает само и портит имя. */
