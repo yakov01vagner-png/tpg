@@ -11,6 +11,7 @@ import type { GameEvent, LogKind } from './events'
 import { describeEvent, kindOf } from './events'
 import type { Journey } from './journey'
 import { EMPTY_PRICE_LOG, type PriceLog } from './market'
+import type { Membership } from './order'
 import type { Party } from './party'
 import { EMPTY_PARTY } from './party'
 import type { Plague } from './plague'
@@ -28,7 +29,7 @@ import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 20
+export const SCHEMA_VERSION = 21
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -81,6 +82,11 @@ export interface GameState {
    * снаряжение. Пустое почти всю игру: своё судно стоит как три каравана.
    */
   readonly ship: Ship | null
+  /**
+   * Орден или гильдия, в которой состоит герой (этап 42). Ордена ревнивы:
+   * состоять можно в одном. Пусто — сам по себе.
+   */
+  readonly guild: Membership | null
   /**
    * Отведённый мор (этап 41): где и до какого дня чары держат смерть вполовину.
    * Необязательно — сейвы до 0.5 чар не знают.
@@ -147,6 +153,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     journey: null,
     party: EMPTY_PARTY,
     ship: null,
+    guild: null,
     battle: null,
     politics,
     bands,

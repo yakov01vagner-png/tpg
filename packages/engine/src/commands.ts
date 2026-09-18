@@ -33,7 +33,7 @@ import type { BuildingId } from './content/buildings'
 import { BUILDINGS } from './content/buildings'
 import type { ChainDef } from './content/chains'
 import type { CompanionDef, DeedId } from './content/companions'
-import { COMPANIONS, TEMPERS } from './content/companions'
+import { COMPANIONS, DEED_LABELS, TEMPERS } from './content/companions'
 import type { SlotId } from './content/equipment'
 import { ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
 import type { GoodId } from './content/goods'
@@ -83,6 +83,19 @@ import { LIFE, foodSecurity, rollHarvest, tickDays } from './life'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
 import type { PriceLog } from './market'
 import { recordPrices } from './market'
+import type { Membership } from './order'
+import {
+  DUES_DAYS,
+  EXPELLED,
+  charterFeels,
+  feudChill,
+  orderById,
+  ordersAt,
+  ownOrder,
+  ownOrderHere,
+  rankLabel,
+  rankOf,
+} from './order'
 import type { Party } from './party'
 import {
   DESERTION_MORALE,
@@ -232,6 +245,9 @@ export type Command =
   | { readonly type: 'repairItem'; readonly slot: SlotId }
   | { readonly type: 'outfitParty'; readonly weapons: number }
   | { readonly type: 'giveFood'; readonly amount: number }
+  /** Вступить в орден или гильдию там, где они стоят, и выйти (этап 42). */
+  | { readonly type: 'joinOrder'; readonly orderId: string }
+  | { readonly type: 'leaveOrder' }
   /** Сотворить заклинание вне боя (этап 41). */
   | { readonly type: 'cast'; readonly spellId: string }
   /** Сдать товар тому, кто ждёт его к ярмарке (этап 39). */
@@ -451,6 +467,10 @@ export function applyCommand(
       return deliverGoods(state, command.good, command.amount)
     case 'cast':
       return cast(state, command.spellId)
+    case 'joinOrder':
+      return joinOrder(state, command.orderId)
+    case 'leaveOrder':
+      return leaveOrder(state)
     case 'takeQuest':
       return takeQuest(state, command.questId)
     case 'finishQuest':
@@ -637,7 +657,9 @@ function sail(state: GameState, toLocationId: string, manner: Passage): CommandR
 
   const hours = seaHours(lane.hours, manner, state.ship)
   const people = partySize(state.party) + 1
-  const cost = passageCost(manner, hours, people)
+  const cost = Math.round(
+    passageCost(manner, hours, people) * (ownOrderHere(state)?.perks.sea ?? 1),
+  )
   if (cost > state.character.money) {
     return fail('noMoney', `За перевоз просят ${cost}, а у тебя ${state.character.money}.`)
   }
@@ -709,7 +731,7 @@ function repairShip(state: GameState): CommandResult {
   if (lanesFrom(state.world, state.locationId).length === 0) {
     return fail('unavailableHere', 'Судно чинят в гавани.')
   }
-  const price = repairPrice(ship)
+  const price = Math.round(repairPrice(ship) * (ownOrderHere(state)?.perks.sea ?? 1))
   if (price <= 0) return fail('invalid', `«${ship.name}» и так цела.`)
   if (state.character.money < price) {
     return fail('noMoney', `Починка стоит ${price}, а у тебя ${state.character.money}.`)
@@ -1125,6 +1147,13 @@ function ambush(draft: Draft, locationId: string, onTheRoad = false): void {
   if (!here) return
   // Оберег (этап 41): пока он держится, засада ждёт кого-то другого.
   if ((draft.character.warded ?? 0) > draft.time) return
+  // На земле своего ордена своих трогают реже (этап 42).
+  const roads = ownOrderHere(draft.base, locationId)?.perks.roads ?? 1
+  if (roads < 1) {
+    const [spared, afterSpare] = rollChance(draft.rng, 1 - roads)
+    draft.rng = afterSpare
+    if (spared) return
+  }
   const settlement = draft.settlements[locationId]
   const banditry = settlement?.banditry ?? 0
   const wild = isSite(here.archetype) ? SITES[here.archetype].danger : 0
@@ -1238,6 +1267,89 @@ function paySailors(draft: Draft, days: number): void {
   )
 }
 
+/**
+ * Взнос ордену.
+ *
+ * Раз в месяц, сам собой: есть деньги — уплачено, нет — положение падает, и
+ * тот, кто не платит долго, вылетает. Это и есть «служат и вылетают»: орден
+ * держит своих не клятвой, а счётом.
+ */
+function payDues(draft: Draft): void {
+  const membership = draft.guild
+  const order = membership ? orderById(membership.orderId) : null
+  if (!membership || !order) return
+  const today = dayOf(draft.time)
+  while (draft.guild && today > draft.guild.paidUntil) {
+    const next = draft.guild.paidUntil + DUES_DAYS
+    if (draft.character.money >= order.dues) {
+      addMoney(draft, -order.dues)
+      draft.guild = { ...draft.guild, paidUntil: next }
+    } else {
+      draft.guild = { ...draft.guild, paidUntil: next }
+      addStanding(draft, -10, `${order.name}: взнос не внесён.`)
+    }
+  }
+}
+
+/** Сдвинуть положение в ордене — и вылететь, если упало ниже терпимого. */
+function addStanding(draft: Draft, delta: number, why: string): void {
+  const membership = draft.guild
+  const order = membership ? orderById(membership.orderId) : null
+  if (!membership || !order) return
+  const standing = Math.max(-100, Math.min(200, membership.standing + delta))
+  const before = rankOf(order, membership.standing)
+  draft.guild = { ...membership, standing }
+  if (standing <= EXPELLED) {
+    draft.guild = null
+    notice(draft, `${order.name} отказал тебе от дома: ${why}`, 'world')
+    draft.reputation = withLordRep(draft.reputation, `order:${order.id}`, -30)
+    return
+  }
+  const after = rankOf(order, standing)
+  if (after > before)
+    notice(draft, `${order.name}: теперь ты ${rankLabel(order, standing)}.`, 'world')
+  else if (delta < 0) notice(draft, why, 'world')
+}
+
+function joinOrder(state: GameState, orderId: string): CommandResult {
+  const order = orderById(orderId)
+  if (!order) return fail('unknownAction', 'Такого ордена нет.')
+  if (state.guild) return fail('invalid', 'Ты уже в ордене. Двум господам не служат.')
+  if (!ordersAt(state.world, state.locationId).some((one) => one.id === orderId)) {
+    return fail('unavailableHere', `${order.name} здесь не стоит.`)
+  }
+  // Кого выгнали, обратно не берут скоро: память у ордена долгая.
+  if (lordRep(state.reputation, `order:${order.id}`) <= -20) {
+    return fail('shunned', `${order.name} тебя помнит и не примет.`)
+  }
+  const draft = open(state)
+  advance(draft, hours(2))
+  draft.guild = {
+    orderId,
+    standing: 0,
+    since: dayOf(draft.time),
+    paidUntil: dayOf(draft.time) + DUES_DAYS,
+  }
+  if (draft.character.money >= order.dues) addMoney(draft, -order.dues)
+  notice(
+    draft,
+    `Принят: ${order.name}, ${order.ranks[0]?.label ?? ''}. Взнос ${order.dues} в месяц.`,
+    'world',
+  )
+  return close(draft)
+}
+
+function leaveOrder(state: GameState): CommandResult {
+  const order = ownOrder(state)
+  if (!order) return fail('invalid', 'Ты ни в чём не состоишь.')
+  const draft = open(state)
+  draft.guild = null
+  // Ушёл сам — не враг, но и не свой: берут обратно не сразу.
+  draft.reputation = withLordRep(draft.reputation, `order:${order.id}`, -10)
+  notice(draft, `${order.name} оставлен.`, 'world')
+  return close(draft)
+}
+
 /** Сколько времени уходит на сделку — торг не бывает мгновенным. */
 export const TRADE_MINUTES = 15
 
@@ -1268,7 +1380,8 @@ function hire(state: GameState, troop: TroopId, count: number): CommandResult {
       `Столько людей тут не наберёшь: готовых идти всего ${Math.floor(settlement.recruits)}.`,
     )
   }
-  const cost = def.hireCost * count
+  // Свой орден нанимает своим дешевле (этап 42).
+  const cost = Math.round(def.hireCost * count * (ownOrderHere(state)?.perks.hire ?? 1))
   if (state.character.money < cost) {
     return fail('noMoney', `Не хватает денег: нужно ${cost}, есть ${state.character.money}.`)
   }
@@ -2246,8 +2359,12 @@ function finishQuest(state: GameState, questId: string): CommandResult {
   if (!isComplete(state, quest)) return fail('requirements', 'Дело ещё не сделано.')
 
   const draft = open(state)
-  notice(draft, `Награда за дело: ${quest.reward}.`)
-  addMoney(draft, quest.reward)
+  // Дело, взятое в месте ордена, — служба ордену: платят больше и помнят (этап 42).
+  const order = ownOrderHere(state, quest.issuerLocationId)
+  const reward = Math.round(quest.reward * (order?.perks.reward ?? 1))
+  notice(draft, `Награда за дело: ${reward}.`)
+  addMoney(draft, reward)
+  if (order) addStanding(draft, 12, `${order.name}: службу заметили.`)
   draft.reputation = withPlaceRep(draft.reputation, quest.issuerLocationId, 10)
   const owner = state.settlements[quest.issuerLocationId]?.owner
   if (owner && !owner.startsWith('crown:') && owner !== PLAYER) {
@@ -2326,7 +2443,11 @@ function inviteLord(state: GameState, lordId: string): CommandResult {
 
 /** Не пускают ли тебя на порог: разорённые города помнят. */
 function checkWelcome(state: GameState): CommandResult | null {
-  return isShunned(placeRep(state.reputation, state.locationId))
+  // Вражда ордена с короной холодит приём на её земле (этап 42): свой орден
+  // здесь — чужак, и это вычитается из того, что о тебе помнят.
+  return isShunned(
+    placeRep(state.reputation, state.locationId) + feudChill(state, state.locationId),
+  )
     ? fail('shunned', 'Тебя тут помнят и не ждут.')
     : null
 }
@@ -2338,6 +2459,11 @@ function takeService(state: GameState, kingdomId: string): CommandResult {
   const here = kingdomOf(state.world, state.locationId)
   if (here?.id !== kingdomId) {
     return fail('unavailableHere', 'На службу нанимают на своей земле, а не по слухам.')
+  }
+  // Корона не берёт на службу людей ордена, с которым в ссоре (этап 42).
+  const own = ownOrder(state)
+  if (own?.feud.kingdoms.includes(kingdomId)) {
+    return fail('shunned', `${kingdom.name} не берёт на службу людей ордена «${own.name}».`)
   }
 
   const draft = open(state)
@@ -2552,6 +2678,11 @@ export function companionsAt(
  * скажет слово, кто-то уйдёт — и об этом будет строка в летописи.
  */
 function seeDeed(draft: Draft, deed: DeedId): void {
+  // Орден судит по уставу (этап 42): тем же языком поступков, что и спутники.
+  const own = ownOrder(draft.base)
+  if (own && charterFeels(own, deed) !== 0) {
+    addStanding(draft, charterFeels(own, deed), `${own.name}: ${DEED_LABELS[deed]}.`)
+  }
   const present = following(draft.companions)
   if (present.length === 0) return
   const result = witness(draft.companions, deed)
@@ -3164,7 +3295,11 @@ function quarantine(state: GameState): CommandResult {
  */
 export function tradeSkillAt(state: GameState): number {
   const fair = fairAt(state.world, state.locationId, dayOf(state.time))
-  return skillLevel(state.character, 'trade') + (fair ? FAIR_TRADE_BONUS : 0)
+  // Своя гильдия торгует со своими как со своими (этап 42).
+  const guild = ownOrderHere(state)
+  return (
+    skillLevel(state.character, 'trade') + (fair ? FAIR_TRADE_BONUS : 0) + (guild?.perks.trade ?? 0)
+  )
 }
 
 function buy(state: GameState, good: GoodId, amount: number): CommandResult {
@@ -3516,6 +3651,7 @@ interface Draft {
   party: Party
   ship: Ship | null
   cleansed: { readonly locationId: string; readonly untilDay: number } | null
+  guild: Membership | null
   battle: Battle | null
   politics: Politics
   /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
@@ -3551,6 +3687,7 @@ function open(state: GameState): Draft {
     party: state.party,
     ship: state.ship,
     cleansed: state.cleansed ?? null,
+    guild: state.guild,
     battle: state.battle,
     politics: state.politics,
     world: state.world,
@@ -3748,6 +3885,7 @@ function close(draft: Draft): CommandResult {
     party: draft.party,
     ship: draft.ship,
     cleansed: draft.cleansed,
+    guild: draft.guild,
     battle: draft.battle,
     politics: draft.politics,
     bands: draft.bands,
@@ -3932,6 +4070,7 @@ function warNews(
 function payUpkeep(draft: Draft, days: number): void {
   collectHoldings(draft, days)
   paySailors(draft, days)
+  payDues(draft)
   if (partySize(draft.party) === 0) return
 
   let unpaid = 0
@@ -4104,7 +4243,9 @@ function patch(draft: Draft, changes: Partial<Character>): void {
 function healAndFree(draft: Draft, daysPassed: number): void {
   const wound = draft.character.wound
   if (wound) {
-    const healer = bestSkill(draft.companions, 'healing').level >= 3
+    const healer =
+      bestSkill(draft.companions, 'healing').level >= 3 ||
+      ownOrderHere(draft.base)?.perks.healing === true
     const healed = healWound(wound, daysPassed, healer)
     patch(draft, { wound: healed })
     if (!healed) notice(draft, 'Рана зажила. Можно вставать.', 'people')

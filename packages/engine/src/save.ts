@@ -295,6 +295,11 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
    * есть, корабль он купит сам.
    */
   19: (data) => ({ ...data, ship: data.ship ?? null }),
+  /**
+   * v20 → v21: появились ордена и гильдии (этап 42). Старый герой ни в чём не
+   * состоит — вступить он может и сам, там, где орден стоит.
+   */
+  20: (data) => ({ ...data, guild: data.guild ?? null }),
 }
 
 export type LoadResult =

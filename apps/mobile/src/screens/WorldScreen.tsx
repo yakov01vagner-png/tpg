@@ -1,11 +1,14 @@
 import {
   type GameState,
+  ORDERS,
+  ORDERS_BY_ID,
   PLACE_LABELS,
   PLAYER,
   addressOf,
   foodSecurity,
   holdingsOf,
   lordById,
+  rankLabel,
   warsOf,
 } from '@tpg/engine'
 import { useState } from 'react'
@@ -43,6 +46,27 @@ export function WorldScreen({ game }: { game: GameState }) {
             <Text style={styles.dim}>{war.reason}</Text>
           </View>
         ))}
+      </Section>
+
+      <Section title="Ордена и гильдии">
+        {ORDERS.map((order) => {
+          const mine = game.guild?.orderId === order.id
+          const feud = [
+            ...order.feud.kingdoms.map((id) => game.world.kingdoms[id]?.name ?? id),
+            ...order.feud.orders.map((id) => ORDERS_BY_ID[id]?.name ?? id),
+          ]
+          return (
+            <View key={order.id} style={styles.row}>
+              <Text style={styles.rowTitle}>
+                {order.name}
+                {mine ? ` · ты ${rankLabel(order, game.guild?.standing ?? 0)}` : ''}
+              </Text>
+              <Text style={styles.dim}>
+                {`${order.kingdomId ? `земля: ${game.world.kingdoms[order.kingdomId]?.name ?? ''} · ` : ''}в ссоре с: ${feud.join(', ') || 'никем'}`}
+              </Text>
+            </View>
+          )
+        })}
       </Section>
 
       <Section title="Архимаги корон">

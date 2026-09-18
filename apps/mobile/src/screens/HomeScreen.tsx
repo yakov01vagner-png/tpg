@@ -24,6 +24,7 @@ import {
   examsAt,
   fairAt,
   feastAt,
+  feudChill,
   foeName,
   foodSecurity,
   fordShut,
@@ -41,9 +42,13 @@ import {
   lordSays,
   matchesAt,
   offersAt,
+  ordersAt,
+  ownOrder,
+  ownOrderHere,
   partySize,
   passageCost,
   plagueAt,
+  rankLabel,
   repairPrice,
   resalePrice,
   roadsFrom,
@@ -433,6 +438,8 @@ export function HomeScreen({ game }: { game: GameState }) {
 
       <Spells game={game} dispatch={dispatch} where={placeKind} />
 
+      <Orders game={game} dispatch={dispatch} />
+
       <Section title="Отдых">
         <Chips>
           <Chip label="Передохнуть · 1 ч" onPress={() => dispatch({ type: 'rest', hours: 1 })} />
@@ -584,6 +591,59 @@ function ownerName(game: GameState, owner: string | null): string {
  * идёшь. Отсюда же два решения, которых у мгновенного перемещения быть не
  * могло: повернуть назад и встать лагерем прямо на дороге.
  */
+/**
+ * Ордена и гильдии здесь (этап 42): кто стоит в этом месте, состоишь ли ты и
+ * что это даёт. Вступают там, где орден стоит; выйти можно откуда угодно.
+ */
+function Orders({
+  game,
+  dispatch,
+}: {
+  game: GameState
+  dispatch: (command: Command) => void
+}) {
+  const here = ordersAt(game.world, game.locationId)
+  const own = ownOrder(game)
+  if (here.length === 0 && !own) return null
+  const membership = game.guild
+  return (
+    <Section title="Ордена и гильдии" aside={own ? own.name : undefined}>
+      {own && membership ? (
+        <Card
+          glyph={<Icon name="crestPlayer" size={20} color={palette.gold} />}
+          title={`${own.name}: ${rankLabel(own, membership.standing)}`}
+          description={`Положение ${membership.standing}. Взнос ${own.dues} в месяц${
+            ownOrderHere(game) ? ' · орден стоит здесь: свои цены и своя помощь' : ''
+          }.`}
+          meta={
+            feudChill(game, game.locationId) < 0
+              ? 'здесь твой орден не любят'
+              : 'выйти — потерять доброе имя у ордена'
+          }
+          onPress={() => dispatch({ type: 'leaveOrder' })}
+          tone="gold"
+        />
+      ) : null}
+      {here
+        .filter((order) => order.id !== own?.id)
+        .map((order) => {
+          const command: Command = { type: 'joinOrder', orderId: order.id }
+          return (
+            <Card
+              key={order.id}
+              glyph={<Icon name="crestPlayer" size={20} color={palette.dim} />}
+              title={order.name}
+              description={order.flavor}
+              meta={`${order.kind === 'guild' ? 'гильдия' : order.kind === 'church' ? 'церковь' : 'орден'} · взнос ${order.dues} в месяц · ${order.ranks.map((rank) => rank.label).join(' → ')}`}
+              reason={reasonOf(canApply(game, command))}
+              onPress={() => dispatch(command)}
+            />
+          )
+        })}
+    </Section>
+  )
+}
+
 /**
  * Чары (этап 41): что маг умеет здесь и сейчас.
  *
