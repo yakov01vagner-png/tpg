@@ -104,6 +104,14 @@ import { isShunned, lordRep, placeRep, priceFactor, withLordRep, withPlaceRep } 
 import type { Reputation } from './reputation'
 import type { Rng } from './rng'
 import { nextFloat, nextInt, rollChance } from './rng'
+import {
+  SELF_TAUGHT_FEE,
+  canGrantHere,
+  isSelfTaught,
+  masterAttitude,
+  masterStance,
+  schoolAt,
+} from './school'
 import type { SettleEvent } from './settle'
 import { tickSettling } from './settle'
 import type { Passage, Ship } from './ship'
@@ -3118,32 +3126,67 @@ function takeExam(state: GameState, examId: string, content: Content): CommandRe
       `Для испытания нужен навык «Магия» не ниже ${rank.requiredSkill} (сейчас ${magic}).`,
     )
   }
+  // Испытание принимает школа, а не «столица» (этап 40): нужна та, чей глава
+  // сам не ниже, и чтобы он был дома. И принимает его человек — со своей
+  // памятью о тебе и своим нравом.
+  const school = schoolAt(state.world, state.locationId)
+  if (!school) return fail('unavailableHere', 'Здесь нет школы: некому принимать испытание.')
+  if (rankTier(exam.rank) > rankTier(school.topRank)) {
+    return fail(
+      'unavailableHere',
+      `Здесь выше «${MAGIC_RANKS[school.topRank].label}» не присваивают: некому.`,
+    )
+  }
+  if (!canGrantHere(state, school, exam.rank)) {
+    return fail('unavailableHere', `${school.master.name} в отъезде: старшие испытания ждут.`)
+  }
+  const stance = masterStance(state, school)
+  if (stance === 'refuses') {
+    return fail('shunned', `${school.master.name} тебя не примет: слишком много провалов.`)
+  }
+  // Самоучка платит вдвое: тот, кто учился сам, для школы чужак (DESIGN.md, п.4).
+  const selfTaught = isSelfTaught(state)
+  const fee = exam.cost * (selfTaught ? SELF_TAUGHT_FEE : 1)
   const blocked =
     checkPlace(state, exam.where, 'Здесь некому принимать испытание.') ??
     checkWindow(state.time, exam.window, 'Испытания проводят') ??
     checkRequirements(character, exam.requires) ??
-    checkMoney(character, exam.cost) ??
+    checkMoney(character, fee) ??
     checkFatigue(character, exam.fatigue)
   if (blocked) return blocked
 
   const draft = open(state)
-  notice(draft, `${exam.label}.`)
+  notice(draft, `${exam.label}: принимает ${school.master.name}, ${school.name}.`)
   advance(draft, exam.durationMinutes)
-  addMoney(draft, -exam.cost)
+  addMoney(draft, -fee)
   addFatigue(draft, exam.fatigue)
 
+  // Расположение главы двигает шанс: тёплому прощают, холодный спрашивает
+  // строже. Самоучку спрашивают строже всегда.
+  const attitude = masterAttitude(state, school.master)
+  const bias = attitude / 400 - (selfTaught ? 0.1 : 0)
   const [passed, rng] = rollChance(
     draft.rng,
-    examChance(magic, rank.requiredSkill, exam.comfortableMargin),
+    Math.max(
+      0.05,
+      Math.min(0.98, examChance(magic, rank.requiredSkill, exam.comfortableMargin) + bias),
+    ),
   )
   draft.rng = rng
   if (passed) {
     patch(draft, { magicRank: exam.rank })
     draft.events.push({ type: 'rankGranted', rank: exam.rank })
+    // Школа помнит своих: с этого дня ты для неё не чужак.
+    draft.reputation = withLordRep(draft.reputation, school.master.id, 10)
+    draft.reputation = withPlaceRep(draft.reputation, state.locationId, 3)
   } else {
     draft.events.push({ type: 'examFailed', rank: exam.rank })
-    // Провал тоже чему-то учит — но дешевле было бы прийти подготовленным.
+    // Провал тоже чему-то учит — но дешевле было бы прийти подготовленным. И
+    // его помнят: строгий — дольше всех.
     practice(draft, 'magic', 20)
+    const grudge =
+      school.master.temper === 'strict' ? -12 : school.master.temper === 'kind' ? -4 : -8
+    draft.reputation = withLordRep(draft.reputation, school.master.id, grudge)
   }
   return close(draft)
 }

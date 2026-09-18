@@ -1,6 +1,8 @@
 import type { Content, CourseDef, ExamDef, JobDef } from './content'
 import { CONTENT } from './content'
 import type { Availability } from './content/availability'
+import { rankTier } from './magic'
+import { canGrantHere, schoolAt } from './school'
 import type { GameState } from './state'
 import type { Location } from './world/types'
 import { isSettlement } from './world/types'
@@ -39,7 +41,15 @@ function at<T extends { readonly where?: Availability }>(
   if (!location) return []
   // Население берём живое: вымирающая деревня перестаёт быть городком.
   const population = state.settlements[locationId]?.population ?? location.population
-  return Object.values(items).filter((item) => isAvailableAt(item.where, location, population))
+  // Школа — не вид места, а место в мире (этап 40): дело, которому она нужна,
+  // бывает только там, где она есть, и не выше её ранга.
+  const school = schoolAt(state.world, locationId)
+  return Object.values(items).filter(
+    (item) =>
+      isAvailableAt(item.where, location, population) &&
+      (item.where?.school === undefined ||
+        (school !== null && rankTier(school.topRank) >= rankTier(item.where.school))),
+  )
 }
 
 export function jobsAt(
@@ -58,10 +68,20 @@ export function coursesAt(
   return at(content.courses, state, locationId)
 }
 
+/**
+ * Испытания, которые здесь принимают.
+ *
+ * Неофита принимают везде, где есть школа хоть какая; выше — только та школа,
+ * чей глава сам не ниже (этап 40). Глава в отъезде — старшие ступени ждут.
+ */
 export function examsAt(
   state: GameState,
   locationId: string = state.locationId,
   content: Content = CONTENT,
 ): readonly ExamDef[] {
-  return at(content.exams, state, locationId)
+  const school = schoolAt(state.world, locationId)
+  if (!school) return []
+  return at(content.exams, state, locationId).filter((exam) =>
+    canGrantHere(state, school, exam.rank),
+  )
 }

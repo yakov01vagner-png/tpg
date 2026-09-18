@@ -1,3 +1,4 @@
+import type { MagicRankId } from '../magic'
 import type { PlaceKind, Terrain } from '../world/types'
 
 /**
@@ -13,6 +14,11 @@ export interface Availability {
   readonly terrains?: readonly Terrain[]
   /** Сколько народу должно жить в месте, чтобы это вообще имело смысл. */
   readonly minPopulation?: number
+  /**
+   * Только там, где есть школа магии не ниже этого ранга (этап 40). Курс
+   * магистра не читают в лавке писца: нужен тот, кто сам магистр.
+   */
+  readonly school?: MagicRankId
 }
 
 /** Места, где есть городская жизнь: ремесло, лавки, наёмный труд. */

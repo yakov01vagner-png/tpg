@@ -179,6 +179,38 @@ export const COURSES: readonly CourseDef[] = [
     requires: { skills: { magic: 14, concentration: 10 } },
   },
 
+  // --- школа (этап 40): дальше адепта учат годы и деньги -----------------------
+  {
+    id: 'magicJourneymanCourse',
+    where: { archetypes: ['capital', 'city'], school: 'magister' },
+    label: 'Школа магии: курс подмастерья',
+    description:
+      'Полгода при школе сжаты в недели занятий. Дорого, долго и без этого дальше не пускают.',
+    skill: 'magic',
+    durationMinutes: hours(24 * 5),
+    cost: 260,
+    xp: 900,
+    teacherCap: 72,
+    fatigue: 70,
+    window: { fromHour: 8, toHour: 12 },
+    requires: { skills: { magic: 30, concentration: 20 } },
+  },
+  {
+    id: 'magicMasterCourse',
+    where: { archetypes: ['capital'], school: 'archmage' },
+    label: 'Академия: наставничество архимага',
+    description:
+      'Архимаг берёт учеников редко и берёт за это как за дом. Зато ведёт до самого верха.',
+    skill: 'magic',
+    durationMinutes: hours(24 * 10),
+    cost: 900,
+    xp: 1800,
+    teacherCap: 92,
+    fatigue: 90,
+    window: { fromHour: 8, toHour: 12 },
+    requires: { skills: { magic: 55, concentration: 40 } },
+  },
+
   // --- вторая дюжина: чтобы ни один навык не рос «только в столице» ----------
   {
     id: 'axeYard',

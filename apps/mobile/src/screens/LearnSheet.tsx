@@ -2,20 +2,26 @@ import {
   type Command,
   type GameState,
   MAGIC_RANKS,
+  MASTER_TEMPERS,
   SKILLS,
   canApply,
   coursesAt,
+  dayOf,
   eligibleRank,
   examsAt,
   formatDuration,
   formatWindowShort,
+  isSelfTaught,
+  masterSays,
+  masterStance,
+  schoolAt,
   unrecognizedGap,
 } from '@tpg/engine'
-import { ScrollView, StyleSheet } from 'react-native'
+import { ScrollView, StyleSheet, Text } from 'react-native'
 import { Icon } from '../art/icons'
 import { dispatch } from '../game/store'
-import { palette, spacing } from '../theme'
-import { Card, Dim, Empty, Panel, Section } from '../ui/parts'
+import { font, lineHeight, palette, spacing } from '../theme'
+import { Card, Dim, Empty, Heading, Panel, Section } from '../ui/parts'
 
 /** Научиться: наставники и испытания этого места. */
 export function LearnSheet({ game }: { game: GameState }) {
@@ -28,6 +34,10 @@ export function LearnSheet({ game }: { game: GameState }) {
   const magic = game.character.skills.magic.level
   const earned = eligibleRank(magic)
   const gap = unrecognizedGap(magic, game.character.magicRank)
+  // Школа — место и человек (этап 40): кто здесь принимает и как к тебе относится.
+  const school = schoolAt(game.world, game.locationId)
+  const stance = school ? masterStance(game, school) : null
+  const selfTaught = isSelfTaught(game)
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -37,6 +47,25 @@ export function LearnSheet({ game }: { game: GameState }) {
             {`Сила обгоняет титул: по навыку тянешь на «${MAGIC_RANKS[earned].label}», но признания нет. Ищи школу.`}
           </Dim>
         </Panel>
+      ) : null}
+
+      {school ? (
+        <Section title="Школа">
+          <Panel tone={stance === 'refuses' || stance === 'absent' ? 'danger' : undefined}>
+            <Heading>{school.name}</Heading>
+            <Dim>{school.tradition}</Dim>
+            <Dim>
+              {`Глава — ${school.master.name}, ${MAGIC_RANKS[school.master.rank].label.toLowerCase()}, ${MASTER_TEMPERS[school.master.temper].label}. ${MASTER_TEMPERS[school.master.temper].flavor}`}
+            </Dim>
+            <Dim>{`Выше «${MAGIC_RANKS[school.topRank].label}» здесь не присваивают.`}</Dim>
+            <Text
+              style={styles.speech}
+            >{`${school.master.name}: «${masterSays(game, school, dayOf(game.time))}»`}</Text>
+            {selfTaught ? (
+              <Dim tone="gold">Ты самоучка: школа примет, но спросит строже и возьмёт вдвое.</Dim>
+            ) : null}
+          </Panel>
+        </Section>
       ) : null}
 
       <Section title="Наставники">
@@ -83,4 +112,11 @@ export function LearnSheet({ game }: { game: GameState }) {
 
 const styles = StyleSheet.create({
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  speech: {
+    color: palette.dim,
+    fontSize: font.small,
+    fontStyle: 'italic',
+    lineHeight: lineHeight.small,
+    marginTop: spacing.sm,
+  },
 })

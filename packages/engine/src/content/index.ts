@@ -3,7 +3,7 @@ import { BIOGRAPHY } from './biography'
 import type { CourseDef } from './courses'
 import { COURSES, COURSES_BY_ID } from './courses'
 import type { ExamDef } from './exams'
-import { EXAMS, EXAMS_BY_ID } from './exams'
+import { ALL_EXAMS, EXAMS_BY_ID, HIGH_EXAMS } from './exams'
 import type { JobDef } from './jobs'
 import { JOBS, JOBS_BY_ID } from './jobs'
 
@@ -12,7 +12,7 @@ export type { Availability } from './availability'
 export { TOWNS, BIG_PLACES } from './availability'
 export type { CourseDef } from './courses'
 export type { ExamDef } from './exams'
-export { JOBS, COURSES, EXAMS, BIOGRAPHY }
+export { JOBS, COURSES, ALL_EXAMS as EXAMS, HIGH_EXAMS, BIOGRAPHY }
 
 /**
  * Весь контент собран в один объект и передаётся в движок параметром.

@@ -219,7 +219,9 @@ describe('испытание на ранг', () => {
     for (let seed = 1; seed <= 5 && !granted; seed += 1) {
       const state = { ...createGame(magician(20).character, seed, WORLD), locationId: CAPITAL }
       const after = ok(applyCommand(state, { type: 'takeExam', examId: 'examNeophyte' }))
-      expect(after.character.money).toBe(90)
+      // Двадцать, а не десять: маг с навыком в двадцать и без единого ранга —
+      // самоучка (этап 40, `SELF_TAUGHT_GAP`), и школа берёт с него вдвое.
+      expect(after.character.money).toBe(80)
       if (after.character.magicRank === 'neophyte') granted = true
     }
     expect(granted).toBe(true)
