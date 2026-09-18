@@ -13,7 +13,7 @@ import type { Band } from '../packages/engine/src/band'
 import { tickDiplomacy } from '../packages/engine/src/diplomacy'
 import { createSettlements, priceOf } from '../packages/engine/src/economy'
 import type { Settlement } from '../packages/engine/src/economy'
-import { foodSecurity, tickDays } from '../packages/engine/src/life'
+import { foodSecurity, rollHarvest, tickDays } from '../packages/engine/src/life'
 import type { Plague } from '../packages/engine/src/plague'
 import { tickPlague } from '../packages/engine/src/plague'
 import { createRng } from '../packages/engine/src/rng'
@@ -87,6 +87,8 @@ interface Run {
   readonly founded: number
   readonly resettledNew: number
   readonly grew: number
+  readonly leanYears: number
+  readonly failedHarvests: number
   readonly placesAtEnd: number
   readonly strainAvg: number
 }
@@ -182,6 +184,8 @@ function run(seed: number, years: number): Run {
   let founded = 0
   let resettledNew = 0
   let grew = 0
+  let leanYears = 0
+  let failedHarvests = 0
   let plagues: readonly Plague[] = []
 
   const began = Date.now()
@@ -220,6 +224,14 @@ function run(seed: number, years: number): Run {
         if (event.type === 'founded') founded += 1
         else if (event.type === 'resettled') resettledNew += 1
         else if (event.type === 'grew') grew += 1
+      }
+
+      const year = rollHarvest(world, settlements, rng)
+      settlements = year.settlements
+      rng = year.rng
+      for (const event of year.events) {
+        if (event.harvest < 0.7) failedHarvests += 1
+        else leanYears += 1
       }
     }
 
@@ -357,6 +369,8 @@ function run(seed: number, years: number): Run {
     founded,
     resettledNew,
     grew,
+    leanYears,
+    failedHarvests,
     placesAtEnd: Object.keys(world.locations).length,
     strainAvg:
       Object.values(settlements).reduce((sum, one) => sum + one.strain, 0) /
@@ -461,6 +475,10 @@ console.log(
     `переросло ${first.grew}; мест стало ${first.placesAtEnd}`,
 )
 console.log(`Усталость земли: в среднем ${(first.strainAvg * 100).toFixed(0)}%`)
+console.log(
+  `Годы на земле:  тощих ${first.leanYears}, недородов ${first.failedHarvests} ` +
+    `на ${first.years} лет по всем провинциям`,
+)
 console.log(
   `Договоры:       ${first.tributes} раз положили дань, союзов ${first.alliancesMade} ` +
     `(распалось ${first.alliancesBroken}), по союзу вступили в войну ${first.joinedWars} раз; ` +

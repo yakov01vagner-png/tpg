@@ -67,7 +67,8 @@ export function WorldScreen({ game }: { game: GameState }) {
           {mine.map((settlement) => (
             <View key={settlement.locationId} style={styles.row}>
               <Text style={styles.rowTitle}>
-                {game.world.locations[settlement.locationId]?.name} · {settlement.population} чел.
+                {game.world.locations[settlement.locationId]?.name} ·{' '}
+                {Math.round(settlement.population)} чел.
               </Text>
               <Text style={styles.dim}>
                 {addressOf(game.world, settlement.locationId)} · {foodWord(settlement)}

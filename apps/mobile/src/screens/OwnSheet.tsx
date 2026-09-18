@@ -213,7 +213,7 @@ function Holding({ game, settlement }: { game: GameState; settlement: Settlement
     <>
       <Panel>
         <Stats>
-          <Stat label="Людей" value={`${settlement.population}`} />
+          <Stat label="Людей" value={`${Math.round(settlement.population)}`} />
           <Stat
             label="Хлеба на"
             value={`${breadDays} сут.`}

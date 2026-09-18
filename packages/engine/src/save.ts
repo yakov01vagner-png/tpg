@@ -80,6 +80,19 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
   },
   /** v15 → v16: в глуши стало что искать. Старый герой ещё нигде не искал. */
   15: (data) => ({ ...data, searchedSites: data.searchedSites ?? [] }),
+  /**
+   * v16 → v17: у года появился урожай. Старому сейву достаётся обычный год:
+   * выдумывать задним числом, что где-то был недород, значит объявить голод в
+   * месте, где игрок только что торговал хлебом.
+   */
+  16: (data) => {
+    const settlements = (data.settlements ?? {}) as Record<string, Record<string, unknown>>
+    const fed: Record<string, unknown> = {}
+    for (const [id, settlement] of Object.entries(settlements)) {
+      fed[id] = { ...settlement, harvest: settlement.harvest ?? 1 }
+    }
+    return { ...data, settlements: fed }
+  },
   /** v13 → v14: поручения руками и счёт побед. Старый герой ничего не брал. */
   13: (data) => ({
     ...data,

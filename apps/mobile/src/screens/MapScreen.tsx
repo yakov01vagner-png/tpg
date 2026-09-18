@@ -612,7 +612,7 @@ export function MapScreen({ game }: { game: GameState }) {
             <>
               <Text style={styles.dim}>
                 {chosenSettlement.population > 0
-                  ? `${chosenSettlement.population} чел. · ${ownerWord(game, chosenSettlement.owner)}`
+                  ? `${Math.round(chosenSettlement.population)} чел. · ${ownerWord(game, chosenSettlement.owner)}`
                   : 'заброшено'}
               </Text>
               <Text style={styles.dim}>

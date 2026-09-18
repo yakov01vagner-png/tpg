@@ -4,7 +4,7 @@ import { applyCommand } from '../src/commands'
 import { BUILDINGS } from '../src/content/buildings'
 import { MARCHES } from '../src/content/world'
 import { PLAYER, dailyTax, garrisonSize, hasBuilding, holdingsOf } from '../src/holding'
-import { foodSecurity, stockDays, tickDays } from '../src/life'
+import { carryingCapacity, foodSecurity, stockDays, tickDays } from '../src/life'
 import type { GameState } from '../src/state'
 import { createGame } from '../src/state'
 import { generateWorld } from '../src/world/generate'
@@ -106,9 +106,12 @@ describe('своё владение', () => {
 
   it('мельница прибавляет еды, казармы — людей', () => {
     const id = someplace('village')
-    const base = createGame(createCharacter({ name: 'Тест' }), 1, world).settlements[id]
-    if (!base) return
-    // Долгий прогон: разница видна там, где деревня упёрлась в предел земли.
+    const found = createGame(createCharacter({ name: 'Тест' }), 1, world).settlements[id]
+    if (!found) return
+    // Деревню сажаем под самый предел земли нарочно: мельница даёт не людей, а
+    // еду, и видно это только там, где упёрлись в землю. На просторе растут
+    // одинаково — и с мельницей, и без неё.
+    const base = { ...found, population: Math.round(carryingCapacity(world, id, found) * 0.84) }
     const plain = tickDays(world, { [id]: base }, 900).settlements[id]
     const milled = tickDays(world, { [id]: { ...base, buildings: ['mill'] } }, 900).settlements[id]
     const barracked = tickDays(world, { [id]: { ...base, buildings: ['barracks'] } }, 900)

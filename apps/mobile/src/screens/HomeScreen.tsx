@@ -463,6 +463,10 @@ function StateLine({ game }: { game: GameState }) {
   if (settlement.banditry > 0.6) parts.push({ text: 'на дорогах разбой', tone: 'danger' })
   else if (settlement.banditry > 0.25) parts.push({ text: 'на дорогах пошаливают', tone: 'warn' })
   if (settlement.strain > 0.4) parts.push({ text: 'земля истощена', tone: 'warn' })
+  // Каким вышел год, видно по тому, что стоит в полях: игроку это важно знать
+  // до того, как в амбарах станет пусто.
+  if (settlement.harvest < 0.7) parts.push({ text: 'недород', tone: 'danger' })
+  else if (settlement.harvest < 0.9) parts.push({ text: 'год тощий', tone: 'warn' })
   if (sick) parts.push({ text: 'здесь мор', tone: 'danger' })
   return (
     <View style={styles.state}>
@@ -498,7 +502,9 @@ function ownerName(game: GameState, owner: string | null): string {
 }
 
 function formatPopulation(value: number): string {
-  return value.toLocaleString('ru-RU').replace(/ /g, ' ')
+  // Ядро считает людей дробью: суточная прибавка деревни меньше человека, и
+  // округление съедало бы её целиком (life.ts). Игроку дробь показывать нечего.
+  return Math.round(value).toLocaleString('ru-RU').replace(/ /g, ' ')
 }
 
 function plural(n: number, one: string, few: string, many: string): string {

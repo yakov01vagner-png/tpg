@@ -3,6 +3,8 @@ import { GOOD_IDS } from './content/goods'
 import type { Settlement } from './economy'
 import { RECRUIT_RECOVERY, recruitPool, targetStock } from './economy'
 import { hasBuilding } from './holding'
+import type { Rng } from './rng'
+import { nextFloat } from './rng'
 import type { LocationArchetype, Terrain, World } from './world/types'
 import { isSettlement } from './world/types'
 
@@ -35,7 +37,16 @@ export interface LifeConfig {
   readonly starvationDeaths: number
   /** Доля населения, уходящая за сутки полного голода. */
   readonly starvationMigration: number
-  /** Суточный прирост сытого поселения. */
+  /**
+   * Наибольший суточный прирост: столько прибавляет место, которому есть куда
+   * расти. Чем теснее, тем прибавка меньше, и у предела земли она сходит на
+   * нет (см. `produceAndEat`).
+   *
+   * Девять процентов в год — это скорость, с какой отстраивается разорённое
+   * место, а не скорость, с какой растёт мир: у предела прирост нулевой.
+   * Пока рост был ровным, выбор стоял между «мир у предела рождает и хоронит
+   * по тридцать тысяч в год» и «сожжённая деревня не поднимается никогда».
+   */
   readonly growth: number
   /** Ниже этого числа жителей место считается брошенным. */
   readonly abandonAt: number
@@ -53,7 +64,7 @@ export const LIFE: LifeConfig = {
   worldTransfer: 0.03,
   starvationDeaths: 0.008,
   starvationMigration: 0.015,
-  growth: 0.0002,
+  growth: 0.00025,
   abandonAt: 15,
   goodsRecovery: 0.08,
 }
@@ -66,10 +77,18 @@ export const LIFE: LifeConfig = {
  * место потому и выросло, что под ним больше земли, — но выросло оно всё равно
  * сильнее, чем земля может прокормить, и разницу довозят соседи. В этом и
  * состоит хрупкость городов: перекрой подвоз, и начнётся голод.
+ *
+ * Хлеб для этого привоза родит деревня, и потому её округа так велика: село в
+ * семь сотен душ стоит на земле, которая кормит две тысячи. Пока
+ * это было не так, мир заводился на 93% своей еды — выше того запаса, при
+ * котором людям позволено множиться (GROWTH_HEADROOM), — и потому не мог расти
+ * вовсе: земля уставала, урожай падал, и рудники с крепостями таяли век
+ * напролёт. Теперь мир начинается на четырёх пятых своей еды: расти есть куда,
+ * но запас не бездонный — перерезанный подвоз по-прежнему доводит до голода.
  */
 export const LAND_CAPACITY: Record<LocationArchetype, number> = {
-  village: 700,
-  town: 3500,
+  village: 2000,
+  town: 5000,
   city: 9000,
   capital: 22000,
   port: 7000,
@@ -130,6 +149,14 @@ export function landHealth(strain: number): number {
   return 1 - Math.max(0, Math.min(1, strain)) * 0.3
 }
 
+/**
+ * Какая доля лишнего хлеба доживает до завтра.
+ *
+ * Не ноль: запасливое место всё-таки держит больше беспечного, и амбар этим
+ * ценен. Но и не единица: куча выше двух норм тает за неделю.
+ */
+const SPOILAGE = 0.85
+
 /** Насколько быстро усталость догоняет ту, какой заслуживает нынешняя пашня. */
 const STRAIN_SPEED = 0.0025
 
@@ -143,6 +170,21 @@ const STRAIN_SPEED = 0.0025
  * что отличает тяжёлый год от мора.
  */
 const GROWTH_HEADROOM = 0.85
+
+/**
+ * Докуда месту позволено расти.
+ *
+ * Обычно — до запаса от того, что кормит его земля. Но рудник и крепость
+ * заводились больше, чем земля под ними (IMPORT_RELIANCE): они с первого дня
+ * живут привозом. Запрет расти выше земли превращал для них любой голодный год
+ * в ступеньку вниз без возврата — за век рудники таяли на две трети. Поэтому
+ * своё место возвращает всегда: потолок роста не ниже того числа, с каким оно
+ * было основано.
+ */
+function growthRoom(world: World, locationId: string, ceiling: number): number {
+  const founded = world.locations[locationId]?.population ?? 0
+  return Math.max(ceiling * GROWTH_HEADROOM, founded)
+}
 
 /**
  * Какой усталости заслуживает нынешняя нагрузка.
@@ -175,7 +217,11 @@ export function foodCapacity(
   // работает само — нехватка идёт в голод, голод в разбой и недовольство,
   // люди уходят, пашни отдыхают, урожай возвращается.
   const health = landHealth(settlement?.strain ?? 0)
-  return carryingCapacity(world, locationId, settlement) * config.foodPerPerson * health
+  // Урожай года — вторая, куда более резкая, причина недорода. Усталость земли
+  // приходит годами и отпускает годами, а недород случается за один год и бьёт
+  // сразу по всей провинции.
+  const year = settlement?.harvest ?? 1
+  return carryingCapacity(world, locationId, settlement) * config.foodPerPerson * health * year
 }
 
 export function foodStock(settlement: Settlement): number {
@@ -197,6 +243,100 @@ export function foodSecurity(settlement: Settlement, config: LifeConfig = LIFE):
 export type LifeEvent =
   | { readonly type: 'famine'; readonly locationId: string; readonly deaths: number }
   | { readonly type: 'abandoned'; readonly locationId: string }
+
+/** Каким вышел год в провинции. */
+export interface HarvestEvent {
+  readonly provinceId: string
+  /** Доля от обычного урожая. */
+  readonly harvest: number
+}
+
+export interface HarvestResult {
+  readonly settlements: Readonly<Record<string, Settlement>>
+  /** Только те провинции, где год не задался: о хорошем годе новостей нет. */
+  readonly events: readonly HarvestEvent[]
+  readonly rng: Rng
+}
+
+/**
+ * Границы года.
+ *
+ * Обычный год — около единицы: земля даёт то, на что рассчитана. Тощий год
+ * (`LEAN_CHANCE`) срезает пятую-третью часть, и его переживают запасом и
+ * подвозом. Недород (`FAILED_CHANCE`) — это уже беда: половины хлеба нет, и
+ * первыми ложатся те, кто своей еды не растит.
+ *
+ * Числа выбраны по веку: при недороде раз в пятьдесят лет на провинцию мир за
+ * сто лет знает голод в каждом десятилетии, но не голодает подряд.
+ */
+export const LEAN_CHANCE = 0.1
+export const FAILED_CHANCE = 0.02
+
+/**
+ * Год не только у провинции, но и у всего мира.
+ *
+ * Провинциальный недород мир переживает не заметив: соседи довозят, и голода
+ * не выходит — за век ни одного случая. Голод начинается тогда, когда не
+ * задалось у всех сразу: холодное лето, дождливая жатва. Тогда возить нечего и
+ * некому, и первыми ложатся те, кто своей еды не растит. Раз в тридцать лет —
+ * это тот самый голодный год, который помнят и о котором рассказывают.
+ */
+export const COLD_YEAR_CHANCE = 0.03
+export const GREY_YEAR_CHANCE = 0.15
+
+/** Каким вышел год для всего мира: холодное лето берёт разом все провинции. */
+function rollWorldYear(rng: Rng): [number, Rng] {
+  const [roll, next] = nextFloat(rng)
+  if (roll < COLD_YEAR_CHANCE) {
+    return [0.62 + (roll / COLD_YEAR_CHANCE) * 0.16, next]
+  }
+  if (roll < GREY_YEAR_CHANCE) {
+    const share = (roll - COLD_YEAR_CHANCE) / (GREY_YEAR_CHANCE - COLD_YEAR_CHANCE)
+    return [0.82 + share * 0.13, next]
+  }
+  return [0.97 + ((roll - GREY_YEAR_CHANCE) / (1 - GREY_YEAR_CHANCE)) * 0.09, next]
+}
+
+/**
+ * Новый год на земле: каким он вышел в каждой провинции.
+ *
+ * Катится раз в году и на провинцию целиком — недород берёт округу, а не
+ * отдельный двор. Без этого мир, в котором еды с запасом, не знал голода вовсе:
+ * производство было константой, и единственной бедой оставалась война.
+ */
+export function rollHarvest(
+  world: World,
+  settlements: Readonly<Record<string, Settlement>>,
+  rng: Rng,
+): HarvestResult {
+  let generator = rng
+  const next: Record<string, Settlement> = { ...settlements }
+  const events: HarvestEvent[] = []
+  const [worldYear, afterWorld] = rollWorldYear(generator)
+  generator = afterWorld
+  for (const province of Object.values(world.provinces)) {
+    const [roll, afterRoll] = nextFloat(generator)
+    generator = afterRoll
+    let harvest: number
+    if (roll < FAILED_CHANCE) {
+      harvest = 0.45 + (roll / FAILED_CHANCE) * 0.2
+    } else if (roll < LEAN_CHANCE) {
+      harvest = 0.7 + ((roll - FAILED_CHANCE) / (LEAN_CHANCE - FAILED_CHANCE)) * 0.15
+    } else {
+      harvest = 0.92 + ((roll - LEAN_CHANCE) / (1 - LEAN_CHANCE)) * 0.23
+    }
+    // Год провинции ложится на год мира: в холодное лето плохо везде, а где-то
+    // ещё и вымокло.
+    harvest = Math.round(harvest * worldYear * 100) / 100
+    if (harvest < 0.9) events.push({ provinceId: province.id, harvest })
+    for (const id of province.locationIds) {
+      const settlement = next[id]
+      if (!settlement) continue
+      next[id] = { ...settlement, harvest }
+    }
+  }
+  return { settlements: next, events, rng: generator }
+}
 
 export interface LifeResult {
   readonly settlements: Readonly<Record<string, Settlement>>
@@ -269,6 +409,20 @@ function produceAndEat(
     const shortfall = needed - fromFish - fromGrain
     const hunger = needed > 0 ? shortfall / needed : 0
 
+    // Что не съели и не увезли — портится. Без этого хлебная деревня за век
+    // накапливала горы зерна: излишек ей девать некуда, а гнить он не гнил.
+    // Мир от этого переставал знать голод вовсе — к восьмидесятому году в
+    // амбарах лежало на две с половиной тысячи суток вперёд, и холодное лето
+    // просто съедало часть кучи. Больше двух норм запаса место не удержит:
+    // мыши, сырость, долгоносик.
+    const keep = settlement.population * config.foodPerPerson * stockDays(settlement, config) * 2
+    const spare = stock.grain + stock.fish
+    if (spare > keep && spare > 0) {
+      const kept = (keep + (spare - keep) * SPOILAGE) / spare
+      stock.grain *= kept
+      stock.fish *= kept
+    }
+
     // Прочие товары потихоньку возвращаются к обычному для места уровню.
     const smithy = hasBuilding(settlement, 'smithy')
     // Склад: запасов больше, и возвращаются они быстрее.
@@ -325,8 +479,18 @@ function produceAndEat(
         const refuge = bestFedNeighbour(world, settlements, id, config)
         if (refuge) arrivals[refuge] = (arrivals[refuge] ?? 0) + leaving
       }
-    } else if (population < ceiling * GROWTH_HEADROOM) {
-      population += Math.max(1, Math.round(population * config.growth))
+    } else {
+      // Рост тем медленнее, чем теснее. У пустого места прибавка полная, у
+      // дошедшего до своего предела — никакой. Так и должно быть: разорённая
+      // деревня отстраивается за поколение, а сытый мир у предела не рождает
+      // и не хоронит по тридцать тысяч в год — голод в нём снова событие, а
+      // не погода.
+      // Дробь не округляем — по той же причине, что и рекрутов. Округление
+      // сюда уже стоило дорого: пока прибавка не могла быть меньше человека в
+      // сутки, любое место меньше пяти тысяч душ росло на триста шестьдесят
+      // человек в год независимо от своего размера.
+      const room = growthRoom(world, id, ceiling)
+      if (population < room) population += population * config.growth * (1 - population / room)
     }
 
     if (population > 0 && population < config.abandonAt) {
@@ -336,7 +500,7 @@ function produceAndEat(
 
     next[id] = {
       ...settlement,
-      population,
+      population: Math.round(population * 100) / 100,
       stock: clampStock(stock),
       // Дробь не округляем: суточная прибавка меньше человека, и округление
       // до целого съело бы её полностью — рекруты не восполнялись бы никогда.

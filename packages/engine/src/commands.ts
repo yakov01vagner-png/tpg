@@ -71,8 +71,8 @@ import {
   isOwnedByPlayer,
   takeLand,
 } from './holding'
-import type { LifeEvent } from './life'
-import { foodSecurity, tickDays } from './life'
+import type { HarvestEvent, LifeEvent } from './life'
+import { foodSecurity, rollHarvest, tickDays } from './life'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
 import type { PriceLog } from './market'
 import { recordPrices } from './market'
@@ -2567,6 +2567,13 @@ function close(draft: Draft): CommandResult {
       draft.settlements = settled.settlements
       draft.rng = settled.rng
       draft.events.push(...settleNews(draft.world, draft.locationId, settled.events))
+
+      // И каким вышел год на земле: недород — единственное, что доводит до
+      // голода мир, в котором еды с запасом.
+      const harvest = rollHarvest(draft.world, draft.settlements, draft.rng)
+      draft.settlements = harvest.settlements
+      draft.rng = harvest.rng
+      draft.events.push(...harvestNews(draft.world, draft.locationId, harvest.events))
     }
 
     // Договоры корон: отношение, союзы, дань — и общий страх перед тем, кто
@@ -3135,6 +3142,28 @@ function settleNews(
         text: `${name} разрослось: теперь это не деревня.`,
       })
     }
+  }
+  return news
+}
+
+/** Новость о годе: слышно только про свою провинцию и соседние по области. */
+function harvestNews(
+  world: World,
+  locationId: string,
+  events: readonly HarvestEvent[],
+): readonly GameEvent[] {
+  const here = world.locations[locationId]?.provinceId
+  const region = here ? world.provinces[here]?.regionId : undefined
+  const news: GameEvent[] = []
+  for (const event of events) {
+    const province = world.provinces[event.provinceId]
+    if (!province) continue
+    if (province.id !== here && province.regionId !== region) continue
+    const text =
+      event.harvest < 0.7
+        ? `Недород: ${province.name} осталась без хлеба.`
+        : `Год выдался тощий: в ${province.name} хлеба сняли меньше обычного.`
+    news.push({ type: 'notice', kind: 'world', text })
   }
   return news
 }

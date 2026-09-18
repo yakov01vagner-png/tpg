@@ -55,27 +55,42 @@ describe('политика', () => {
 })
 
 describe('разбой душит подвоз', () => {
-  it('в неспокойной округе голодают сильнее', () => {
-    // Тот же мир, но по дорогам страшно ездить: подвоз тощает, и первыми
-    // это чувствуют те, кто своей еды не растит.
-    const troubled: Record<string, (typeof start)[string]> = {}
-    for (const [id, settlement] of Object.entries(start)) {
-      troubled[id] = { ...settlement, banditry: 0.9 }
-    }
+  const mines = Object.values(world.locations).filter((one) => one.archetype === 'mine')
+  const minePop = (settlements: Record<string, (typeof start)[string]>) =>
+    mines.reduce((sum, mine) => sum + (settlements[mine.id]?.population ?? 0), 0)
+  /** Тот же мир, но по дорогам страшно ездить и, если сказано, земля выжата. */
+  const under = (banditry: number, strain: number) => {
+    const places: Record<string, (typeof start)[string]> = {}
+    for (const [id, settlement] of Object.entries(start))
+      places[id] = { ...settlement, banditry, strain }
+    return tickDays(world, places, 400).settlements
+  }
 
-    const calmAfter = tickDays(world, start, 400).settlements
-    const troubledAfter = tickDays(world, troubled, 400).settlements
-
-    const mines = Object.values(world.locations).filter((l) => l.archetype === 'mine')
-    const minePop = (settlements: Record<string, (typeof start)[string]>) =>
-      mines.reduce((sum, mine) => sum + (settlements[mine.id]?.population ?? 0), 0)
-
+  it('на сытой земле разбой обозы тощит, но рудников не пустошит', () => {
+    // Пока в провинции есть хлебная деревня, до рудника доходит и треть обоза:
+    // деревенская округа кормит вчетверо больше, чем в ней живёт. Пара
+    // процентов людей на этом теряется, но разбой сам по себе — ещё не голод.
+    const calm = under(0, 0)
+    const troubled = under(0.9, 0)
     console.log(
-      `за 400 суток: всего людей ${totalPopulation(calmAfter)} против ${totalPopulation(troubledAfter)}, ` +
-        `в рудниках ${minePop(calmAfter)} против ${minePop(troubledAfter)}`,
+      `за 400 суток на сытой земле: в рудниках ${minePop(calm).toFixed(0)} против ${minePop(troubled).toFixed(0)}`,
     )
-    expect(totalPopulation(troubledAfter)).toBeLessThan(totalPopulation(calmAfter))
-    expect(minePop(troubledAfter)).toBeLessThan(minePop(calmAfter))
+    expect(minePop(troubled)).toBeLessThan(minePop(calm))
+    expect(minePop(troubled)).toBeGreaterThan(minePop(calm) * 0.95)
+  })
+
+  it('на выжатой земле тот же разбой оборачивается голодом', () => {
+    // А вот когда урожай сел, запаса в округе больше нет — и первыми ложатся
+    // те, кто своей еды не растит. Это и есть связка «голод и разбой кормят
+    // друг друга»: поодиночке ни то ни другое рудник не берёт, вместе — вдвое.
+    const calm = under(0, 1)
+    const troubled = under(0.9, 1)
+    console.log(
+      `за 400 суток на выжатой земле: всего людей ${totalPopulation(calm).toFixed(0)} против ${totalPopulation(troubled).toFixed(0)}, ` +
+        `в рудниках ${minePop(calm).toFixed(0)} против ${minePop(troubled).toFixed(0)}`,
+    )
+    expect(totalPopulation(troubled)).toBeLessThan(totalPopulation(calm))
+    expect(minePop(troubled)).toBeLessThan(minePop(calm) * 0.75)
   })
 })
 
