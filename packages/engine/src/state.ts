@@ -11,6 +11,8 @@ import type { Enterprise } from './enterprise'
 import type { GameEvent, LogKind } from './events'
 import { describeEvent, kindOf } from './events'
 import type { Journey } from './journey'
+import type { Knowledge } from './knowledge'
+import { startKnowledge } from './knowledge'
 import { EMPTY_PRICE_LOG, type PriceLog } from './market'
 import type { Membership } from './order'
 import type { Party } from './party'
@@ -98,6 +100,11 @@ export interface GameState {
    */
   readonly quarter?: QuarterId | null
   /**
+   * Что герой знает о мире (этап 46): открытые провинции. Необязательно —
+   * сейв до 0.5 знания не ведёт и знает всё.
+   */
+  readonly knowledge?: Knowledge
+  /**
    * Отведённый мор (этап 41): где и до какого дня чары держат смерть вполовину.
    * Необязательно — сейвы до 0.5 чар не знают.
    */
@@ -162,6 +169,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     locationId,
     journey: null,
     quarter: arrivalQuarter({ world, settlements }, locationId),
+    knowledge: startKnowledge(world, locationId),
     party: EMPTY_PARTY,
     ship: null,
     guild: null,

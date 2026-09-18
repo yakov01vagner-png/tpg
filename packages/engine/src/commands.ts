@@ -81,6 +81,17 @@ import {
 } from './holding'
 import type { Journey } from './journey'
 import { journeyLeft, legHoursFor, paceOf } from './journey'
+import type { Knowledge } from './knowledge'
+import {
+  BLIND_DANGER,
+  BLIND_SLOW,
+  describeLand,
+  knowsPlace,
+  mapsFor,
+  reveal,
+  rumourAt,
+  seenFrom,
+} from './knowledge'
 import type { HarvestEvent, LifeEvent } from './life'
 import { LIFE, foodSecurity, rollHarvest, tickDays } from './life'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
@@ -200,6 +211,8 @@ export type Command =
   | { readonly type: 'tick'; readonly minutes: number }
   | { readonly type: 'travel'; readonly toLocationId: string }
   | { readonly type: 'goQuarter'; readonly quarterId: QuarterId }
+  | { readonly type: 'askAround' }
+  | { readonly type: 'buyMap'; readonly regionId: string }
   /** Уйти морем: своим судном, нанятым или попутным (этап 35). */
   | { readonly type: 'sail'; readonly toLocationId: string; readonly manner: Passage }
   /** Купить судно в порту, починить своё, продать своё. */
@@ -411,6 +424,10 @@ export function applyCommand(
       return tick(state, command.minutes)
     case 'goQuarter':
       return goQuarter(state, command.quarterId)
+    case 'askAround':
+      return askAround(state)
+    case 'buyMap':
+      return buyMap(state, command.regionId)
     case 'travel':
       return travel(state, command.toLocationId)
     case 'sail':
@@ -632,6 +649,12 @@ export function foeName(state: GameState, foeId: string | null): string {
  * Стоит времени, но немного, и ничего больше: город не дорога, засад в нём
  * нет. В месте без кварталов идти некуда.
  */
+/** Пришёл — увидел: земля под ногами и то, куда отсюда ведут дороги (этап 46). */
+function see(draft: Draft, locationId: string): void {
+  if (!draft.knowledge) return
+  draft.knowledge = reveal(draft.knowledge, seenFrom(draft.world, locationId))
+}
+
 function goQuarter(state: GameState, quarterId: QuarterId): CommandResult {
   const here = quartersOf(state, state.locationId)
   if (!here.includes(quarterId)) return fail('unavailableHere', 'Такого квартала здесь нет.')
@@ -640,6 +663,53 @@ function goQuarter(state: GameState, quarterId: QuarterId): CommandResult {
   const draft = open(state)
   advance(draft, walkMinutes(state.world, state.locationId))
   draft.quarter = quarterId
+  return close(draft)
+}
+
+/**
+ * Расспросить в корчме (этап 46).
+ *
+ * Слух — то, что тут все знают: ближайшая незнакомая герою земля. Стоит
+ * кружки и часа. Ничего незнакомого поблизости — и слухов нет.
+ */
+const RUMOUR_PRICE = 5
+
+function askAround(state: GameState): CommandResult {
+  if (!state.knowledge) return fail('invalid', 'Ты и так знаешь всё, что здесь знают.')
+  if (!state.settlements[state.locationId]) {
+    return fail('unavailableHere', 'Расспрашивать здесь некого.')
+  }
+  if (state.character.money < RUMOUR_PRICE) {
+    return fail('noMoney', `Без кружки не разговорятся: нужно ${RUMOUR_PRICE}.`)
+  }
+  const rumour = rumourAt(state, state.locationId)
+  const draft = open(state)
+  addMoney(draft, -RUMOUR_PRICE)
+  advance(draft, hours(1))
+  if (!rumour) {
+    notice(draft, 'В корчме говорят о том, что ты и сам видел: ничего нового.')
+    return close(draft)
+  }
+  draft.knowledge = reveal(state.knowledge, [rumour.provinceId])
+  const via = state.world.locations[rumour.viaId]?.name ?? 'дорога'
+  notice(draft, `В корчме слышал: за ${via} лежит ${describeLand(state.world, rumour.provinceId)}.`)
+  return close(draft)
+}
+
+/** Купить карту области (этап 46): знание — товар. */
+function buyMap(state: GameState, regionId: string): CommandResult {
+  if (!state.knowledge) return fail('invalid', 'Карта тебе ни к чему: ты знаешь эти земли.')
+  const map = mapsFor(state, state.locationId).find((one) => one.regionId === regionId)
+  if (!map) return fail('unavailableHere', 'Такой карты здесь не продают.')
+  if (state.character.money < map.price) {
+    return fail('noMoney', `За карту просят ${map.price}, а у тебя ${state.character.money}.`)
+  }
+  const region = state.world.regions[regionId]
+  const draft = open(state)
+  addMoney(draft, -map.price)
+  advance(draft, 30)
+  draft.knowledge = reveal(state.knowledge, region?.provinceIds ?? [])
+  notice(draft, `Куплена карта: ${map.name}. Открыто земель: ${map.fresh}.`)
   return close(draft)
 }
 
@@ -660,10 +730,15 @@ function travel(state: GameState, toLocationId: string): CommandResult {
 
   // К мёртвому месту дорога заросла: идти вдвое дольше (band.ts, OVERGROWN).
   const roadHoursNow = roadHours(state.world, state.settlements, state.locationId, road.to)
-  const walking = legHoursFor(
-    roadHoursNow,
-    paceOf(state.party, state.character.wound !== null),
-    seasonOf(dayOf(state.time)),
+  // Незнакомой землёй идут дольше: дороги не знаешь, спрашиваешь, плутаешь
+  // (этап 46). Незнание чего-то стоит — и считается.
+  const blind = !knowsPlace(state, toLocationId)
+  const walking = Math.round(
+    legHoursFor(
+      roadHoursNow,
+      paceOf(state.party, state.character.wound !== null),
+      seasonOf(dayOf(state.time)),
+    ) * (blind ? BLIND_SLOW : 1),
   )
   const blocked = checkFatigue(state.character, travelFatigue(walking))
   if (blocked) return blocked
@@ -674,7 +749,7 @@ function travel(state: GameState, toLocationId: string): CommandResult {
     draft,
     `Дорога${from ? ` из ${from.name}` : ''} в ${destination.name}: ${formatDuration(hours(walking))} пути${
       roadHoursNow > road.hours ? ' — заросла, идти дольше' : ''
-    }.`,
+    }${blind ? ' — земля незнакомая, идти вслепую' : ''}.`,
   )
   draft.journey = { fromId: state.locationId, toId: toLocationId, hours: walking, done: 0 }
   return close(draft)
@@ -922,6 +997,7 @@ function walk(draft: Draft, minutes: number): void {
   draft.journey = null
   draft.locationId = journey.toId
   draft.quarter = arrivalQuarter(draft, journey.toId)
+  see(draft, journey.toId)
   const place = draft.world.locations[journey.toId]
   notice(draft, `Пришли: ${place?.name ?? 'место'}.`)
   roadTalk(draft)
@@ -957,6 +1033,7 @@ function float(draft: Draft, minutes: number): void {
   draft.locationId = journey.toId
   // С моря сходят на пристань, а не к воротам.
   draft.quarter = hasQuarters(draft, journey.toId) ? 'harbour' : null
+  see(draft, journey.toId)
   const place = draft.world.locations[journey.toId]
   notice(draft, `Сошли на берег: ${place?.name ?? 'гавань'}.`)
   roadTalk(draft)
@@ -1175,7 +1252,9 @@ function dangerAt(draft: Draft, locationId: string): number {
   if (!here) return 0
   const banditry = draft.settlements[locationId]?.banditry ?? 0
   const wild = isSite(here.archetype) ? SITES[here.archetype].danger : 0
-  return Math.min(0.45, 0.02 + banditry * 0.5 + wild * 0.3)
+  // Незнакомая земля опаснее: не знаешь, где ждут (этап 46).
+  const blind = knowsPlace(draft.base, locationId) ? 1 : BLIND_DANGER
+  return Math.min(0.45, (0.02 + banditry * 0.5 + wild * 0.3) * blind)
 }
 
 /**
@@ -3874,6 +3953,7 @@ interface Draft {
   guild: Membership | null
   courtDay: number
   quarter: QuarterId | null
+  knowledge: Knowledge | undefined
   battle: Battle | null
   politics: Politics
   /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
@@ -3912,6 +3992,7 @@ function open(state: GameState): Draft {
     guild: state.guild,
     courtDay: state.courtDay ?? 0,
     quarter: state.quarter ?? null,
+    knowledge: state.knowledge,
     battle: state.battle,
     politics: state.politics,
     world: state.world,
@@ -4114,6 +4195,7 @@ function close(draft: Draft): CommandResult {
     guild: draft.guild,
     courtDay: draft.courtDay,
     quarter: draft.quarter,
+    ...(draft.knowledge ? { knowledge: draft.knowledge } : {}),
     battle: draft.battle,
     politics: draft.politics,
     bands: draft.bands,

@@ -38,6 +38,7 @@ import {
   jobsAt,
   journeyLeft,
   kingdomOf,
+  knownShare,
   landHolderOf,
   lanesFrom,
   lordById,
@@ -56,6 +57,7 @@ import {
   repairPrice,
   resalePrice,
   roadsFrom,
+  rumourAt,
   seaHours,
   seasonOf,
   shipCarries,
@@ -482,6 +484,8 @@ export function HomeScreen({ game }: { game: GameState }) {
 
       <Spells game={game} dispatch={dispatch} where={placeKind} />
 
+      {settlement ? <Rumours game={game} /> : null}
+
       <Orders game={game} dispatch={dispatch} />
 
       <Section title="Отдых">
@@ -766,6 +770,33 @@ function Quarters({ game }: { game: GameState }) {
         })}
       </View>
       <Dim>{QUARTERS[current as QuarterId].description}</Dim>
+    </Section>
+  )
+}
+
+/**
+ * Слухи (этап 46): в корчме знают то, чего ты не видел. Ближайшая незнакомая
+ * земля — за кружку и час.
+ */
+function Rumours({ game }: { game: GameState }) {
+  if (!game.knowledge) return null
+  const rumour = rumourAt(game, game.locationId)
+  const command: Command = { type: 'askAround' }
+  const check = canApply(game, command)
+  return (
+    <Section title="Слухи" aside={`знаешь ${Math.round(knownShare(game) * 100)}% земель`}>
+      <Card
+        glyph={<Icon name="people" size={20} color={palette.info} />}
+        title="Расспросить в корчме"
+        description={
+          rumour
+            ? 'Тут знают земли, которых ты не видел. За кружку расскажут о ближайшей.'
+            : 'Здесь говорят о том, что ты и сам видел.'
+        }
+        meta="5 монет · 1 ч"
+        reason={check.ok ? undefined : check.message}
+        onPress={() => dispatch(command)}
+      />
     </Section>
   )
 }

@@ -16,6 +16,8 @@ import {
   itemsSoldAt,
   kingdomOf,
   knownMarkets,
+  knownShare,
+  mapsFor,
   partyCapacity,
   priceAgo,
   priceHistory,
@@ -141,6 +143,8 @@ export function TradeScreen({ game }: { game: GameState }) {
           )
         })}
       </Section>
+
+      <Maps game={game} />
 
       <Section title="Снаряжение">
         {itemsSoldAtHere(game).map((item) => {
@@ -304,3 +308,32 @@ const styles = StyleSheet.create({
   actionOff: { opacity: 0.3 },
   actionLabel: { color: palette.gold, fontSize: font.title },
 })
+
+/**
+ * Карты продаются (этап 46): знание — товар. В городе — своей короны, в
+ * столице — и дальних земель. Карта уже известной земли не продаётся.
+ */
+function Maps({ game }: { game: GameState }) {
+  const maps = mapsFor(game, game.locationId)
+  if (!game.knowledge) return null
+  const share = Math.round(knownShare(game) * 100)
+  return (
+    <Section title="Карты" aside={`знаешь ${share}% земель`}>
+      {maps.length === 0 ? <Dim>Карт здесь не продают — или ты знаешь всё, что на них.</Dim> : null}
+      {maps.map((map) => {
+        const command: Command = { type: 'buyMap', regionId: map.regionId }
+        const check = canApply(game, command)
+        return (
+          <Card
+            key={map.regionId}
+            title={map.name}
+            description={`Откроет земель: ${map.fresh}.`}
+            meta={`${map.price} монет`}
+            reason={check.ok ? undefined : check.message}
+            onPress={() => dispatch(command)}
+          />
+        )
+      })}
+    </Section>
+  )
+}

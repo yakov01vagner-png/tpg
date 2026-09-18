@@ -26,9 +26,11 @@ import {
   holderOf,
   hours,
   iceBound,
+  isKnown,
   isSettlement,
   isSite,
   journeyProgress,
+  knowsPlace,
   lanesFrom,
   layoutOf,
   legHoursFor,
@@ -134,12 +136,11 @@ export function MapScreen({ game }: { game: GameState }) {
       }
       for (let column = 0; column < grid.size; column += 1) {
         const cell = grid.cells[row * grid.size + column]
-        const land = colorOf(
-          cell,
-          mode,
-          regionPaint,
-          cell?.locationId ? held[cell.locationId] : undefined,
-        )
+        // Туман (этап 46): незнакомая земля — одним цветом, без дорог и мест.
+        const land =
+          cell && !isKnown(game, cell.provinceId)
+            ? FOG_COLOR
+            : colorOf(cell, mode, regionPaint, cell?.locationId ? held[cell.locationId] : undefined)
         const fill = grid.water[row * grid.size + column]
           ? season === 'winter'
             ? ICE_COLOR
@@ -303,10 +304,11 @@ export function MapScreen({ game }: { game: GameState }) {
     for (const [fromId, roads] of Object.entries(game.world.roads)) {
       const from = points[fromId]
       if (!from) continue
+      if (!knowsPlace(game, fromId)) continue
       for (const road of roads) {
         if (fromId > road.to) continue
         const to = points[road.to]
-        if (!to) continue
+        if (!to || !knowsPlace(game, road.to)) continue
         out.push({
           id: `${fromId}|${road.to}`,
           x1: from.x,
@@ -318,7 +320,7 @@ export function MapScreen({ game }: { game: GameState }) {
       }
     }
     return out
-  }, [game.world.roads, points])
+  }, [game, points])
 
   // Где герой сейчас: в пути — между местами, иначе в месте.
   const heroAt = useMemo(() => {
@@ -624,6 +626,7 @@ export function MapScreen({ game }: { game: GameState }) {
                   {Object.values(game.world.locations).map((location) => {
                     const point = points[location.id]
                     if (!point || isSettlement(location.archetype)) return null
+                    if (!isKnown(game, location.provinceId)) return null
                     // Место без жителей — ромб вполовину меньше деревни: оно
                     // есть на земле, но не спорит с поселением за внимание.
                     const half = 3.4 * mark
@@ -660,6 +663,7 @@ export function MapScreen({ game }: { game: GameState }) {
                   const point = points[location.id]
                   const settlement = game.settlements[location.id]
                   if (!point || !settlement) return null
+                  if (!isKnown(game, location.provinceId)) return null
                   const mine = settlement.owner === PLAYER
                   const dead = settlement.population <= 0
                   const starving = foodSecurity(settlement) < 0.3
@@ -1039,6 +1043,9 @@ const ICE_COLOR = '#34485a'
  * сливалось с ней в тень под холмами.
  */
 const RIVER_COLOR = '#5f9dc0'
+
+/** Туман: земля, которой герой не знает (этап 46). */
+const FOG_COLOR = '#3a3632'
 
 /** Цвет морского пути: светлее воды, чтобы пунктир читался на тёмном море. */
 const LANE_COLOR = '#7fa9c4'
