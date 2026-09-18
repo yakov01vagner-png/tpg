@@ -109,7 +109,12 @@ export function MapScreen({ game }: { game: GameState }) {
       }
       for (let column = 0; column < grid.size; column += 1) {
         const cell = grid.cells[row * grid.size + column]
-        const fill = colorOf(cell, mode, regionPaint, cell ? held[cell.locationId] : undefined)
+        const fill = colorOf(
+          cell,
+          mode,
+          regionPaint,
+          cell?.locationId ? held[cell.locationId] : undefined,
+        )
         if (fill !== running) {
           flush(column)
           running = fill
@@ -134,6 +139,30 @@ export function MapScreen({ game }: { game: GameState }) {
     }
     return out
   }, [grid])
+
+  // Подпись провинции ставится в середину её земли, а не в геометрический
+  // центр: так она стоит там, где земля и правда есть, и не спорит с именами мест.
+  const provinceLabels = useMemo(() => {
+    const sums = new Map<string, { x: number; y: number; n: number }>()
+    for (let row = 0; row < grid.size; row += 1) {
+      for (let column = 0; column < grid.size; column += 1) {
+        const cell = grid.cells[row * grid.size + column]
+        if (!cell) continue
+        const sum = sums.get(cell.provinceId) ?? { x: 0, y: 0, n: 0 }
+        sum.x += (column + 0.5) * grid.cell
+        sum.y += (row + 0.5) * grid.cell
+        sum.n += 1
+        sums.set(cell.provinceId, sum)
+      }
+    }
+    const out: { id: string; name: string; x: number; y: number }[] = []
+    for (const [provinceId, sum] of sums) {
+      const province = game.world.provinces[provinceId]
+      if (!province || sum.n === 0) continue
+      out.push({ id: provinceId, name: province.name, x: sum.x / sum.n, y: sum.y / sum.n })
+    }
+    return out
+  }, [grid, game.world])
 
   const horizontal = useRef<ScrollView>(null)
   const vertical = useRef<ScrollView>(null)
@@ -319,6 +348,24 @@ export function MapScreen({ game }: { game: GameState }) {
                       height={grid.cell}
                       fill="#000000"
                     />
+                  ))}
+                </G>
+              )}
+
+              {level === 'world' ? null : (
+                <G>
+                  {provinceLabels.map((label) => (
+                    <SvgText
+                      key={label.id}
+                      x={label.x}
+                      y={label.y}
+                      fill="#efe6d6"
+                      fillOpacity={0.32}
+                      fontSize={13 * mark}
+                      textAnchor="middle"
+                    >
+                      {label.name.toUpperCase()}
+                    </SvgText>
                   ))}
                 </G>
               )}
@@ -579,12 +626,44 @@ function colorOf(
   holder: string | undefined,
 ): string | null {
   if (!cell) return null
+  const base = baseColorOf(cell, mode, regionPaint, holder)
+  // Глушь темнее околицы: видно, докуда дотянулись люди, а где земля сама по
+  // себе. В разбивке по областям провинции внутри области ещё и чуть разные —
+  // иначе область читается одним пятном, а провинция, которую держит лорд,
+  // не читается вовсе.
+  const shade = (cell.wilds ? 0.74 : 1) * (mode === 'regions' ? provinceTint(cell.provinceId) : 1)
+  return shade === 1 ? base : darken(base, shade)
+}
+
+function baseColorOf(
+  cell: GridCell,
+  mode: ModeId,
+  regionPaint: Readonly<Record<string, string>>,
+  holder: string | undefined,
+): string {
   if (mode === 'land') return TERRAIN_COLORS[cell.terrain]
   if (mode === 'regions') return regionPaint[cell.regionId] ?? '#6b6257'
   if (holder === 'rebel') return REBEL_COLOR
   if (holder === 'player') return PLAYER_COLOR
   if (holder === 'nobody') return NOBODY_COLOR
   return KINGDOM_COLORS[holder ?? cell.kingdomId] ?? '#6b6257'
+}
+
+/** Устойчивый лёгкий сдвиг яркости: соседние провинции области не сливаются. */
+function provinceTint(provinceId: string): number {
+  let hash = 2166136261
+  for (let i = 0; i < provinceId.length; i += 1) {
+    hash ^= provinceId.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return 0.9 + ((hash >>> 12) % 100) / 500
+}
+
+function darken(color: string, factor: number): string {
+  const value = Number.parseInt(color.slice(1), 16)
+  const channel = (shift: number) =>
+    Math.max(0, Math.min(255, Math.round(((value >> shift) & 255) * factor)))
+  return `#${((channel(16) << 16) | (channel(8) << 8) | channel(0)).toString(16).padStart(6, '0')}`
 }
 
 function sizeFor(archetype: string): number {

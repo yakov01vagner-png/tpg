@@ -1,14 +1,19 @@
-import { layoutOf } from './layout'
+import { layoutOf, provinceCentersOf } from './layout'
 import type { Terrain, World } from './types'
 
 /**
  * Полотно мира клетками.
  *
- * Карта — не схема связей, а земля: клетка либо чья-то, либо ничья. Чья
- * именно — решает ближайшее поселение: где чей город, там и его округа. Из
- * этого само собой выходит и политическая карта (клетка окрашена по короне), и
- * рельефная (по местности), и разбивка по областям — данные одни и те же,
- * меняется только то, чем красить.
+ * Карта — не схема связей, а земля: клетка либо чьей-то провинции, либо ничья.
+ * Чьей именно — решает ближайший якорь провинции: её середина или любое из её
+ * поселений. Из этого само собой выходит и политическая карта (клетка окрашена
+ * по короне), и рельефная (по местности), и разбивка по областям — данные одни
+ * и те же, меняется только то, чем красить.
+ *
+ * До версии 0.3 клетка принадлежала **ближайшему поселению**, и провинция была
+ * не землёй, а списком. Карта областей выходила кляксами вокруг деревень, а всё,
+ * что дальше околицы, было дырой. Теперь земля принадлежит провинции целиком, а
+ * поселение держит внутри неё только свою округу (DESIGN.md, п.3.1.1).
  *
  * Сетка, как и раскладка, не хранится в сейве: она выводится из неизменного
  * скелета мира (DESIGN.md, п.3.1) и потому одинакова при каждом запуске.
@@ -16,12 +21,18 @@ import type { Terrain, World } from './types'
 export const GRID_SIZE = 56
 
 export interface GridCell {
-  /** Ближайшее поселение: его округа. */
-  readonly locationId: string
+  /**
+   * Ближайшее поселение этой же провинции: его округа. Пусто только там, где
+   * в провинции не записано ни одного места.
+   */
+  readonly locationId: string | null
   readonly provinceId: string
   readonly regionId: string
   readonly kingdomId: string
+  /** Местность провинции: земля не меняется от того, чья деревня ближе. */
   readonly terrain: Terrain
+  /** Глушь: досюда не дотянулась ничья околица, хотя земля провинции. */
+  readonly wilds: boolean
 }
 
 export interface WorldGrid {
@@ -34,10 +45,21 @@ export interface WorldGrid {
 }
 
 /**
- * Докуда дотягивается округа поселения. Больше — мир слипается в один материк,
- * меньше — королевства рассыпаются на острова вокруг каждой деревни.
+ * Докуда дотягивается земля провинции от своего якоря.
+ *
+ * Сто восемнадцать, как было у околицы поселения, оставляли Дор-Хазад и ещё
+ * одну корону островами: короны стоят в четырёх-пяти сотнях единиц друг от
+ * друга, а область — клин, и в сторону соседа клина может не оказаться вовсе.
+ * При ста пятидесяти материк связен на всех зёрнах, и при этом половина
+ * полотна остаётся за краем мира.
  */
-const REACH = 118
+const REACH = 150
+
+/**
+ * Докуда дотягивается околица поселения. Дальше начинается глушь: земля всё ещё
+ * чья-то, но людей на ней нет и дорога через неё идёт сама по себе.
+ */
+const SETTLED_REACH = 76
 
 /** Неровность границы: без неё округа выходят циркулем, а не землёй. */
 function wobble(x: number, y: number): number {
@@ -47,56 +69,100 @@ function wobble(x: number, y: number): number {
   return 1 + (((hash >>> 9) % 1000) / 1000 - 0.5) * 0.22
 }
 
-export function worldGrid(world: World, mapSize: number): WorldGrid {
+export function worldGrid(world: World, mapSize: number, reach: number = REACH): WorldGrid {
   const points = layoutOf(world)
+  const centers = provinceCentersOf(world)
   const cell = mapSize / GRID_SIZE
 
-  // Разворачиваем локации в плоские массивы: по ним считается ближайшее место
-  // для каждой из трёх тысяч клеток, и словари тут обходятся дороже.
-  const ids: string[] = []
-  const xs: number[] = []
-  const ys: number[] = []
-  for (const [id, point] of Object.entries(points)) {
-    ids.push(id)
-    xs.push(point.x)
-    ys.push(point.y)
+  // Якоря провинции — её середина и её же поселения. Середина нужна затем,
+  // чтобы провинция с единственной деревней на краю всё равно держала свою
+  // землю; поселения — затем, чтобы место всегда стояло на земле своей
+  // провинции, даже если разброс отнёс его к соседней середине.
+  const anchorX: number[] = []
+  const anchorY: number[] = []
+  const anchorProvince: string[] = []
+  const pushAnchor = (point: { x: number; y: number }, provinceId: string) => {
+    anchorX.push(point.x)
+    anchorY.push(point.y)
+    anchorProvince.push(provinceId)
+  }
+  for (const [provinceId, point] of Object.entries(centers)) pushAnchor(point, provinceId)
+  for (const [locationId, point] of Object.entries(points)) {
+    const provinceId = world.locations[locationId]?.provinceId
+    if (provinceId) pushAnchor(point, provinceId)
   }
 
+  // Места по провинциям: внутри своей земли ищем ближайшее, чтобы знать округу.
+  const settled = new Map<string, { ids: string[]; xs: number[]; ys: number[] }>()
+  for (const [locationId, point] of Object.entries(points)) {
+    const provinceId = world.locations[locationId]?.provinceId
+    if (!provinceId) continue
+    const group = settled.get(provinceId) ?? { ids: [], xs: [], ys: [] }
+    group.ids.push(locationId)
+    group.xs.push(point.x)
+    group.ys.push(point.y)
+    settled.set(provinceId, group)
+  }
+
+  const described = new Map<string, Omit<GridCell, 'locationId' | 'wilds'>>()
   const cells: (GridCell | null)[] = []
   for (let row = 0; row < GRID_SIZE; row += 1) {
     const cy = (row + 0.5) * cell
     for (let column = 0; column < GRID_SIZE; column += 1) {
       const cx = (column + 0.5) * cell
-      const reach = REACH * wobble(column, row)
+      const limit = reach * wobble(column, row)
       let best = -1
-      let bestDistance = reach
-      for (let i = 0; i < ids.length; i += 1) {
-        const distance = Math.hypot((xs[i] ?? 0) - cx, (ys[i] ?? 0) - cy)
+      let bestDistance = limit
+      for (let i = 0; i < anchorX.length; i += 1) {
+        const distance = Math.hypot((anchorX[i] ?? 0) - cx, (anchorY[i] ?? 0) - cy)
         if (distance < bestDistance) {
           bestDistance = distance
           best = i
         }
       }
-      cells.push(best < 0 ? null : describe(world, ids[best] ?? ''))
+      if (best < 0) {
+        cells.push(null)
+        continue
+      }
+      const provinceId = anchorProvince[best] ?? ''
+      let land = described.get(provinceId)
+      if (land === undefined) {
+        const made = describe(world, provinceId)
+        if (!made) {
+          cells.push(null)
+          continue
+        }
+        land = made
+        described.set(provinceId, made)
+      }
+
+      const group = settled.get(provinceId)
+      let nearest: string | null = null
+      let nearestDistance = Number.POSITIVE_INFINITY
+      for (let i = 0; i < (group?.ids.length ?? 0); i += 1) {
+        const distance = Math.hypot((group?.xs[i] ?? 0) - cx, (group?.ys[i] ?? 0) - cy)
+        if (distance < nearestDistance) {
+          nearestDistance = distance
+          nearest = group?.ids[i] ?? null
+        }
+      }
+      cells.push({ ...land, locationId: nearest, wilds: nearestDistance > SETTLED_REACH })
     }
   }
 
   return { size: GRID_SIZE, cell, cells }
 }
 
-function describe(world: World, locationId: string): GridCell | null {
-  const location = world.locations[locationId]
-  if (!location) return null
-  const province = world.provinces[location.provinceId]
+function describe(world: World, provinceId: string): Omit<GridCell, 'locationId' | 'wilds'> | null {
+  const province = world.provinces[provinceId]
   if (!province) return null
   const region = world.regions[province.regionId]
   if (!region) return null
   return {
-    locationId,
     provinceId: province.id,
     regionId: region.id,
     kingdomId: region.kingdomId,
-    terrain: location.terrain,
+    terrain: province.terrain,
   }
 }
 

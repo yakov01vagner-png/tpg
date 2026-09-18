@@ -31,33 +31,67 @@ function jitter(seed: string, spread: number): Point {
   return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius }
 }
 
-export function layoutOf(world: World): Readonly<Record<string, Point>> {
-  const points: Record<string, Point> = {}
-  const taken: Point[] = []
+/**
+ * Середина провинции.
+ *
+ * Считается отдельно от мест, потому что провинция — это земля, а не список
+ * поселений (DESIGN.md, п.3.1.1). Даже провинция, где стоит одна деревня на
+ * краю, держит свою округу вокруг этой точки, а не вокруг деревни.
+ */
+export function provinceCentersOf(world: World): Readonly<Record<string, Point>> {
+  const centers: Record<string, Point> = {}
 
   for (const kingdom of Object.values(world.kingdoms)) {
     const center = KINGDOM_CENTERS[kingdom.id] ?? { x: MAP_SIZE / 2, y: MAP_SIZE / 2 }
     const regions = kingdom.regionIds
+    // Область — клин от столицы наружу, и клинья делят круг поровну. Пока
+    // области стояли кольцом вокруг столицы, а провинции кольцом вокруг
+    // области, выходило два зла сразу: земля короны рвалась надвое, потому что
+    // у самой столицы не было ничьей провинции, а провинции соседних областей
+    // залезали друг к другу, и «карта по областям» переставала быть картой
+    // областей.
+    const spread = (Math.PI * 2) / Math.max(1, regions.length)
 
     regions.forEach((regionId, regionIndex) => {
       const region = world.regions[regionId]
       if (!region) return
-      // Области расходятся от столицы веером.
-      const regionAngle = (regionIndex / Math.max(1, regions.length)) * Math.PI * 2 + 0.6
-      const regionCenter = {
-        x: center.x + Math.cos(regionAngle) * 90,
-        y: center.y + Math.sin(regionAngle) * 90,
-      }
+      const regionAngle = regionIndex * spread + 0.6
+      const count = Math.max(1, region.provinceIds.length)
 
       region.provinceIds.forEach((provinceId, provinceIndex) => {
-        const province = world.provinces[provinceId]
-        if (!province) return
-        const provinceAngle =
-          (provinceIndex / Math.max(1, region.provinceIds.length)) * Math.PI * 2 + regionAngle
-        const provinceCenter = {
-          x: regionCenter.x + Math.cos(provinceAngle) * 58,
-          y: regionCenter.y + Math.sin(provinceAngle) * 58,
+        // Провинции уходят от столицы вглубь области: первая лежит у самого
+        // престола, дальние — на окраине. Вбок они расходятся не больше, чем
+        // на пятую часть клина, иначе область перестаёт быть куском.
+        const radius = 58 + provinceIndex * 62
+        const sway = count === 1 ? 0 : ((provinceIndex % 2 === 0 ? -1 : 1) * spread) / 5
+        const angle = regionAngle + sway
+        centers[provinceId] = {
+          x: center.x + Math.cos(angle) * radius,
+          y: center.y + Math.sin(angle) * radius,
         }
+      })
+    })
+  }
+
+  return centers
+}
+
+export function layoutOf(world: World): Readonly<Record<string, Point>> {
+  const points: Record<string, Point> = {}
+  const taken: Point[] = []
+  const centers = provinceCentersOf(world)
+
+  // Порядок обхода тот же, что и у центров: от него зависит, кого при тесноте
+  // отводят в сторону, а значит и вся раскладка.
+  for (const kingdom of Object.values(world.kingdoms)) {
+    for (const regionId of kingdom.regionIds) {
+      const region = world.regions[regionId]
+      if (!region) continue
+
+      for (const provinceId of region.provinceIds) {
+        const province = world.provinces[provinceId]
+        const provinceCenter = centers[provinceId]
+        if (!province || !provinceCenter) continue
 
         for (const locationId of province.locationIds) {
           // Место стоит там, куда его кладёт собственное имя, — не там, где оно
@@ -70,8 +104,8 @@ export function layoutOf(world: World): Readonly<Record<string, Point>> {
             y: clamp(provinceCenter.y + spot.y),
           })
         }
-      })
-    })
+      }
+    }
   }
 
   return points
