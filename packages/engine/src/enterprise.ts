@@ -8,6 +8,7 @@ import { priceOf } from './economy'
 import { WAGON_PACE, legHoursFor } from './journey'
 import { foodSecurity } from './life'
 import { type Rng, rollChance } from './rng'
+import { seasonOf } from './time'
 import { lanesFrom } from './world/lanes'
 import { roadsFrom } from './world/queries'
 import type { World } from './world/types'
@@ -289,7 +290,10 @@ export function tickEnterprises(
       travelTarget: target,
       // Часы отрезка считает то же правило, что у героя и у дружины: обоз
       // просто медленнее (journey.ts).
-      travel: { toLocationId: step, hoursLeft: legHoursFor(road?.hours ?? 12, WAGON_PACE) },
+      travel: {
+        toLocationId: step,
+        hoursLeft: legHoursFor(road?.hours ?? 12, WAGON_PACE, day === null ? null : seasonOf(day)),
+      },
     })
   }
 

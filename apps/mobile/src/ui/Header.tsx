@@ -5,6 +5,7 @@ import {
   type GameState,
   TIME_OF_DAY_LABELS,
   dayOf,
+  formatDate,
   hourOf,
   minuteOf,
   timeOfDay,
@@ -67,7 +68,9 @@ export function Header({ game, speed }: { game: GameState; speed: ClockSpeed }) 
         <View style={styles.clock}>
           <Text style={styles.time}>{`${hh}:${mm}`}</Text>
           <Text style={[styles.pora, pora === 'night' && styles.night]}>
-            {`день ${dayOf(game.time)} · ${TIME_OF_DAY_LABELS[pora]}`}
+            {/* Дата, а не номер дня: с версии 0.5 у года есть месяцы и времена
+                года, и «14 липня» говорит больше, чем «день 470» (этап 37). */}
+            {`${formatDate(dayOf(game.time))} · ${TIME_OF_DAY_LABELS[pora]}`}
           </Text>
         </View>
 

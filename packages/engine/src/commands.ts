@@ -76,7 +76,7 @@ import {
 import type { Journey } from './journey'
 import { journeyLeft, legHoursFor, paceOf } from './journey'
 import type { HarvestEvent, LifeEvent } from './life'
-import { foodSecurity, rollHarvest, tickDays } from './life'
+import { LIFE, foodSecurity, rollHarvest, tickDays } from './life'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
 import type { PriceLog } from './market'
 import { recordPrices } from './market'
@@ -130,14 +130,17 @@ import type { GameTime } from './time'
 import type { TimeWindow } from './time'
 import {
   DAY_WINDOW,
+  HARVEST_DAY,
   MINUTES_PER_DAY,
   MINUTES_PER_HOUR,
+  crossedDayOfYear,
   dayOf,
   formatDuration,
   formatWindow,
   hours,
   isWithinWindow,
   nextTimeOfDay,
+  seasonOf,
 } from './time'
 import type { Lord } from './war'
 import { allied, pairOf } from './war'
@@ -543,7 +546,11 @@ function travel(state: GameState, toLocationId: string): CommandResult {
 
   // К мёртвому месту дорога заросла: идти вдвое дольше (band.ts, OVERGROWN).
   const roadHoursNow = roadHours(state.world, state.settlements, state.locationId, road.to)
-  const walking = legHoursFor(roadHoursNow, paceOf(state.party, state.character.wound !== null))
+  const walking = legHoursFor(
+    roadHoursNow,
+    paceOf(state.party, state.character.wound !== null),
+    seasonOf(dayOf(state.time)),
+  )
   const blocked = checkFatigue(state.character, travelFatigue(walking))
   if (blocked) return blocked
 
@@ -3241,7 +3248,15 @@ function close(draft: Draft): CommandResult {
   // и досчитывают. Никаких фоновых таймеров — только детерминированный догон.
   const daysPassed = dayOf(draft.time) - dayOf(draft.base.time)
   if (daysPassed > 0) {
-    const life = tickDays(draft.base.world, draft.settlements, daysPassed)
+    // Сутки мира знают, какое нынче время года: зимой земля не родит, осенью
+    // жнут (этап 37).
+    const life = tickDays(
+      draft.base.world,
+      draft.settlements,
+      daysPassed,
+      LIFE,
+      dayOf(draft.base.time),
+    )
     draft.settlements = life.settlements
     draft.events.push(...worldNews(draft.base, draft.locationId, life.events))
 
@@ -3295,9 +3310,12 @@ function close(draft: Draft): CommandResult {
       draft.settlements = settled.settlements
       draft.rng = settled.rng
       draft.events.push(...settleNews(draft.world, draft.locationId, settled.events))
+    }
 
-      // И каким вышел год на земле: недород — единственное, что доводит до
-      // голода мир, в котором еды с запасом.
+    // Каким вышел год на земле — решается не на Новый год, а на жатве: в первый
+    // день осени всё, что выросло, становится числом (этап 37). Недород —
+    // единственное, что доводит до голода мир, в котором еды с запасом.
+    if (crossedDayOfYear(dayOf(draft.base.time), dayOf(draft.time), HARVEST_DAY)) {
       const harvest = rollHarvest(draft.world, draft.settlements, draft.rng)
       draft.settlements = harvest.settlements
       draft.rng = harvest.rng

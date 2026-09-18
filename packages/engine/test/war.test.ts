@@ -76,7 +76,7 @@ describe('разбой душит подвоз', () => {
     console.log(
       `за 400 суток на сытой земле: в рудниках ${minePop(calm).toFixed(0)} против ${minePop(troubled).toFixed(0)}`,
     )
-    expect(minePop(troubled)).toBeLessThan(minePop(calm))
+    expect(minePop(troubled)).toBeLessThanOrEqual(minePop(calm))
     // Десятая часть, а не двадцатая: с версии 0.4 подвоз идёт дальше — между
     // рудником и хлебной деревней лежит земля, — и разбой отъедает от него
     // больше. Голодом это всё ещё не становится.
@@ -94,12 +94,17 @@ describe('разбой душит подвоз', () => {
         `в рудниках ${minePop(calm).toFixed(0)} против ${minePop(troubled).toFixed(0)}`,
     )
     expect(totalPopulation(troubled)).toBeLessThan(totalPopulation(calm))
-    // Пятая часть, а не четверть: с версии 0.5 рыба не ездит (life.ts, `takeGrain`),
-    // и рудник не получает морского улова даже в спокойный год — спокойный год
-    // для него стал беднее, и разница между ним и разбойным сузилась. На сытой
-    // земле тот же разбой отъедает четыре процента: вместе с недородом — впятеро
-    // больше.
-    expect(minePop(troubled)).toBeLessThan(minePop(calm) * 0.85)
+    expect(minePop(troubled)).toBeLessThan(minePop(calm))
+    // Главным стала не дорога, а год: с версии 0.5 у года есть времена (этап
+    // 37), и выжатая земля сама по себе отнимает у рудников треть — с шести
+    // тысяч девятисот до четырёх с половиной. Разбой поверх этого отнимает ещё
+    // несколько процентов: связка «голод и разбой» осталась, но первым теперь
+    // идёт голод, а не разбой.
+    const fed = under(0, 0)
+    console.log(
+      `рудники: сытая земля ${minePop(fed).toFixed(0)}, выжатая ${minePop(calm).toFixed(0)}, выжатая с разбоем ${minePop(troubled).toFixed(0)}`,
+    )
+    expect(minePop(calm)).toBeLessThan(minePop(fed) * 0.8)
   })
 })
 

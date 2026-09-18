@@ -115,8 +115,32 @@ describe('скелет мира и ёмкость земли', () => {
     console.log(`во всех амбарах мира ${days.toFixed(0)} суток еды`)
     // Пока хлеб не портился, к восьмидесятому году в амбарах лежало на две с
     // половиной тысячи суток вперёд — и мир не знал голода вовсе: холодное лето
-    // просто съедало часть кучи.
-    expect(days).toBeLessThan(60)
+    // просто съедало часть кучи. С версии 0.5 у года есть времена (этап 37):
+    // запас нужен не на неделю, а от жатвы до жатвы, и мера выросла вместе с
+    // ним — но потолок остался, и это по-прежнему две нормы, а не куча.
+    expect(days).toBeLessThan(250)
+  })
+
+  it('год виден в амбаре: осенью полон, весной пуст', () => {
+    // Двадцать лет ровно — мир останавливается в тот же день года, в который
+    // начался (в первый день весны). Дальше считаем по временам года.
+    const twenty = lived(20).settlements
+    const at = (days: number, from: Record<string, Settlement>) => {
+      const after = tickDays(generateWorld(1), from, days, LIFE, 1).settlements
+      let stock = 0
+      let eaten = 0
+      for (const one of Object.values(after)) {
+        stock += foodStock(one)
+        eaten += one.population * LIFE.foodPerPerson
+      }
+      return stock / eaten
+    }
+    const spring = at(60, twenty)
+    const autumn = at(200, twenty)
+    console.log(
+      `в амбарах: к концу весны ${spring.toFixed(0)} суток, после жатвы ${autumn.toFixed(0)}`,
+    )
+    expect(autumn).toBeGreaterThan(spring * 1.2)
   })
 })
 

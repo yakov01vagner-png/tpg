@@ -1,10 +1,12 @@
 import type { GoodId } from './content/goods'
 import { GOOD_IDS } from './content/goods'
 import type { Settlement } from './economy'
-import { RECRUIT_RECOVERY, recruitPool, targetStock } from './economy'
+import { FOOD_PER_PERSON, RECRUIT_RECOVERY, recruitPool, targetStock } from './economy'
 import { hasBuilding } from './holding'
 import type { Rng } from './rng'
 import { nextFloat } from './rng'
+import type { Season } from './time'
+import { daysToHarvest, seasonOf } from './time'
 import type { LocationArchetype, PlaceKind, Terrain, World } from './world/types'
 import { isSettlement } from './world/types'
 
@@ -55,13 +57,13 @@ export interface LifeConfig {
 }
 
 export const LIFE: LifeConfig = {
-  foodPerPerson: 0.05,
+  foodPerPerson: FOOD_PER_PERSON,
   landFood: 30,
-  daysOfStock: 10,
-  provinceTransfer: 0.3,
-  regionTransfer: 0.15,
-  kingdomTransfer: 0.08,
-  worldTransfer: 0.03,
+  daysOfStock: 100,
+  provinceTransfer: 0.15,
+  regionTransfer: 0.08,
+  kingdomTransfer: 0.04,
+  worldTransfer: 0.015,
   starvationDeaths: 0.008,
   starvationMigration: 0.015,
   growth: 0.00025,
@@ -95,6 +97,29 @@ export const LAND_CAPACITY: Record<LocationArchetype, number> = {
   mine: 250,
   fortress: 300,
   monastery: 200,
+}
+
+/**
+ * Что даёт земля в это время года (этап 37).
+ *
+ * До 0.5 земля родила каждый день одинаково: «урожай» был числом, на которое
+ * умножалось производство, и в феврале деревня жала хлеб ровно так же, как в
+ * августе. Теперь год — это год: весной сеют и доедают прошлогоднее, летом
+ * растёт, осенью жнут, зимой живут запасом.
+ *
+ * Средний по году — единица: мир кормится столько же, сколько кормился, но
+ * теперь ему приходится держать запас. Поэтому вместе с временами года выросла
+ * и норма запаса (`daysOfStock`): десять суток были мерой мира, в котором хлеб
+ * родится ежедневно, а в мире с зимой десять суток — это голодная смерть в
+ * студне.
+ *
+ * Рыба сюда не входит: море ловится круглый год (лёд приходит на этапе 38).
+ */
+export const SEASON_FOOD: Record<Season, number> = {
+  spring: 0.7,
+  summer: 1.35,
+  autumn: 1.8,
+  winter: 0.15,
 }
 
 /** Что земля родит: на равнине много, в горах почти ничего. */
@@ -259,8 +284,10 @@ export function foodStock(settlement: Settlement): number {
 
 /** Насколько место обеспечено едой: 1 — полный амбар, 0 — пусто. */
 export function stockDays(settlement: Settlement, config: LifeConfig = LIFE): number {
-  // Амбар не родит хлеба, но позволяет держать запас вдвое дольше.
-  return config.daysOfStock * (hasBuilding(settlement, 'granary') ? 1.8 : 1)
+  // Сколько держит это место: у деревни год, у рудника неделя (economy.ts,
+  // `STORE_DAYS`). Амбар не родит хлеба, но позволяет держать запас дольше.
+  const own = settlement.storeDays ?? config.daysOfStock
+  return own * (hasBuilding(settlement, 'granary') ? 1.8 : 1)
 }
 
 export function foodSecurity(settlement: Settlement, config: LifeConfig = LIFE): number {
@@ -378,6 +405,7 @@ export function tickDays(
   settlements: Readonly<Record<string, Settlement>>,
   days: number,
   config: LifeConfig = LIFE,
+  fromDay = 1,
 ): LifeResult {
   if (days <= 0) return { settlements, events: [] }
   const byProvince = groupByProvince(world, settlements)
@@ -389,12 +417,13 @@ export function tickDays(
   const events: LifeEvent[] = []
 
   for (let day = 0; day < days; day += 1) {
-    current = produceAndEat(world, current, config, events)
-    current = share(world, current, byProvince, config.provinceTransfer, config)
-    current = share(world, current, byRegion, config.regionTransfer, config)
-    current = share(world, current, byKingdom, config.kingdomTransfer, config)
+    current = produceAndEat(world, current, config, events, fromDay + day)
+    const today = fromDay + day
+    current = share(world, current, byProvince, config.provinceTransfer, config, today)
+    current = share(world, current, byRegion, config.regionTransfer, config, today)
+    current = share(world, current, byKingdom, config.kingdomTransfer, config, today)
     // Дальняя хлебная торговля: горное королевство кормится равнинным.
-    current = share(world, current, everywhere, config.worldTransfer, config)
+    current = share(world, current, everywhere, config.worldTransfer, config, today)
   }
   return { settlements: current, events: mergeEvents(events) }
 }
@@ -406,7 +435,10 @@ function produceAndEat(
   settlements: Record<string, Settlement>,
   config: LifeConfig,
   events: LifeEvent[],
+  day: number,
 ): Record<string, Settlement> {
+  const season = seasonOf(day)
+  const growth = SEASON_FOOD[season]
   const next: Record<string, Settlement> = {}
   const arrivals: Record<string, number> = {}
 
@@ -419,7 +451,9 @@ function produceAndEat(
     const stock = { ...settlement.stock }
     // Что даёт земля. Мельница выжимает из того же поля больше.
     const produced =
-      foodCapacity(world, id, config, settlement) * (hasBuilding(settlement, 'mill') ? 1.18 : 1)
+      foodCapacity(world, id, config, settlement) *
+      (hasBuilding(settlement, 'mill') ? 1.18 : 1) *
+      growth
     const location = world.locations[id]
     // Рыбу ловят там, где есть вода, а не там, где в провинции написано
     // «побережье» (этап 36). В топях ловят тоже, но меньше: там не море.
@@ -567,12 +601,27 @@ function produceAndEat(
  * Это и есть «живой мир без игрока» из п.7: пока в провинции есть хлебная
  * деревня, её город переживёт неурожай. Когда деревни не станет — не переживёт.
  */
+/**
+ * Сколько суток запаса место держит при себе, прежде чем поделиться.
+ *
+ * Не норму амбара, а то, сколько осталось до нового хлеба: в вересне, сразу
+ * после жатвы, делятся скупо — впереди зима; в червене, когда до жатвы месяц,
+ * отдают охотно — всё равно сгниёт. Пока норма была одна на весь год, выходило
+ * два зла сразу: либо деревня раздавала зимний запас и вымирала сама, либо, при
+ * годовой норме, никто никогда не просил помощи — и разбой на дорогах перестал
+ * что-либо значить, потому что возить стало нечего.
+ */
+function keepDays(settlement: Settlement, config: LifeConfig, day: number): number {
+  return Math.min(stockDays(settlement, config), daysToHarvest(day) + 10)
+}
+
 function share(
   world: World,
   settlements: Record<string, Settlement>,
   groups: readonly (readonly string[])[],
   rate: number,
   config: LifeConfig,
+  day: number,
 ): Record<string, Settlement> {
   const next = { ...settlements }
 
@@ -583,7 +632,8 @@ function share(
     for (const id of group) {
       const settlement = next[id]
       if (!settlement || settlement.population <= 0) continue
-      const wanted = settlement.population * config.foodPerPerson * stockDays(settlement, config)
+      const wanted =
+        settlement.population * config.foodPerPerson * keepDays(settlement, config, day)
       const have = foodStock(settlement)
       // По опасным дорогам возят осторожнее и меньше.
       const safety = 1 - settlement.banditry * 0.5

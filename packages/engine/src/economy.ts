@@ -8,7 +8,7 @@ import {
   TERRAIN_SUPPLY,
 } from './content/goods'
 import type { TroopId } from './content/troops'
-import type { World } from './world/types'
+import type { LocationArchetype, World } from './world/types'
 import { isSettlement } from './world/types'
 
 /**
@@ -65,6 +65,16 @@ export interface Settlement {
    * мору кроме лекаря, — и то лишь на своей земле.
    */
   readonly quarantined: boolean
+  /**
+   * На сколько суток place держит хлеб (этап 37).
+   *
+   * Не у всех амбар одинаков. Хлебная деревня хранит от жатвы до жатвы — иначе
+   * зимой ей нечего есть. Рудник не хранит: у него нет ни амбара, ни своего
+   * хлеба, есть телега раз в неделю, и потому подвоз для него — вопрос жизни, а
+   * разбой на дороге — смерть. Пока норма была общей, разбой перестал что-либо
+   * значить: рудник сидел на стодневном запасе и не замечал ни войны, ни зимы.
+   */
+  readonly storeDays?: number
 }
 
 /** Какая доля населения вообще способна взять оружие и уйти с чужаком. */
@@ -108,8 +118,26 @@ export function supplyRatio(world: World, locationId: string, good: GoodId): num
  * Это и есть спрос: от него считается цена.
  */
 export function localNeed(good: GoodId, population: number): number {
+  // Еду меряют не суточной нуждой, а тем запасом, которым живут: с версии 0.5
+  // год делится на времена, хлеб берут от жатвы до жатвы, и «нужда» в зерне —
+  // это годовой запас, а не дневная миска. Пока мерой оставалась миска, полный
+  // амбар выглядел стократным избытком, и зерно во всём мире стоило по единице:
+  // возить его было незачем, а половина торговли — это хлеб.
+  if (GOODS[good].food) {
+    return Math.max(1, Math.round(population * FOOD_PER_PERSON * FOOD_NORM_DAYS))
+  }
   return Math.max(1, Math.round(DEMAND_PER_CAPITA[good] * population))
 }
+
+/**
+ * Общая мера запаса еды: сколько суток держит место, живущее своим хлебом.
+ *
+ * Одна на весь мир нарочно — это линейка, по которой сравниваются места. То,
+ * сколько держит именно это место, лежит в нём самом (`storeDays`), и разница
+ * между линейкой и собственным амбаром и есть цена: у рудника хлеба на сорок
+ * пять суток против сотни — он и стоит вдвое.
+ */
+export const FOOD_NORM_DAYS = 100
 
 /**
  * Сколько товара место держит, когда всё спокойно.
@@ -127,6 +155,23 @@ export function targetStock(
 }
 
 /** Запасы новорождённого поселения: ровно столько, сколько ему положено. */
+/**
+ * Сколько еды съедает человек за сутки и на сколько суток её держат к началу
+ * игры.
+ *
+ * Живут эти два числа здесь, а не в `life.ts`, только из-за направления
+ * зависимостей: жизнь знает про хозяйство, хозяйство про жизнь — нет. Смысл у
+ * них жизненный: паёк и то, с чем мир просыпается в первый день весны.
+ *
+ * Сто пятнадцать суток — не щедрость, а равновесие: с версии 0.5 год делится на
+ * времена (этап 37), зимой земля не родит, и запас на первый день весны ровно
+ * такой, каким он выходит у мира, прожившего год. Пока еды клали «сколько нужно
+ * месту», мир начинал игру с шестнадцатью сутками хлеба и хоронил двадцать
+ * четыре тысячи человек в первую же весну.
+ */
+export const FOOD_PER_PERSON = 0.05
+export const START_FOOD_DAYS = 115
+
 export function initialStock(
   world: World,
   locationId: string,
@@ -134,14 +179,41 @@ export function initialStock(
 ): Record<GoodId, number> {
   const stock = {} as Record<GoodId, number>
   for (const good of GOOD_IDS) stock[good] = targetStock(world, locationId, good, population)
+  // Еды — на весну: столько, сколько держал бы тот, кто уже пережил зиму.
+  const winter = population * FOOD_PER_PERSON * START_FOOD_DAYS
+  const have = stock.grain + stock.fish
+  if (have < winter) stock.grain = Math.round(stock.grain + (winter - have))
   return stock
 }
 
+/**
+ * Сколько суток хлеба держит место такого рода.
+ *
+ * Деревня, городок, город и столица живут от жатвы до жатвы — у них поля и
+ * амбары. Крепость запасает на осаду. Обитель живёт своим огородом и подаянием.
+ * Порт кормится морем и привозом — ему незачем хранить год. А рудник не хранит
+ * вовсе: он ест с телеги.
+ */
+export const STORE_DAYS: Record<LocationArchetype, number> = {
+  village: 110,
+  town: 100,
+  city: 90,
+  capital: 90,
+  port: 60,
+  fortress: 120,
+  monastery: 90,
+  mine: 45,
+}
+
 export function createSettlement(world: World, locationId: string): Settlement {
-  const population = world.locations[locationId]?.population ?? 0
+  const location = world.locations[locationId]
+  const population = location?.population ?? 0
   return {
     locationId,
     population,
+    ...(location && isSettlement(location.archetype)
+      ? { storeDays: STORE_DAYS[location.archetype] }
+      : {}),
     stock: initialStock(world, locationId, population),
     recruits: recruitPool(population),
     banditry: 0,

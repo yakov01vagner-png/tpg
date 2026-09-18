@@ -10,6 +10,7 @@ import {
   SHIPS,
   SHIP_KINDS,
   SITES,
+  type Season,
   TERRAIN_LABELS,
   addressOf,
   canApply,
@@ -40,6 +41,7 @@ import {
   resalePrice,
   roadsFrom,
   seaHours,
+  seasonOf,
   shipCarries,
   shipDef,
   timeOfDay,
@@ -475,12 +477,27 @@ function Road({
 }
 
 /** Что творится: сытость, разбой, мор — словами и с цветом. */
+/** Чем время года отзывается на дороге и в поле — словом, а не числом. */
+const SEASON_WORDS: Record<Season, string> = {
+  spring: 'весна: распутица',
+  summer: 'лето',
+  autumn: 'осень: жатва и грязь',
+  winter: 'зима: земля не родит',
+}
+
 function StateLine({ game }: { game: GameState }) {
   const settlement = game.settlements[game.locationId]
   if (!settlement || settlement.population <= 0) return null
   const security = foodSecurity(settlement)
   const sick = plagueAt(game.plagues, game.locationId)
+  // Время года стоит первым: от него зависит и то, что в полях, и то, сколько
+  // идти по дороге (этап 37).
+  const season = seasonOf(dayOf(game.time))
   const parts: { text: string; tone: 'good' | 'warn' | 'danger' }[] = [
+    {
+      text: SEASON_WORDS[season],
+      tone: season === 'winter' ? 'warn' : 'good',
+    },
     security < 0.25
       ? { text: 'голодает', tone: 'danger' }
       : security < 0.6

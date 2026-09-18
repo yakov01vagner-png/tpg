@@ -6,6 +6,7 @@ import { takeLand } from './holding'
 import { ARMY_PACE, legHoursFor } from './journey'
 import type { Party } from './party'
 import { type Rng, nextFloat, nextInt, rollChance } from './rng'
+import { seasonOf } from './time'
 import type { Lord, Politics } from './war'
 import { atWar, isRebel } from './war'
 import { neighbourSettlements, roadsFrom } from './world/queries'
@@ -290,9 +291,9 @@ function distancesFrom(world: World, fromId: string, limit = MAX_MARCH_HOURS): M
 }
 
 /** Часы отрезка для войска: то же правило, что у героя (journey.ts). */
-function hoursTo(world: World, fromId: string, toId: string): number {
+function hoursTo(world: World, fromId: string, toId: string, day: number | null): number {
   const road = roadsFrom(world, fromId).find((candidate) => candidate.to === toId)
-  return legHoursFor(road?.hours ?? 12, ARMY_PACE)
+  return legHoursFor(road?.hours ?? 12, ARMY_PACE, day === null ? null : seasonOf(day))
 }
 
 /** Какая доля уведённых не гибнет, а уходит к соседям. */
@@ -937,7 +938,7 @@ export function tickBands(
     finished.push({
       ...band,
       goal,
-      travel: { toLocationId: step, hoursLeft: hoursTo(world, band.locationId, step) },
+      travel: { toLocationId: step, hoursLeft: hoursTo(world, band.locationId, step, day) },
     })
   }
 

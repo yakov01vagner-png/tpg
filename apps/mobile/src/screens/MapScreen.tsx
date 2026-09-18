@@ -15,6 +15,7 @@ import {
   PLAYER,
   type Passage,
   SITES,
+  type Season,
   TERRAIN_COLORS,
   TERRAIN_LABELS,
   addressOf,
@@ -42,6 +43,7 @@ import {
   roadsFrom,
   routeTo,
   seaHours,
+  seasonOf,
   worldGrid,
 } from '@tpg/engine'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -109,6 +111,10 @@ export function MapScreen({ game }: { game: GameState }) {
     return byPlace
   }, [game.settlements, game.politics])
 
+  // Какое нынче время года: земля в студне и земля в липне выглядят по-разному,
+  // и это видно на карте прежде всего остального (этап 37).
+  const season = seasonOf(dayOf(game.time))
+
   // Одноцветные клетки в строке сливаются в один прямоугольник: рисовать три
   // тысячи квадратов по одному телефон не обязан.
   const bands = useMemo(() => {
@@ -127,9 +133,17 @@ export function MapScreen({ game }: { game: GameState }) {
       }
       for (let column = 0; column < grid.size; column += 1) {
         const cell = grid.cells[row * grid.size + column]
+        const land = colorOf(
+          cell,
+          mode,
+          regionPaint,
+          cell?.locationId ? held[cell.locationId] : undefined,
+        )
         const fill = grid.water[row * grid.size + column]
           ? SEA_COLOR
-          : colorOf(cell, mode, regionPaint, cell?.locationId ? held[cell.locationId] : undefined)
+          : land === null
+            ? null
+            : tintBySeason(land, season)
         if (fill !== running) {
           flush(column)
           running = fill
@@ -139,7 +153,7 @@ export function MapScreen({ game }: { game: GameState }) {
       flush(grid.size)
     }
     return result
-  }, [grid, mode, regionPaint, held])
+  }, [grid, mode, regionPaint, held, season])
 
   // Однотонная заливка вблизи превращается в пустое поле: глазу не за что
   // зацепиться. Часть клеток притемняем — тогда земля читается клетками, а
@@ -952,6 +966,46 @@ export function MapScreen({ game }: { game: GameState }) {
  */
 function seaManner(game: GameState): Passage {
   return game.ship ? 'own' : 'hire'
+}
+
+/**
+ * Цвет земли в это время года.
+ *
+ * Не другая палитра, а та же, сдвинутая: зимой всё уходит в снег, осенью — в
+ * жухлое, весной чуть зеленеет. Карта должна оставаться той же картой — по ней
+ * узнают короны и области, — но с одного взгляда должно быть видно, что на
+ * дворе студень, а не липень.
+ */
+const SEASON_TINT: Record<Season, { readonly color: string; readonly share: number }> = {
+  spring: { color: '#7ba34f', share: 0.12 },
+  summer: { color: '#000000', share: 0 },
+  autumn: { color: '#b8863b', share: 0.2 },
+  winter: { color: '#d3dae0', share: 0.45 },
+}
+
+function tintBySeason(color: string, season: Season): string {
+  const tint = SEASON_TINT[season]
+  if (tint.share <= 0) return color
+  return blend(color, tint.color, tint.share)
+}
+
+/** Смешать два цвета: доля второго в первом. */
+function blend(base: string, over: string, share: number): string {
+  const one = hexOf(base)
+  const two = hexOf(over)
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * share)
+  return `#${[mix(one[0], two[0]), mix(one[1], two[1]), mix(one[2], two[2])]
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('')}`
+}
+
+function hexOf(color: string): [number, number, number] {
+  const raw = color.replace('#', '')
+  return [
+    Number.parseInt(raw.slice(0, 2), 16),
+    Number.parseInt(raw.slice(2, 4), 16),
+    Number.parseInt(raw.slice(4, 6), 16),
+  ]
 }
 
 /** Чем красить клетку: в этом вся разница между режимами карты. */

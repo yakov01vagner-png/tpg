@@ -1,6 +1,7 @@
 import type { Party } from './party'
 import { partySize, troopCount } from './party'
 import type { Passage } from './ship'
+import type { Season } from './time'
 import type { World } from './world/types'
 
 /**
@@ -76,9 +77,25 @@ export function paceOf(party: Party, wounded: boolean): number {
 export const ARMY_PACE = 1.35
 export const WAGON_PACE = 1.5
 
-/** Часы отрезка для этого отряда: дорога плюс то, кто по ней идёт. */
-export function legHoursFor(roadHours: number, pace: number): number {
-  return Math.max(1, Math.round(roadHours * pace))
+/**
+ * Дорога знает, какое нынче время года (этап 37).
+ *
+ * Осенью распутица: телега вязнет, брод разлит, и тот же переход стоит на треть
+ * дороже. Весной то же, но короче — снег сходит быстрее, чем зарядят дожди.
+ * Зимой дорога встаёт на наст: по мёрзлому идти легче, чем по грязи, но короткий
+ * день и снег съедают выигрыш. Лето — мера, от которой считается всё остальное.
+ */
+export const SEASON_ROAD: Record<Season, number> = {
+  spring: 1.2,
+  summer: 1,
+  autumn: 1.3,
+  winter: 1.1,
+}
+
+/** Часы отрезка для этого отряда: дорога, тот, кто по ней идёт, и время года. */
+export function legHoursFor(roadHours: number, pace: number, season: Season | null = null): number {
+  const weather = season ? SEASON_ROAD[season] : 1
+  return Math.max(1, Math.round(roadHours * pace * weather))
 }
 
 /**
@@ -95,7 +112,13 @@ export interface Route {
   readonly hours: number
 }
 
-export function routeTo(world: World, fromId: string, toId: string, pace = 1): Route | null {
+export function routeTo(
+  world: World,
+  fromId: string,
+  toId: string,
+  pace = 1,
+  season: Season | null = null,
+): Route | null {
   if (fromId === toId) return { steps: [], hours: 0 }
   const spent = new Map<string, number>([[fromId, 0]])
   const back = new Map<string, string>()
@@ -111,7 +134,7 @@ export function routeTo(world: World, fromId: string, toId: string, pace = 1): R
     if (current === toId) break
     const done = spent.get(current) ?? 0
     for (const road of world.roads[current] ?? []) {
-      const reached = done + legHoursFor(road.hours, pace)
+      const reached = done + legHoursFor(road.hours, pace, season)
       const known = spent.get(road.to)
       if (known !== undefined && known <= reached) continue
       spent.set(road.to, reached)

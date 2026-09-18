@@ -22,6 +22,113 @@ export const MINUTES_PER_DAY = MINUTES_PER_HOUR * HOURS_PER_DAY
  */
 export const DAYS_PER_YEAR = 365
 
+/**
+ * Месяцы и времена года (этап 37).
+ *
+ * Год начинается весной, а не зимой: мартовский год — это год крестьянский, и
+ * мир, в котором всё считается от урожая, иначе не считается вовсе. Поэтому
+ * первый день игры — это первый день весны: сев впереди, зима в конце.
+ *
+ * Имена месяцев не «январь» и не выдуманные: это те самые слова, которыми их и
+ * звали, — березень, липень, студень. Их слышно, и они сами говорят, что в
+ * этом месяце происходит.
+ */
+export interface Month {
+  readonly name: string
+  readonly days: number
+  readonly season: Season
+}
+
+export type Season = 'spring' | 'summer' | 'autumn' | 'winter'
+
+export const SEASON_LABELS: Record<Season, string> = {
+  spring: 'весна',
+  summer: 'лето',
+  autumn: 'осень',
+  winter: 'зима',
+}
+
+export const MONTHS: readonly Month[] = [
+  { name: 'березень', days: 30, season: 'spring' },
+  { name: 'цветень', days: 30, season: 'spring' },
+  { name: 'травень', days: 31, season: 'spring' },
+  { name: 'червень', days: 30, season: 'summer' },
+  { name: 'липень', days: 31, season: 'summer' },
+  { name: 'серпень', days: 31, season: 'summer' },
+  { name: 'вересень', days: 30, season: 'autumn' },
+  { name: 'листопад', days: 31, season: 'autumn' },
+  { name: 'грудень', days: 30, season: 'autumn' },
+  { name: 'студень', days: 31, season: 'winter' },
+  { name: 'сечень', days: 30, season: 'winter' },
+  { name: 'лютень', days: 30, season: 'winter' },
+]
+
+/** День года, 1..365: первый день весны — первый день года. */
+export function dayOfYear(day: number): number {
+  return ((((day - 1) % DAYS_PER_YEAR) + DAYS_PER_YEAR) % DAYS_PER_YEAR) + 1
+}
+
+/** Какой это год от начала мира, начиная с первого. */
+export function yearOf(day: number): number {
+  return Math.floor((day - 1) / DAYS_PER_YEAR) + 1
+}
+
+/** Месяц этого дня и который это день месяца. */
+export function monthOf(day: number): {
+  readonly month: Month
+  readonly index: number
+  readonly dayOfMonth: number
+} {
+  let left = dayOfYear(day)
+  for (const [index, month] of MONTHS.entries()) {
+    if (left <= month.days) return { month, index, dayOfMonth: left }
+    left -= month.days
+  }
+  const last = MONTHS[MONTHS.length - 1] as Month
+  return { month: last, index: MONTHS.length - 1, dayOfMonth: last.days }
+}
+
+/** Время года этого дня. */
+export function seasonOf(day: number): Season {
+  return monthOf(day).month.season
+}
+
+/** «12 липня, лето» — дата словами, как её назвал бы местный. */
+export function formatDate(day: number): string {
+  const { month, dayOfMonth } = monthOf(day)
+  return `${dayOfMonth} ${month.name}`
+}
+
+/**
+ * День жатвы: первый день осени.
+ *
+ * Год на земле кончается не Новым годом, а тем днём, когда сжали: до жатвы всё
+ * ещё прошлогоднее, после неё — новое. От него же считается и запас: держат
+ * столько, чтобы дожить до нового хлеба.
+ */
+export const HARVEST_DAY = 184
+
+/** Сколько суток осталось до нового хлеба. */
+export function daysToHarvest(day: number): number {
+  const left = HARVEST_DAY - dayOfYear(day)
+  return left > 0 ? left : left + DAYS_PER_YEAR
+}
+
+/**
+ * Перешли ли сутки через этот день года.
+ *
+ * Нужно всему, что случается раз в год в назначенный день: жатва, сбор податей,
+ * ярмарка. Считается по промежутку, а не по равенству: между двумя тиками может
+ * пройти неделя, и день жатвы нельзя пропустить оттого, что игрок спал.
+ */
+export function crossedDayOfYear(fromDay: number, toDay: number, target: number): boolean {
+  if (toDay <= fromDay) return false
+  for (let day = fromDay + 1; day <= toDay; day += 1) {
+    if (dayOfYear(day) === target) return true
+  }
+  return false
+}
+
 /** Сколько полных лет прошло между двумя днями. */
 export function yearsBetween(fromDay: number, toDay: number): number {
   return Math.floor((toDay - fromDay) / DAYS_PER_YEAR)
