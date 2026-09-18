@@ -13,7 +13,7 @@ import {
   SETTLEMENT_NAMES,
   TERRAIN_FERTILITY,
 } from '../content/world'
-import { landCapacityOf } from '../life'
+import { landCapacityOf, seaCatch } from '../life'
 import type { Rng } from '../rng'
 import { createRng, nextFloat, nextInt } from '../rng'
 import { buildLanes } from './lanes'
@@ -313,6 +313,26 @@ export function generateWorld(
 
   settlePorts(placed, provinces, regions, sea)
 
+  // Берег — свойство места, а не название его местности: им живут и цены, и
+  // еда (этап 36). Считается один раз и ложится в скелет, а людей на берегу
+  // сразу становится столько, сколько кормит вода: население считается от
+  // ёмкости земли, и море входит в неё наравне с полем.
+  for (const id of Object.keys(placed)) {
+    const place = placed[id]
+    if (!place) continue
+    const shore = onShore(sea, place)
+    placed[id] = {
+      ...place,
+      shore,
+      population:
+        place.population > 0
+          ? Math.round(
+              place.population * seaCatch(place.archetype, shore) * (shore ? SEA_CROWD : 1),
+            )
+          : place.population,
+    }
+  }
+
   const skeleton = { kingdoms, regions, provinces, locations: placed, sea, rivers }
   // Морские пути строятся последними: им нужны и вода, и уже назначенные порты
   // (этап 35).
@@ -430,6 +450,18 @@ function fillFords(
     placed.push(point)
   }
 }
+
+/**
+ * Насколько гуще живут на берегу.
+ *
+ * Море кормит круглый год, а поле — раз в год, и приморское место стоит ближе к
+ * своему пределу, чем такое же в глубине. Без этого прибавка к ёмкости от моря
+ * работала наоборот: у берега появлялся запас, которым никто не пользовался, —
+ * доля занятой земли падала с 70% до 68%, а мир переставал голодать вовсе (за
+ * двадцать лет ни одного случая против дюжины тысяч умерших). Полтора — это то,
+ * при чём берег живёт гуще суши, но всё ещё проваливается в недород.
+ */
+const SEA_CROWD = 1.45
 
 /**
  * Порты ставятся по воде, а не по названию местности.

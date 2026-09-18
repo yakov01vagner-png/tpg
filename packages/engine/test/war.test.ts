@@ -94,7 +94,12 @@ describe('разбой душит подвоз', () => {
         `в рудниках ${minePop(calm).toFixed(0)} против ${minePop(troubled).toFixed(0)}`,
     )
     expect(totalPopulation(troubled)).toBeLessThan(totalPopulation(calm))
-    expect(minePop(troubled)).toBeLessThan(minePop(calm) * 0.75)
+    // Пятая часть, а не четверть: с версии 0.5 рыба не ездит (life.ts, `takeGrain`),
+    // и рудник не получает морского улова даже в спокойный год — спокойный год
+    // для него стал беднее, и разница между ним и разбойным сузилась. На сытой
+    // земле тот же разбой отъедает четыре процента: вместе с недородом — впятеро
+    // больше.
+    expect(minePop(troubled)).toBeLessThan(minePop(calm) * 0.85)
   })
 })
 

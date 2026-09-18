@@ -143,6 +143,20 @@ export function BattleScreen({ game }: { game: GameState }) {
           ) : (
             <Dim>{battle.duel === 'won' ? 'Поединок выигран.' : 'Поединок проигран.'}</Dim>
           )}
+          {battle.foeId === 'pirates' ? (
+            <>
+              {/* С морским разбойником можно договориться: ему нужен груз, а не
+                  драка. На суше такого выбора нет (этап 36). */}
+              <Button
+                label="Откупиться"
+                onPress={() => dispatch({ type: 'payTribute' })}
+                disabled={!canApply(game, { type: 'payTribute' }).ok}
+              />
+              {canApply(game, { type: 'payTribute' }).ok ? null : (
+                <Faint>{reasonOf(canApply(game, { type: 'payTribute' })) ?? ''}</Faint>
+              )}
+            </>
+          ) : null}
           <Button label="Отойти" tone="quiet" onPress={() => dispatch({ type: 'battleFlee' })} />
         </View>
       )}
@@ -300,3 +314,8 @@ const styles = StyleSheet.create({
   taleLine: { color: palette.dim, fontSize: font.small, lineHeight: lineHeight.small },
   taleFresh: { color: palette.text },
 })
+
+/** Почему нельзя — если нельзя. */
+function reasonOf(verdict: ReturnType<typeof canApply>): string | undefined {
+  return verdict.ok ? undefined : verdict.message
+}

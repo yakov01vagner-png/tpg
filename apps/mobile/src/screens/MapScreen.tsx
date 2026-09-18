@@ -231,7 +231,8 @@ export function MapScreen({ game }: { game: GameState }) {
 
   // Свои дела на полотне: мастерская дымит у места, караван идёт по дороге.
   const ventures = useMemo(() => {
-    const out: { id: string; x: number; y: number; kind: 'caravan' | 'workshop' }[] = []
+    const out: { id: string; x: number; y: number; kind: 'caravan' | 'workshop' | 'shipping' }[] =
+      []
     for (const enterprise of game.enterprises) {
       const at = points[enterprise.locationId]
       if (!at) continue
@@ -865,7 +866,7 @@ export function MapScreen({ game }: { game: GameState }) {
               <Text key={one.id} style={styles.venture}>
                 {one.kind === 'workshop'
                   ? `Твоя мастерская · принесла ${one.earned}`
-                  : `Твой караван${one.travel ? ` · в пути к ${game.world.locations[one.travelTarget ?? '']?.name ?? '…'}` : ' · стоит здесь'} · принёс ${one.earned}`}
+                  : `${one.kind === 'shipping' ? 'Твоё судно' : 'Твой караван'}${one.travel ? ` · в пути к ${game.world.locations[one.travelTarget ?? '']?.name ?? '…'}` : ' · стоит здесь'} · принёс ${one.earned}`}
               </Text>
             ))}
           {knownPrice(game, chosen.id) ? (

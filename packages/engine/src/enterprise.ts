@@ -1,12 +1,14 @@
 import { nextHop } from './band'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
+import type { ShipKind } from './content/ships'
 import { SITES } from './content/sites'
 import type { Settlement } from './economy'
 import { priceOf } from './economy'
 import { WAGON_PACE, legHoursFor } from './journey'
 import { foodSecurity } from './life'
 import { type Rng, rollChance } from './rng'
+import { lanesFrom } from './world/lanes'
 import { roadsFrom } from './world/queries'
 import type { World } from './world/types'
 import { isSite } from './world/types'
@@ -19,7 +21,7 @@ import { isSite } from './world/types'
  * другое — доход, который идёт без игрока, и потому требует человека: без
  * управляющего дело ведут вполсилы.
  */
-export type EnterpriseKind = 'caravan' | 'workshop'
+export type EnterpriseKind = 'caravan' | 'workshop' | 'shipping'
 
 export interface Enterprise {
   readonly id: string
@@ -40,11 +42,24 @@ export interface Enterprise {
   readonly cargo: Readonly<Partial<Record<GoodId, number>>>
   /** Сколько принесло всего — чтобы игрок видел, окупилось ли. */
   readonly earned: number
+  /**
+   * Какое судно ходит этим делом (этап 36).
+   *
+   * Только у морского торга: его основывают, отдав в дело собственный корабль,
+   * и вместе с делом его можно потерять насовсем.
+   */
+  readonly ship?: ShipKind
 }
 
 /** Во что обходится завести дело. */
 export const CARAVAN_COST = 400
 export const WORKSHOP_COST = 700
+/**
+ * Морской торг заводят не деньгами, а судном: деньги идут только на товар.
+ * Поэтому он дешевле каравана в деньгах и дороже всего остального по существу —
+ * корабль стоит как три каравана, и он уходит в дело целиком.
+ */
+export const SHIPPING_COST = 500
 
 // --- жизнь дела -------------------------------------------------------------
 
@@ -77,6 +92,13 @@ export type EnterpriseEvent =
       readonly lost: number
     }
   | { readonly type: 'workshopIdle'; readonly id: string; readonly locationId: string }
+  | {
+      readonly type: 'shipRaided'
+      readonly id: string
+      readonly locationId: string
+      readonly lost: number
+    }
+  | { readonly type: 'shipSunk'; readonly id: string; readonly locationId: string }
 
 /** Сколько вложенного оборачивается за один заход. */
 const TURNOVER = 0.5
@@ -84,6 +106,16 @@ const TURNOVER = 0.5
 const WORKSHOP_RATE = 0.004
 /** Без управляющего дело ведут спустя рукава. */
 const NO_MANAGER = 0.55
+
+/**
+ * Чем рискует судно за один переход.
+ *
+ * Чужой парус отнимает треть вложенного, шторм — всё сразу вместе с судном.
+ * Поодиночке это редкость, но морской торг приносит вдвое против сухопутного —
+ * и платит за это тем, что однажды не возвращается.
+ */
+const SEA_RAID = 0.05
+const SEA_WRECK = 0.012
 
 export function tickEnterprises(
   world: World,
@@ -116,6 +148,70 @@ export function tickEnterprises(
       const gain = Math.round(enterprise.invested * WORKSHOP_RATE * hand * Math.min(2.5, margin))
       income += gain
       next.push({ ...enterprise, earned: enterprise.earned + gain })
+      continue
+    }
+
+    // Морской торг: тот же караван, только между гаванями и по воде. Своих
+    // опасностей у него две, и обе не разбой: чужой парус отнимает товар, а
+    // шторм — судно вместе с делом (этап 36).
+    if (enterprise.kind === 'shipping') {
+      if (enterprise.travel) {
+        const hoursLeft = enterprise.travel.hoursLeft - 24
+        if (hoursLeft > 0) {
+          next.push({ ...enterprise, travel: { ...enterprise.travel, hoursLeft } })
+          continue
+        }
+        const arrived = enterprise.travel.toLocationId
+        const [raided, afterRaid] = rollChance(generator, SEA_RAID)
+        generator = afterRaid
+        if (raided) {
+          const lost = Math.round(enterprise.invested * 0.35)
+          events.push({ type: 'shipRaided', id: enterprise.id, locationId: arrived, lost })
+          next.push({
+            ...enterprise,
+            locationId: arrived,
+            travel: null,
+            invested: Math.max(0, enterprise.invested - lost),
+            cargo: {},
+          })
+          continue
+        }
+        const [sunk, afterSink] = rollChance(generator, SEA_WRECK)
+        generator = afterSink
+        if (sunk) {
+          events.push({ type: 'shipSunk', id: enterprise.id, locationId: arrived })
+          continue
+        }
+        const gain = tradeHere(world, settlements[arrived], enterprise, hand)
+        if (gain !== 0) {
+          income += gain
+          events.push({ type: 'caravanSold', id: enterprise.id, locationId: arrived, gain })
+        }
+        next.push({
+          ...enterprise,
+          locationId: arrived,
+          travel: null,
+          earned: enterprise.earned + gain,
+        })
+        continue
+      }
+
+      // Стоит в гавани — пора обратно. Морской путь прямой: между гаванями
+      // нет промежуточных мест, и плечо всегда одно.
+      const target =
+        enterprise.locationId === enterprise.homeId ? enterprise.awayId : enterprise.homeId
+      const lane = target
+        ? lanesFrom(world, enterprise.locationId).find((one) => one.to === target)
+        : undefined
+      if (!target || !lane) {
+        next.push(enterprise)
+        continue
+      }
+      next.push({
+        ...enterprise,
+        travelTarget: target,
+        travel: { toLocationId: target, hoursLeft: lane.hours },
+      })
       continue
     }
 

@@ -1,5 +1,6 @@
 import { foodSecurity } from './life'
 import type { GameState } from './state'
+import { lanesFrom } from './world/lanes'
 import { regionOf } from './world/queries'
 
 /**
@@ -10,7 +11,7 @@ import { regionOf } from './world/queries'
  * шалят, просят разобраться с шайкой. Поэтому у них нет отдельной жизни —
  * они просто читаются из мира, пока не взяты.
  */
-export type QuestType = 'clearBandits' | 'bringFood'
+export type QuestType = 'clearBandits' | 'bringFood' | 'freight'
 
 export interface Quest {
   readonly id: string
@@ -97,8 +98,34 @@ export function offersAt(
       }
     }
   }
+  // Фрахт: возить чужое (этап 36). Просят в гавани и только там, где есть
+  // куда плыть; платят по приходе и на том берегу, а не по возвращении — в
+  // этом и смысл: судно окупает себя дорогой в один конец.
+  for (const lane of lanesFrom(state.world, locationId).slice(0, FREIGHT_OFFERS)) {
+    const id = `freight:${locationId}:${lane.to}`
+    if (taken.has(id)) continue
+    const there = state.settlements[lane.to]
+    if (!there || there.population <= 0) continue
+    const amount = 30 + Math.round(lane.hours * 1.5)
+    offers.push({
+      id,
+      type: 'freight',
+      issuerLocationId: locationId,
+      targetLocationId: lane.to,
+      amount,
+      // Платят за путь и за груз: дальний фрахт стоит дороже ближнего, и
+      // судно окупается не с первого раза, но окупается.
+      reward: Math.round(lane.hours * 14 + amount * 2),
+      deadlineDay: day + 25,
+      progress: 0,
+    })
+  }
+
   return offers
 }
+
+/** Сколько фрахтов предлагают в одной гавани разом. */
+const FREIGHT_OFFERS = 2
 
 /** Выполнено ли поручение — решает состояние мира, а не счётчик нажатий. */
 export function isComplete(state: GameState, quest: Quest): boolean {
@@ -106,11 +133,17 @@ export function isComplete(state: GameState, quest: Quest): boolean {
     const target = state.settlements[quest.targetLocationId]
     return (target?.banditry ?? 1) < BANDITRY_CLEARED
   }
+  // Фрахт считается доставленным, когда судно с грузом пришло в ту гавань. Без
+  // судна груза нет: он ушёл на дно вместе с ним.
+  if (quest.type === 'freight') {
+    return state.locationId === quest.targetLocationId && state.ship !== null
+  }
   return quest.progress >= quest.amount
 }
 
 export function describeQuest(state: GameState, quest: Quest): string {
   const target = state.world.locations[quest.targetLocationId]?.name ?? 'где-то рядом'
   if (quest.type === 'clearBandits') return `Извести шайку у ${target}`
+  if (quest.type === 'freight') return `Довезти чужой груз в ${target}: ${quest.amount} мер`
   return `Привезти хлеб в ${target}: ${quest.amount} мер`
 }

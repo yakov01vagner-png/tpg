@@ -5,7 +5,7 @@ import { RECRUIT_RECOVERY, recruitPool, targetStock } from './economy'
 import { hasBuilding } from './holding'
 import type { Rng } from './rng'
 import { nextFloat } from './rng'
-import type { LocationArchetype, Terrain, World } from './world/types'
+import type { LocationArchetype, PlaceKind, Terrain, World } from './world/types'
 import { isSettlement } from './world/types'
 
 /**
@@ -120,6 +120,23 @@ export function landCapacityOf(
   return Math.round(LAND_CAPACITY[archetype] * (0.6 + fertility * 0.8) * TERRAIN_FOOD[terrain])
 }
 
+/**
+ * Море кормит (этап 36).
+ *
+ * До 0.5 «побережье» было названием местности: деревня в получасе от прибоя и
+ * деревня в трёх днях от него кормились одинаково, если обе стояли в провинции
+ * с ярлыком «coast». Теперь кормит вода, а не ярлык: место на берегу держит
+ * больше людей, чем та же земля без моря, а гавань — ещё больше, потому что
+ * рыбой она живёт, а не подъедает её.
+ *
+ * Прибавка невелика нарочно: море не отменяет землю, оно её дополняет. Рыбой
+ * можно пережить недород, но нельзя вырастить город.
+ */
+export function seaCatch(archetype: PlaceKind, shore: boolean | undefined): number {
+  if (!shore) return 1
+  return archetype === 'port' ? 1.35 : 1.18
+}
+
 export function carryingCapacity(
   world: World,
   locationId: string,
@@ -130,7 +147,9 @@ export function carryingCapacity(
   // земля, на которой людей не бывает.
   if (!location || !isSettlement(location.archetype)) return 0
   const fertility = world.provinces[location.provinceId]?.fertility ?? 0.5
-  const base = landCapacityOf(location.archetype, location.terrain, fertility)
+  const base =
+    landCapacityOf(location.archetype, location.terrain, fertility) *
+    seaCatch(location.archetype, location.shore)
   // Мельница кормит больше ртов с той же земли — значит, и предел выше.
   // Усталость земли сюда не входит: она бьёт по урожаю, а не по тому, сколько
   // народу тут поместится. Когда било по пределу, мир вставал намертво — все
@@ -402,10 +421,14 @@ function produceAndEat(
     const produced =
       foodCapacity(world, id, config, settlement) * (hasBuilding(settlement, 'mill') ? 1.18 : 1)
     const location = world.locations[id]
-    const seaside = location?.terrain === 'coast' || location?.terrain === 'marsh'
-    if (seaside) {
-      stock.fish += produced * 0.6
-      stock.grain += produced * 0.4
+    // Рыбу ловят там, где есть вода, а не там, где в провинции написано
+    // «побережье» (этап 36). В топях ловят тоже, но меньше: там не море.
+    const shore = location?.shore === true
+    const marsh = location?.terrain === 'marsh'
+    if (shore || marsh) {
+      const share = shore ? 0.6 : 0.35
+      stock.fish += produced * share
+      stock.grain += produced * (1 - share)
     } else {
       stock.grain += produced
     }
@@ -564,8 +587,13 @@ function share(
       const have = foodStock(settlement)
       // По опасным дорогам возят осторожнее и меньше.
       const safety = 1 - settlement.banditry * 0.5
-      if (have > wanted * 1.2) donors.push({ id, surplus: (have - wanted * 1.2) * rate * safety })
-      else if (have < wanted) receivers.push({ id, deficit: wanted - have })
+      // Возят хлеб, а не рыбу: рыба не доезжает. С версии 0.5 у берега появился
+      // свой улов, и если бы его развозили по всему королевству, приморская
+      // провинция кормила бы горы — мир переставал голодать вовсе.
+      if (have > wanted * 1.2) {
+        const spare = Math.min(have - wanted * 1.2, settlement.stock.grain)
+        if (spare > 0) donors.push({ id, surplus: spare * rate * safety })
+      } else if (have < wanted) receivers.push({ id, deficit: wanted - have })
     }
     if (donors.length === 0 || receivers.length === 0) continue
 
@@ -578,7 +606,7 @@ function share(
       const settlement = next[donor.id]
       if (!settlement) continue
       const give = moved * (donor.surplus / offered)
-      next[donor.id] = takeFood(settlement, give)
+      next[donor.id] = takeGrain(settlement, give)
     }
     for (const receiver of receivers) {
       const settlement = next[receiver.id]
@@ -596,16 +624,18 @@ function share(
   return next
 }
 
-function takeFood(settlement: Settlement, amount: number): Settlement {
+/**
+ * Что увозят из амбара: хлеб.
+ *
+ * Рыбу не увозят — она не доедет. Улов кормит тот берег, который его взял, и в
+ * этом вся разница между морем и полем: поле кормит королевство, море кормит
+ * побережье (этап 36).
+ */
+function takeGrain(settlement: Settlement, amount: number): Settlement {
   const fromGrain = Math.min(settlement.stock.grain, amount)
-  const fromFish = Math.min(settlement.stock.fish, amount - fromGrain)
   return {
     ...settlement,
-    stock: {
-      ...settlement.stock,
-      grain: settlement.stock.grain - fromGrain,
-      fish: settlement.stock.fish - fromFish,
-    },
+    stock: { ...settlement.stock, grain: settlement.stock.grain - fromGrain },
   }
 }
 

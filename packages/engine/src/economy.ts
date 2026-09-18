@@ -76,6 +76,15 @@ export function recruitPool(population: number): number {
   return Math.floor(population * RECRUIT_SHARE)
 }
 
+/**
+ * Что даёт само море.
+ *
+ * Множитель работает в обе стороны: на берегу этого вдвое больше обычного, а
+ * дальше от воды — вдвое меньше. Оттого рыба у моря дёшева, а в горах дорога, и
+ * возить её есть смысл.
+ */
+const SEA_SUPPLY: Partial<Record<GoodId, number>> = { fish: 2, salt: 1.5 }
+
 /** Во сколько раз место обеспечено товаром сверх собственной нужды. */
 export function supplyRatio(world: World, locationId: string, good: GoodId): number {
   const location = world.locations[locationId]
@@ -87,7 +96,11 @@ export function supplyRatio(world: World, locationId: string, good: GoodId): num
   const fertility = world.provinces[location.provinceId]?.fertility ?? 0.5
   // Плодородие провинции влияет только на то, что растёт из земли.
   const byFertility = GOODS[good].food ? 0.5 + fertility : 1
-  return byArchetype * byTerrain * byFertility
+  // И море — на то, что берут из воды (этап 36). Не по названию местности, а по
+  // тому, есть ли вода в получасе ходьбы: рыба на берегу своя, а в двух днях от
+  // него — привозная и солёная.
+  const bySea = SEA_SUPPLY[good] ? (location.shore ? SEA_SUPPLY[good] : 1 / SEA_SUPPLY[good]) : 1
+  return byArchetype * byTerrain * byFertility * bySea
 }
 
 /**

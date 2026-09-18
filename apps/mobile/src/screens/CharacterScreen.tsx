@@ -188,7 +188,13 @@ export function CharacterScreen({ game }: { game: GameState }) {
           game.enterprises.map((one) => (
             <Row
               key={one.id}
-              title={one.kind === 'caravan' ? 'Караван' : 'Мастерская'}
+              title={
+                one.kind === 'caravan'
+                  ? 'Караван'
+                  : one.kind === 'shipping'
+                    ? 'Морской торг'
+                    : 'Мастерская'
+              }
               subtitle={`${game.world.locations[one.locationId]?.name ?? '—'}${
                 one.travel ? ' · в пути' : ''
               } · принесло ${one.earned}`}

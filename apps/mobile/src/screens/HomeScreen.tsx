@@ -6,6 +6,7 @@ import {
   PLACE_LABELS,
   type Passage,
   type PlaceKind,
+  SHIPPING_COST,
   SHIPS,
   SHIP_KINDS,
   SITES,
@@ -641,6 +642,14 @@ function SeaSection({
               meta={`${repairPrice(game.ship)} монет`}
               reason={reasonOf(canApply(game, { type: 'repairShip' }))}
               onPress={() => dispatch({ type: 'repairShip' })}
+            />
+            <Card
+              glyph={<Icon name="caravan" size={20} color={palette.gold} />}
+              title={`Пустить в торг до ${game.world.locations[target.to]?.name ?? '…'}`}
+              description="Судно станет доходом, а не ходом: оно будет ходить само, торговать разницей цен и однажды не вернётся."
+              meta={`${SHIPPING_COST} монет на товар`}
+              reason={reasonOf(canApply(game, { type: 'foundShipping', awayId: target.to }))}
+              onPress={() => dispatch({ type: 'foundShipping', awayId: target.to })}
             />
             <Card
               glyph={<Icon name="silver" size={20} color={palette.dim} />}

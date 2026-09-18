@@ -57,7 +57,7 @@ import {
 import type { Settlement } from './economy'
 import { quoteBuy, quoteSell } from './economy'
 import type { Enterprise } from './enterprise'
-import { CARAVAN_COST, WORKSHOP_COST, tickEnterprises } from './enterprise'
+import { CARAVAN_COST, SHIPPING_COST, WORKSHOP_COST, tickEnterprises } from './enterprise'
 import { gearBonus, horseCarry, repairCost, withItem } from './equipment'
 import type { GameEvent, LogKind } from './events'
 import {
@@ -172,6 +172,8 @@ export type Command =
   | { readonly type: 'battleEnd'; readonly prisoners: 'ransom' | 'recruit' | 'release' }
   /** Поединок: герой лично против лучшего из чужих. Один на бой. */
   | { readonly type: 'duel' }
+  /** Откупиться от морских разбойников: заплатить и разойтись (этап 36). */
+  | { readonly type: 'payTribute' }
   /** Выкупиться из плена сейчас, не дожидаясь, пока отпустят. */
   | { readonly type: 'payRansom' }
   | { readonly type: 'takeService'; readonly kingdomId: string }
@@ -194,6 +196,8 @@ export type Command =
   | { readonly type: 'assignCompanion'; readonly companionId: string; readonly role: CompanionRole }
   /** Завести своё дело. */
   | { readonly type: 'foundCaravan'; readonly awayId: string }
+  /** Отдать своё судно в морской торг: оно ходит само и однажды не вернётся. */
+  | { readonly type: 'foundShipping'; readonly awayId: string }
   | { readonly type: 'foundWorkshop' }
   | { readonly type: 'closeEnterprise'; readonly enterpriseId: string }
   /** Закрыть ворота своего места от мора. */
@@ -279,6 +283,7 @@ const ROAD_COMMANDS: ReadonlySet<Command['type']> = new Set([
   'battleOrders',
   'battleFlee',
   'battleEnd',
+  'payTribute',
   'duel',
   'payRansom',
   'attackBand',
@@ -303,7 +308,8 @@ export function applyCommand(
     command.type === 'battleOrders' ||
     command.type === 'battleFlee' ||
     command.type === 'battleEnd' ||
-    command.type === 'duel'
+    command.type === 'duel' ||
+    command.type === 'payTribute'
   if (state.over) return fail('invalid', 'Эта история закончена.')
   if (fighting && !isBattleCommand) return fail('inBattle', 'Сейчас не до того — идёт бой.')
   if (!fighting && isBattleCommand) return fail('invalid', 'Боя нет.')
@@ -356,6 +362,8 @@ export function applyCommand(
       return battleEnd(state, command.prisoners)
     case 'duel':
       return duel(state)
+    case 'payTribute':
+      return payTribute(state)
     case 'payRansom':
       return payRansom(state)
     case 'takeService':
@@ -382,6 +390,8 @@ export function applyCommand(
       return assignCompanion(state, command.companionId, command.role)
     case 'foundCaravan':
       return foundCaravan(state, command.awayId)
+    case 'foundShipping':
+      return foundShipping(state, command.awayId)
     case 'foundWorkshop':
       return foundWorkshop(state)
     case 'closeEnterprise':
@@ -682,6 +692,40 @@ function sellShip(state: GameState): CommandResult {
   return close(draft)
 }
 
+/**
+ * Откупиться.
+ *
+ * Морскому разбойнику нужен не бой, а груз: он берёт мзду и уходит, потому что
+ * драка на воде дорога обеим сторонам. На суше такого выбора нет — там от
+ * разбойников уходят или отбиваются, — и в этом разница между дорогой и морем:
+ * в море есть с кем договориться, но платить приходится всегда.
+ *
+ * Цена — по головам на чужой палубе: чем их больше, тем наглее запрос. Отряд
+ * это запоминает: платить вместо драки дёшево для кошелька и дорого для духа.
+ */
+const TRIBUTE_PER_HEAD = 22
+
+function payTribute(state: GameState): CommandResult {
+  const battle = state.battle
+  if (!battle) return fail('invalid', 'Боя нет.')
+  if (battle.foeId !== 'pirates') {
+    return fail('invalid', 'С этими не договариваются.')
+  }
+  if (battle.outcome !== 'ongoing') return fail('invalid', 'Всё уже решилось.')
+  const asked = Math.max(40, Math.round(unitsSize(battle.enemy.units) * TRIBUTE_PER_HEAD))
+  if (state.character.money < asked) {
+    return fail('noMoney', `За проход просят ${asked}, а у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -asked)
+  draft.battle = null
+  // Дух падает: люди видели, как их провели мимо драки за деньги.
+  draft.party = { ...draft.party, morale: Math.max(0, draft.party.morale - 8) }
+  notice(draft, `Заплачено ${asked} — и чёрный парус отвернул. Люди молчат.`)
+  return close(draft)
+}
+
 /** Повернуть назад: то, чего у мгновенного перемещения быть не могло. */
 function turnBack(state: GameState): CommandResult {
   const journey = state.journey
@@ -839,6 +883,16 @@ function seaWeather(draft: Draft, hoursAtSea: number): void {
   // Судно не пережило. Хозяина подобрали — судно нет.
   draft.ship = null
   notice(draft, `«${ship.name}» не выдержала. Судна больше нет; вас сняли с обломков.`, 'world')
+  // Вместе с судном тонет и чужой груз: за фрахт теперь не заплатят, а тот, кто
+  // его доверил, это запомнит.
+  const freight = draft.quests.filter((quest) => quest.type === 'freight')
+  if (freight.length > 0) {
+    draft.quests = draft.quests.filter((quest) => quest.type !== 'freight')
+    for (const lost of freight) {
+      draft.reputation = withPlaceRep(draft.reputation, lost.issuerLocationId, -6)
+    }
+    notice(draft, 'Чужой груз ушёл на дно вместе с судном. Об этом узнают в порту.', 'trade')
+  }
 }
 
 /** Что выбрасывают за борт: половину самого тяжёлого из котомки. */
@@ -868,9 +922,24 @@ function tossCargo(draft: Draft): void {
  */
 const PIRATE_CHANCE = 0.012
 
+/**
+ * Насколько чаще ждут в дальних водах.
+ *
+ * Пути к островам идут мимо бухт, в которые заходят не спрашивая позволения:
+ * там чужого паруса вдвое больше, чем на виду у корон. Это и есть разница
+ * между морем внутренним и морем открытым.
+ */
+const WILD_WATERS = 2
+
 function seaRaiders(draft: Draft, hoursAtSea: number): void {
   if (draft.battle || hoursAtSea <= 0) return
-  const [met, afterMet] = rollChance(draft.rng, Math.min(0.4, PIRATE_CHANCE * hoursAtSea))
+  const journey = draft.journey
+  const offshore = [journey?.fromId, journey?.toId].some((id) => {
+    const provinceId = id ? draft.base.world.locations[id]?.provinceId : undefined
+    return provinceId ? draft.base.world.provinces[provinceId]?.island === true : false
+  })
+  const risk = PIRATE_CHANCE * (offshore ? WILD_WATERS : 1)
+  const [met, afterMet] = rollChance(draft.rng, Math.min(0.4, risk * hoursAtSea))
   draft.rng = afterMet
   if (!met) return
 
@@ -1871,6 +1940,10 @@ function takeQuest(state: GameState, questId: string): CommandResult {
   }
   const offer = offersAt(state).find((quest) => quest.id === questId)
   if (!offer) return fail('unknownAction', 'Такого здесь не просят.')
+  // Чужой груз кладут в свой трюм: без судна фрахт не берут (этап 36).
+  if (offer.type === 'freight' && !state.ship) {
+    return fail('requirements', 'Груз возят своим судном, а его у тебя нет.')
+  }
 
   const draft = open(state)
   notice(draft, `Взято: ${describeQuest(state, offer).toLowerCase()}.`)
@@ -1882,8 +1955,16 @@ function takeQuest(state: GameState, questId: string): CommandResult {
 function finishQuest(state: GameState, questId: string): CommandResult {
   const quest = state.quests.find((candidate) => candidate.id === questId)
   if (!quest) return fail('unknownAction', 'Ты такого не брал.')
-  if (state.locationId !== quest.issuerLocationId) {
-    return fail('unavailableHere', 'За наградой идут к тому, кто просил.')
+  // За фрахт платят там, где груз ждут, а не там, где его взяли: судно идёт в
+  // один конец, и возвращаться за деньгами было бы разорением.
+  const payAt = quest.type === 'freight' ? quest.targetLocationId : quest.issuerLocationId
+  if (state.locationId !== payAt) {
+    return fail(
+      'unavailableHere',
+      quest.type === 'freight'
+        ? 'Груз ждут в другой гавани.'
+        : 'За наградой идут к тому, кто просил.',
+    )
   }
   if (!isComplete(state, quest)) return fail('requirements', 'Дело ещё не сделано.')
 
@@ -2577,6 +2658,51 @@ function foundCaravan(state: GameState, awayId: string): CommandResult {
   return close(draft)
 }
 
+/**
+ * Отдать судно в дело.
+ *
+ * Своё судно перестаёт быть твоим ходом и становится доходом: оно ходит между
+ * двумя гаванями, торгует разницей цен и приносит вдвое против обоза — потому
+ * что и рискует вдвое. Однажды оно не вернётся, и тогда не станет ни дохода, ни
+ * корабля. Пока оно в деле, плавать самому не на чем: судно одно.
+ */
+function foundShipping(state: GameState, awayId: string): CommandResult {
+  const ship = state.ship
+  if (!ship) return fail('requirements', 'Морской торг заводят судном, а его у тебя нет.')
+  if (state.character.money < SHIPPING_COST) {
+    return fail('noMoney', `На товар в трюм нужно ${SHIPPING_COST}.`)
+  }
+  if (!state.world.locations[awayId]) return fail('invalid', 'Такого места нет.')
+  if (awayId === state.locationId) return fail('invalid', 'Судно должно куда-то ходить.')
+  const lane = lanesFrom(state.world, state.locationId).find((one) => one.to === awayId)
+  if (!lane) return fail('invalid', 'Отсюда туда нет морского пути.')
+
+  const draft = open(state)
+  addMoney(draft, -SHIPPING_COST)
+  draft.ship = null
+  draft.enterprises = [
+    ...draft.enterprises,
+    {
+      id: `shipping:${dayOf(draft.time)}:${draft.enterprises.length}`,
+      kind: 'shipping',
+      locationId: state.locationId,
+      homeId: state.locationId,
+      awayId,
+      travel: null,
+      travelTarget: null,
+      invested: SHIPPING_COST,
+      managerId: null,
+      cargo: {},
+      earned: 0,
+      ship: ship.kind,
+    },
+  ]
+  const where = state.world.locations[awayId]?.name ?? 'дальняя гавань'
+  notice(draft, `«${ship.name}» пошла в торг: отсюда и до ${where}.`, 'trade')
+  advance(draft, hours(4))
+  return close(draft)
+}
+
 function foundWorkshop(state: GameState): CommandResult {
   if (state.character.money < WORKSHOP_COST) {
     return fail('noMoney', `На мастерскую нужно ${WORKSHOP_COST}.`)
@@ -2622,6 +2748,16 @@ function closeEnterprise(state: GameState, enterpriseId: string): CommandResult 
   const draft = open(state)
   // Половину вложенного возвращают: остальное осело в чужих карманах.
   addMoney(draft, Math.round(enterprise.invested / 2))
+  // А судно возвращается целиком — если, конечно, оно ещё на плаву и хозяину
+  // есть куда его принять.
+  if (enterprise.ship && !draft.ship) {
+    draft.ship = { kind: enterprise.ship, name: SHIP_NAMES[0] ?? 'Чайка', condition: 0.8 }
+    notice(
+      draft,
+      `Судно вернулось к хозяину: ${SHIPS[enterprise.ship].label.toLowerCase()}.`,
+      'trade',
+    )
+  }
   draft.enterprises = draft.enterprises.filter((one) => one.id !== enterpriseId)
   draft.companions = draft.companions.map((one) =>
     one.role.type === 'factor' && one.role.enterpriseId === enterpriseId
@@ -3200,6 +3336,14 @@ function close(draft: Draft): CommandResult {
         if (event.type === 'caravanRobbed') {
           const where = draft.base.world.locations[event.locationId]?.name ?? 'дорогой'
           notice(draft, `Обоз разграблен под ${where}.`, 'trade')
+        }
+        if (event.type === 'shipRaided') {
+          const where = draft.base.world.locations[event.locationId]?.name ?? 'в море'
+          notice(draft, `Твоё судно обобрали на подходе к ${where}: убыток ${event.lost}.`, 'trade')
+        }
+        if (event.type === 'shipSunk') {
+          const where = draft.base.world.locations[event.locationId]?.name ?? 'в море'
+          notice(draft, `Твоё судно не дошло до ${where}. Ни дела, ни корабля.`, 'trade')
         }
       }
     }
