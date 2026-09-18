@@ -39,6 +39,7 @@ import { ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import { TEMPER_LINES } from './content/lines'
+import type { QuarterId } from './content/quarters'
 import type { ShipKind } from './content/ships'
 import { SHIPS, SHIP_NAMES } from './content/ships'
 import { SITES } from './content/sites'
@@ -115,6 +116,15 @@ import { isAvailableAt } from './place'
 import type { Plague, PlagueEvent } from './plague'
 import { plagueAt, tickPlague } from './plague'
 import { PROGRESSION, applyCharacterXp, applySkillXp } from './progression'
+import {
+  activityOf,
+  arrivalQuarter,
+  hasQuarters,
+  quarterFor,
+  quarterWhere,
+  quartersOf,
+  walkMinutes,
+} from './quarter'
 import { describeQuest, isComplete, offersAt } from './quest'
 import type { Quest } from './quest'
 import { isShunned, lordRep, placeRep, priceFactor, withLordRep, withPlaceRep } from './reputation'
@@ -189,6 +199,7 @@ export type Command =
   /** Просто идущее время: мир живёт, пока игрок стоит и смотрит. */
   | { readonly type: 'tick'; readonly minutes: number }
   | { readonly type: 'travel'; readonly toLocationId: string }
+  | { readonly type: 'goQuarter'; readonly quarterId: QuarterId }
   /** Уйти морем: своим судном, нанятым или попутным (этап 35). */
   | { readonly type: 'sail'; readonly toLocationId: string; readonly manner: Passage }
   /** Купить судно в порту, починить своё, продать своё. */
@@ -296,6 +307,7 @@ export type FailureCode =
   | 'onTheRoad'
   | 'flood'
   | 'ice'
+  | 'elsewhere'
   | 'invalid'
 
 export type CommandResult =
@@ -378,9 +390,27 @@ export function applyCommand(
     )
   }
 
+  // В большом месте дело делают в своём квартале (этап 45): за работой — на
+  // рынок, к наставнику — в школу, к лорду — в замок. Мелкое место кварталов не
+  // знает, и там всё под рукой.
+  // Пустой квартал не держит: это сейв до 0.5 или герой, которого в город
+  // поставили минуя дорогу; первый же переход по кварталам всё расставит.
+  const activity = activityOf(command)
+  if (activity && !state.journey && state.quarter) {
+    const needed = quarterFor(state, activity, state.locationId)
+    if (needed && state.quarter !== needed) {
+      return fail(
+        'elsewhere',
+        `Это ${quarterWhere(needed)}, а ты ${quarterWhere(state.quarter ?? 'gate')}: ${formatDuration(walkMinutes(state.world, state.locationId))} ходу.`,
+      )
+    }
+  }
+
   switch (command.type) {
     case 'tick':
       return tick(state, command.minutes)
+    case 'goQuarter':
+      return goQuarter(state, command.quarterId)
     case 'travel':
       return travel(state, command.toLocationId)
     case 'sail':
@@ -596,6 +626,23 @@ export function foeName(state: GameState, foeId: string | null): string {
  * часы — те же самые, которыми живёт мир, — и путь двигается вместе с ними
  * (`walk`). Прийти можно только дойдя.
  */
+/**
+ * Перейти в другой квартал (этап 45).
+ *
+ * Стоит времени, но немного, и ничего больше: город не дорога, засад в нём
+ * нет. В месте без кварталов идти некуда.
+ */
+function goQuarter(state: GameState, quarterId: QuarterId): CommandResult {
+  const here = quartersOf(state, state.locationId)
+  if (!here.includes(quarterId)) return fail('unavailableHere', 'Такого квартала здесь нет.')
+  if ((state.quarter ?? null) === quarterId)
+    return fail('invalid', `Ты уже ${quarterWhere(quarterId)}.`)
+  const draft = open(state)
+  advance(draft, walkMinutes(state.world, state.locationId))
+  draft.quarter = quarterId
+  return close(draft)
+}
+
 function travel(state: GameState, toLocationId: string): CommandResult {
   const destination = state.world.locations[toLocationId]
   if (!destination) return fail('unknownAction', 'Такого места нет.')
@@ -874,6 +921,7 @@ function walk(draft: Draft, minutes: number): void {
   // Пришли.
   draft.journey = null
   draft.locationId = journey.toId
+  draft.quarter = arrivalQuarter(draft, journey.toId)
   const place = draft.world.locations[journey.toId]
   notice(draft, `Пришли: ${place?.name ?? 'место'}.`)
   roadTalk(draft)
@@ -907,6 +955,8 @@ function float(draft: Draft, minutes: number): void {
   // Пришли.
   draft.journey = null
   draft.locationId = journey.toId
+  // С моря сходят на пристань, а не к воротам.
+  draft.quarter = hasQuarters(draft, journey.toId) ? 'harbour' : null
   const place = draft.world.locations[journey.toId]
   notice(draft, `Сошли на берег: ${place?.name ?? 'гавань'}.`)
   roadTalk(draft)
@@ -3823,6 +3873,7 @@ interface Draft {
   cleansed: { readonly locationId: string; readonly untilDay: number } | null
   guild: Membership | null
   courtDay: number
+  quarter: QuarterId | null
   battle: Battle | null
   politics: Politics
   /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
@@ -3860,6 +3911,7 @@ function open(state: GameState): Draft {
     cleansed: state.cleansed ?? null,
     guild: state.guild,
     courtDay: state.courtDay ?? 0,
+    quarter: state.quarter ?? null,
     battle: state.battle,
     politics: state.politics,
     world: state.world,
@@ -4061,6 +4113,7 @@ function close(draft: Draft): CommandResult {
     cleansed: draft.cleansed,
     guild: draft.guild,
     courtDay: draft.courtDay,
+    quarter: draft.quarter,
     battle: draft.battle,
     politics: draft.politics,
     bands: draft.bands,

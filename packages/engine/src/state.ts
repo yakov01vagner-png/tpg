@@ -4,6 +4,7 @@ import type { Battle } from './battle'
 import type { ChainProgress } from './chain'
 import type { Character } from './character'
 import type { Companion } from './companion'
+import type { QuarterId } from './content/quarters'
 import type { Settlement } from './economy'
 import { createSettlements } from './economy'
 import type { Enterprise } from './enterprise'
@@ -15,6 +16,7 @@ import type { Membership } from './order'
 import type { Party } from './party'
 import { EMPTY_PARTY } from './party'
 import type { Plague } from './plague'
+import { arrivalQuarter } from './quarter'
 import type { Quest } from './quest'
 import type { Reputation } from './reputation'
 import { NO_REPUTATION } from './reputation'
@@ -90,6 +92,12 @@ export interface GameState {
   /** Когда в последний раз держали двор (этап 43). Необязательно: сейвы до 0.5 двора не знают. */
   readonly courtDay?: number
   /**
+   * Где в городе стоит герой (этап 45): квартал большого места. Пусто — место
+   * без кварталов или сейв до 0.5. Сам список кварталов не хранится: он
+   * выводится из места (`quarter.ts`).
+   */
+  readonly quarter?: QuarterId | null
+  /**
    * Отведённый мор (этап 41): где и до какого дня чары держат смерть вполовину.
    * Необязательно — сейвы до 0.5 чар не знают.
    */
@@ -153,6 +161,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     settlements,
     locationId,
     journey: null,
+    quarter: arrivalQuarter({ world, settlements }, locationId),
     party: EMPTY_PARTY,
     ship: null,
     guild: null,

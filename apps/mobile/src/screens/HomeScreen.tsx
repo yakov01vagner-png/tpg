@@ -7,6 +7,7 @@ import {
   PLACE_LABELS,
   type Passage,
   type PlaceKind,
+  QUARTERS,
   SHIPPING_COST,
   SHIPS,
   SHIP_KINDS,
@@ -49,6 +50,8 @@ import {
   partySize,
   passageCost,
   plagueAt,
+  quarterFor,
+  quartersOf,
   rankLabel,
   repairPrice,
   resalePrice,
@@ -61,7 +64,9 @@ import {
   spellsFor,
   timeOfDay,
   waitHours,
+  walkMinutes,
 } from '@tpg/engine'
+import type { Activity, QuarterId } from '@tpg/engine'
 import { useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useWindowDimensions } from 'react-native'
@@ -72,6 +77,24 @@ import { dismissHint, useDismissedHints } from '../game/hintState'
 import { nextHint } from '../game/hints'
 import { openSheet } from '../game/nav'
 import { dispatch } from '../game/store'
+
+/**
+ * Дойти до квартала, где этим занимаются (этап 45), и только потом открыть
+ * лист: в большом месте за работой идут на рынок, к наставнику — в школу.
+ * Переход стоит минут, и они проходят по-настоящему — командой ядра.
+ */
+function reach(game: GameState, activity: Activity): void {
+  const needed = quarterFor(game, activity, game.locationId)
+  if (needed && (game.quarter ?? null) !== needed) {
+    dispatch({ type: 'goQuarter', quarterId: needed })
+  }
+}
+
+/** Подпись к плитке: где это в городе. */
+function quarterNote(game: GameState, activity: Activity): string {
+  const needed = quarterFor(game, activity, game.locationId)
+  return needed ? ` · ${QUARTERS[needed].label.toLowerCase()}` : ''
+}
 import { font, lineHeight, palette, radii, spacing, touch } from '../theme'
 import {
   Body,
@@ -375,30 +398,41 @@ export function HomeScreen({ game }: { game: GameState }) {
         </Section>
       )}
 
+      {settlement ? <Quarters game={game} /> : null}
+
       {settlement ? (
         <Tiles>
           <Tile
             glyph={<Icon name="earn" size={22} color={palette.gold} />}
             title="Заработать"
-            subtitle={`${jobs} ${plural(jobs, 'работа', 'работы', 'работ')}${offers > 0 ? ` · ${offers} ${plural(offers, 'поручение', 'поручения', 'поручений')}` : ''}`}
+            subtitle={`${jobs} ${plural(jobs, 'работа', 'работы', 'работ')}${offers > 0 ? ` · ${offers} ${plural(offers, 'поручение', 'поручения', 'поручений')}` : ''}${quarterNote(game, 'work')}`}
             count={jobs + offers}
-            onPress={() => openSheet('earn')}
+            onPress={() => {
+              reach(game, 'work')
+              openSheet('earn')
+            }}
             tone="gold"
           />
           <Tile
             glyph={<Icon name="learn" size={22} color={palette.good} />}
             title="Научиться"
-            subtitle={lessons > 0 ? 'Наставники и испытания' : 'Учиться здесь не у кого'}
+            subtitle={`${lessons > 0 ? 'Наставники и испытания' : 'Учиться здесь не у кого'}${quarterNote(game, 'learn')}`}
             count={lessons}
-            onPress={() => openSheet('learn')}
+            onPress={() => {
+              reach(game, 'learn')
+              openSheet('learn')
+            }}
             tone="good"
           />
           <Tile
             glyph={<Icon name="market" size={22} color={palette.gold} />}
             title="Рынок"
-            subtitle={people > 0 ? 'Товары, снаряжение, починка' : 'Торговать не с кем'}
+            subtitle={`${people > 0 ? 'Товары, снаряжение, починка' : 'Торговать не с кем'}${quarterNote(game, 'trade')}`}
             count={people > 0 ? 1 : 0}
-            onPress={() => openSheet('market')}
+            onPress={() => {
+              reach(game, 'trade')
+              openSheet('market')
+            }}
             tone="gold"
           />
           <Tile
@@ -420,7 +454,10 @@ export function HomeScreen({ game }: { game: GameState }) {
                     : 'Отряд и спутники'
             }
             count={1}
-            onPress={() => openSheet('people')}
+            onPress={() => {
+              reach(game, 'hire')
+              openSheet('people')
+            }}
             tone={hosts.length > 0 ? 'danger' : 'info'}
           />
           <Tile
@@ -434,7 +471,10 @@ export function HomeScreen({ game }: { game: GameState }) {
             title={ownTitle}
             subtitle={ownSubtitle}
             count={1}
-            onPress={() => openSheet('own')}
+            onPress={() => {
+              reach(game, 'lord')
+              openSheet('own')
+            }}
             tone="info"
           />
         </Tiles>
@@ -696,6 +736,40 @@ function Spells({
  * от него сильнее, чем от того, куда идти: своё судно уходит когда хочешь,
  * нанятое стоит денег, а на попутное не пустят дружину.
  */
+/**
+ * Кварталы большого места (этап 45): где ты стоишь и куда можно перейти.
+ * Переход — команда ядра, и минуты на него идут по-настоящему.
+ */
+function Quarters({ game }: { game: GameState }) {
+  const quarters = quartersOf(game, game.locationId)
+  if (quarters.length === 0) return null
+  const current = game.quarter ?? 'gate'
+  const minutes = walkMinutes(game.world, game.locationId)
+  return (
+    <Section title="Кварталы" aside={`${minutes} мин между`}>
+      <View style={styles.quarters}>
+        {quarters.map((id) => {
+          const active = id === current
+          return (
+            <Pressable
+              key={id}
+              onPress={() => {
+                if (!active) dispatch({ type: 'goQuarter', quarterId: id })
+              }}
+              style={[styles.quarter, active ? styles.quarterActive : null]}
+            >
+              <Text style={[styles.quarterLabel, active ? styles.quarterLabelActive : null]}>
+                {QUARTERS[id].label}
+              </Text>
+            </Pressable>
+          )
+        })}
+      </View>
+      <Dim>{QUARTERS[current as QuarterId].description}</Dim>
+    </Section>
+  )
+}
+
 function SeaSection({
   game,
   dispatch,
@@ -776,7 +850,10 @@ function SeaSection({
                     }`
               }
               reason={reasonOf(canApply(game, command))}
-              onPress={() => dispatch(command)}
+              onPress={() => {
+                reach(game, 'sea')
+                dispatch(command)
+              }}
             />
           )
         })}
@@ -797,7 +874,10 @@ function SeaSection({
               description="Проконопатить, просмолить, сменить снасти. После шторма это не роскошь."
               meta={`${repairPrice(game.ship)} монет`}
               reason={reasonOf(canApply(game, { type: 'repairShip' }))}
-              onPress={() => dispatch({ type: 'repairShip' })}
+              onPress={() => {
+                reach(game, 'sea')
+                dispatch({ type: 'repairShip' })
+              }}
             />
             <Card
               glyph={<Icon name="caravan" size={20} color={palette.gold} />}
@@ -805,7 +885,10 @@ function SeaSection({
               description="Судно станет доходом, а не ходом: оно будет ходить само, торговать разницей цен и однажды не вернётся."
               meta={`${SHIPPING_COST} монет на товар`}
               reason={reasonOf(canApply(game, { type: 'foundShipping', awayId: target.to }))}
-              onPress={() => dispatch({ type: 'foundShipping', awayId: target.to })}
+              onPress={() => {
+                reach(game, 'sea')
+                dispatch({ type: 'foundShipping', awayId: target.to })
+              }}
             />
             <Card
               glyph={<Icon name="silver" size={20} color={palette.dim} />}
@@ -813,7 +896,10 @@ function SeaSection({
               description="Судно уйдёт к другому хозяину, а море останется чужим."
               meta={`${resalePrice(game.ship)} монет`}
               reason={reasonOf(canApply(game, { type: 'sellShip' }))}
-              onPress={() => dispatch({ type: 'sellShip' })}
+              onPress={() => {
+                reach(game, 'sea')
+                dispatch({ type: 'sellShip' })
+              }}
             />
           </>
         ) : (
@@ -827,7 +913,10 @@ function SeaSection({
                 description={def.description}
                 meta={`${def.price} монет · ${def.carries} душ · ${def.upkeep} в день`}
                 reason={reasonOf(canApply(game, { type: 'buyShip', kind }))}
-                onPress={() => dispatch({ type: 'buyShip', kind })}
+                onPress={() => {
+                  reach(game, 'sea')
+                  dispatch({ type: 'buyShip', kind })
+                }}
               />
             )
           })
@@ -996,6 +1085,17 @@ function plural(n: number, one: string, few: string, many: string): string {
 }
 
 const styles = StyleSheet.create({
+  quarters: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  quarter: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+  },
+  quarterActive: { backgroundColor: palette.gold, borderColor: palette.gold },
+  quarterLabel: { color: palette.dim, fontSize: font.small },
+  quarterLabelActive: { color: palette.bg, fontWeight: '700' },
   roadMeter: { marginTop: spacing.sm, width: '100%' },
   hint: {
     alignItems: 'center',
