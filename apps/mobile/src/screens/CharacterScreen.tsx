@@ -24,148 +24,97 @@ import {
 } from '@tpg/engine'
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { abandonGame, dispatch } from '../game/store'
-import { colors, font, radius, spacing } from '../theme'
-import { Button, Section } from '../ui/atoms'
+import { font, palette, radii, spacing, touch } from '../theme'
+import { Button, Dim, Faint, Panel, Row, Section, Stat, Stats, Title } from '../ui/parts'
 
+/**
+ * Герой: кто ты, что умеешь, что носишь, чей ты и что у тебя есть.
+ *
+ * Очки тратятся здесь же, у той строки, куда идут: игрок не должен искать,
+ * где потратить то, что ему только что дали.
+ */
 export function CharacterScreen({ game }: { game: GameState }) {
   const hero = game.character
   const recognized = hero.magicRank ? MAGIC_RANKS[hero.magicRank].label : 'нет'
   const magicLevel = hero.skills.magic.level
   const earned = eligibleRank(magicLevel)
   const gap = unrecognizedGap(magicLevel, hero.magicRank)
+  const today = dayOf(game.time)
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <Text style={styles.name}>{hero.name}</Text>
-      <Text style={styles.subtitle}>
-        Уровень {hero.level} · ранг магии: {recognized}
-      </Text>
-      {gap > 0 && earned ? (
-        <Text style={styles.gap}>
-          Сила обгоняет титул: по навыку тянешь на «{MAGIC_RANKS[earned].label}», но признания нет.
-        </Text>
-      ) : null}
+      <Panel>
+        <Title>{hero.name}</Title>
+        <Stats>
+          <Stat label="Уровень" value={`${hero.level}`} />
+          <Stat
+            label="Лет"
+            value={`${hero.age}`}
+            tone={hero.age > PRIME_AGE ? 'warn' : undefined}
+          />
+          <Stat label="Ранг магии" value={recognized} />
+          <Stat label="Слава" value={`${game.renown}`} tone="gold" />
+        </Stats>
+        {gap > 0 && earned ? (
+          <Dim tone="gold">
+            {`Сила обгоняет титул: по навыку тянешь на «${MAGIC_RANKS[earned].label}», но признания нет.`}
+          </Dim>
+        ) : null}
+      </Panel>
 
       <Section
-        title={`Атрибуты${hero.unspentAttributePoints > 0 ? ` · ${hero.unspentAttributePoints} очк.` : ''}`}
+        title="Атрибуты"
+        aside={hero.unspentAttributePoints > 0 ? `${hero.unspentAttributePoints} очк.` : undefined}
       >
         {ATTRIBUTE_IDS.map((id: AttributeId) => (
-          <View key={id} style={styles.row}>
-            <Text style={styles.rowLabel}>{ATTRIBUTE_LABELS[id]}</Text>
-            <Text style={styles.rowValue}>{hero.attributes[id]}</Text>
-            {hero.unspentAttributePoints > 0 ? (
-              <Pressable
-                accessibilityLabel={`Поднять: ${ATTRIBUTE_LABELS[id]}`}
-                onPress={() => dispatch({ type: 'spendAttributePoint', attributeId: id })}
-                style={styles.plus}
-              >
-                <Text style={styles.plusLabel}>+</Text>
-              </Pressable>
-            ) : null}
-          </View>
+          <Row
+            key={id}
+            title={ATTRIBUTE_LABELS[id]}
+            right={
+              <>
+                <Text style={styles.value}>{hero.attributes[id]}</Text>
+                {hero.unspentAttributePoints > 0 ? (
+                  <Plus
+                    label={`Поднять: ${ATTRIBUTE_LABELS[id]}`}
+                    onPress={() => dispatch({ type: 'spendAttributePoint', attributeId: id })}
+                  />
+                ) : null}
+              </>
+            }
+          />
         ))}
       </Section>
 
       <Section
-        title={`Навыки${hero.unspentSkillPoints > 0 ? ` · ${hero.unspentSkillPoints} очк.` : ''}`}
+        title="Навыки"
+        aside={hero.unspentSkillPoints > 0 ? `${hero.unspentSkillPoints} очк.` : undefined}
       >
         {ATTRIBUTE_IDS.map((attribute: AttributeId) => (
           <View key={attribute} style={styles.group}>
-            <Text style={styles.groupTitle}>{ATTRIBUTE_LABELS[attribute]}</Text>
+            <Faint>{ATTRIBUTE_LABELS[attribute]}</Faint>
             {skillsOfAttribute(attribute).map((skill) => {
               const progress = hero.skills[skill.id as SkillId]
               return (
-                <View key={skill.id} style={styles.row}>
-                  <Text style={styles.rowLabel}>{skill.label}</Text>
-                  <Text style={styles.rowProgress}>
-                    {Math.round(progress.xp)}/{skillXpToNext(progress.level)}
-                  </Text>
-                  <Text style={styles.rowValue}>{progress.level}</Text>
-                  {hero.unspentSkillPoints > 0 ? (
-                    <Pressable
-                      accessibilityLabel={`Поднять: ${skill.label}`}
-                      onPress={() => dispatch({ type: 'spendSkillPoint', skillId: skill.id })}
-                      style={styles.plus}
-                    >
-                      <Text style={styles.plusLabel}>+</Text>
-                    </Pressable>
-                  ) : null}
-                </View>
+                <Row
+                  key={skill.id}
+                  title={skill.label}
+                  subtitle={`${Math.round(progress.xp)} из ${skillXpToNext(progress.level)} до следующего`}
+                  right={
+                    <>
+                      <Text style={styles.value}>{progress.level}</Text>
+                      {hero.unspentSkillPoints > 0 ? (
+                        <Plus
+                          label={`Поднять: ${skill.label}`}
+                          onPress={() => dispatch({ type: 'spendSkillPoint', skillId: skill.id })}
+                        />
+                      ) : null}
+                    </>
+                  }
+                />
               )
             })}
           </View>
         ))}
-      </Section>
-
-      <Section title="Дом и род">
-        <Text style={styles.line}>
-          {`${hero.age} лет · ${hero.family.house}`}
-          {hero.age > PRIME_AGE ? ' · годы берут своё' : ''}
-        </Text>
-        <Text style={styles.line}>
-          {hero.family.spouse
-            ? `В браке: ${hero.family.spouse.name}`
-            : 'Не женат: свататься надо там, где сидит дом лорда'}
-        </Text>
-        {hero.family.children.length === 0 ? (
-          <Text style={styles.line}>Детей нет.</Text>
-        ) : (
-          hero.family.children.map((child) => (
-            <Text key={`${child.name}:${child.bornDay}`} style={styles.line}>
-              {`${child.name}, ${ageOf(child.bornDay, dayOf(game.time))} лет${
-                heirOf(hero.family, dayOf(game.time))?.name === child.name ? ' — наследник' : ''
-              }`}
-            </Text>
-          ))
-        )}
-        {matchesAt(game).map((lord) => {
-          const command: Command = { type: 'proposeMarriage', lordId: lord.id }
-          const check = canApply(game, command)
-          return (
-            <Button
-              key={lord.id}
-              label={`Посвататься к дому ${lord.name}`}
-              tone="primary"
-              disabled={!check.ok}
-              onPress={() => dispatch(command)}
-            />
-          )
-        })}
-      </Section>
-
-      <Section title="Дела">
-        {game.enterprises.length === 0 ? (
-          <Text style={styles.line}>
-            Ни каравана, ни мастерской. Доход, который идёт без тебя, заводят в городе.
-          </Text>
-        ) : (
-          game.enterprises.map((one) => (
-            <View key={one.id} style={styles.enterprise}>
-              <Text style={styles.line}>
-                {`${one.kind === 'caravan' ? 'Караван' : 'Мастерская'}: ${
-                  game.world.locations[one.locationId]?.name ?? '—'
-                }${one.travel ? ' (в пути)' : ''} · принесло ${one.earned}`}
-              </Text>
-              <Button
-                label="Свернуть"
-                onPress={() => dispatch({ type: 'closeEnterprise', enterpriseId: one.id })}
-              />
-            </View>
-          ))
-        )}
-        {[
-          { label: `Мастерская — ${WORKSHOP_COST}`, command: { type: 'foundWorkshop' } as Command },
-        ].map(({ label, command }) => {
-          const check = canApply(game, command)
-          return (
-            <Button
-              key={label}
-              label={label}
-              disabled={!check.ok}
-              onPress={() => dispatch(command)}
-            />
-          )
-        })}
       </Section>
 
       <Section title="Снаряжение">
@@ -173,22 +122,84 @@ export function CharacterScreen({ game }: { game: GameState }) {
           const worn = hero.equipment[slot]
           const item = worn ? ITEMS_BY_ID[worn.id] : null
           return (
-            <View key={slot} style={styles.row}>
-              <Text style={styles.rowLabel}>{SLOT_LABELS[slot]}</Text>
-              <Text style={item ? styles.rowValue : styles.rowProgress}>
-                {item ? `${item.label} · ${worn?.condition}%` : 'пусто'}
-              </Text>
+            <Row
+              key={slot}
+              title={SLOT_LABELS[slot]}
+              subtitle={item ? `${item.label} · ${worn?.condition}%` : 'пусто'}
+            />
+          )
+        })}
+        <Dim>{`От железа: +${gearBonus(hero).attack} к удару, +${gearBonus(hero).defense} к обороне`}</Dim>
+      </Section>
+
+      <Section title="Дом и род">
+        <Dim>{`${hero.family.house}${hero.age > PRIME_AGE ? ' · годы берут своё' : ''}`}</Dim>
+        <Dim>
+          {hero.family.spouse
+            ? `В браке: ${hero.family.spouse.name}`
+            : 'Не в браке: свататься надо там, где сидит дом лорда'}
+        </Dim>
+        {hero.family.children.length === 0 ? (
+          <Dim>Детей нет.</Dim>
+        ) : (
+          hero.family.children.map((child) => (
+            <Dim key={`${child.name}:${child.bornDay}`}>
+              {`${child.name}, ${ageOf(child.bornDay, today)} лет${
+                heirOf(hero.family, today)?.name === child.name ? ' — наследник' : ''
+              }`}
+            </Dim>
+          ))
+        )}
+        {matchesAt(game).map((lord) => {
+          const command: Command = { type: 'proposeMarriage', lordId: lord.id }
+          const check = canApply(game, command)
+          return (
+            <View key={lord.id} style={styles.action}>
+              <Button
+                label={`Посвататься к дому ${lord.name}`}
+                tone="primary"
+                disabled={!check.ok}
+                onPress={() => dispatch(command)}
+              />
             </View>
           )
         })}
-        <Text style={styles.tags}>
-          От железа: +{gearBonus(hero).attack} к удару, +{gearBonus(hero).defense} к обороне
-        </Text>
+      </Section>
+
+      <Section title="Дела">
+        {game.enterprises.length === 0 ? (
+          <Dim>Ни каравана, ни мастерской. Доход, который идёт без тебя, заводят в городе.</Dim>
+        ) : (
+          game.enterprises.map((one) => (
+            <Row
+              key={one.id}
+              title={one.kind === 'caravan' ? 'Караван' : 'Мастерская'}
+              subtitle={`${game.world.locations[one.locationId]?.name ?? '—'}${
+                one.travel ? ' · в пути' : ''
+              } · принесло ${one.earned}`}
+              right={
+                <Button
+                  compact
+                  label="Свернуть"
+                  tone="quiet"
+                  onPress={() => dispatch({ type: 'closeEnterprise', enterpriseId: one.id })}
+                />
+              }
+            />
+          ))
+        )}
+        <View style={styles.action}>
+          <Button
+            label={`Открыть мастерскую здесь — ${WORKSHOP_COST}`}
+            disabled={!canApply(game, { type: 'foundWorkshop' }).ok}
+            onPress={() => dispatch({ type: 'foundWorkshop' })}
+          />
+        </View>
       </Section>
 
       {hero.tags.length > 0 ? (
         <Section title="Биография">
-          <Text style={styles.tags}>{hero.tags.join(' · ')}</Text>
+          <Dim>{hero.tags.join(' · ')}</Dim>
         </Section>
       ) : null}
 
@@ -206,41 +217,26 @@ export function CharacterScreen({ game }: { game: GameState }) {
   )
 }
 
+function Plus({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable accessibilityLabel={label} onPress={onPress} style={styles.plus}>
+      <Text style={styles.plusLabel}>+</Text>
+    </Pressable>
+  )
+}
+
 const styles = StyleSheet.create({
-  content: { padding: spacing.lg, paddingBottom: spacing.xl },
-  line: { color: colors.dim, fontSize: font.small },
-  enterprise: { gap: spacing.xs, paddingVertical: spacing.xs },
-  name: { color: colors.text, fontSize: font.title },
-  subtitle: { color: colors.dim, fontSize: font.small, marginBottom: spacing.md },
-  gap: {
-    backgroundColor: colors.surface,
-    borderRadius: radius,
-    color: colors.gold,
-    fontSize: font.small,
-    marginBottom: spacing.lg,
-    padding: spacing.md,
-  },
+  content: { padding: spacing.lg, paddingBottom: spacing.xxl },
   group: { marginBottom: spacing.md },
-  groupTitle: { color: colors.faint, fontSize: font.tiny, marginBottom: spacing.xs },
-  row: {
-    alignItems: 'center',
-    borderBottomColor: colors.line,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: spacing.sm,
-    minHeight: 40,
-  },
-  rowLabel: { color: colors.text, flex: 1, fontSize: font.body },
-  rowProgress: { color: colors.faint, fontSize: font.tiny },
-  rowValue: { color: colors.text, fontSize: font.body, minWidth: 28, textAlign: 'right' },
+  value: { color: palette.text, fontSize: font.body, minWidth: 24, textAlign: 'right' },
   plus: {
     alignItems: 'center',
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: radius,
-    height: 36,
+    backgroundColor: palette.gold,
+    borderRadius: radii.sm,
+    height: 32,
     justifyContent: 'center',
-    width: 44,
+    minWidth: touch.min,
   },
-  plusLabel: { color: colors.gold, fontSize: font.heading },
-  tags: { color: colors.dim, fontSize: font.small },
+  plusLabel: { color: palette.bg, fontSize: font.heading, fontWeight: '600' },
+  action: { marginTop: spacing.sm },
 })

@@ -1,0 +1,201 @@
+import {
+  type Command,
+  type Companion,
+  type GameState,
+  TEMPERS,
+  TROOPS,
+  TROOP_IDS,
+  type TroopId,
+  canApply,
+  companionsAt,
+  dailyFood,
+  dailyWages,
+  partyCapacity,
+  partySize,
+  partyStrength,
+  troopCount,
+} from '@tpg/engine'
+import { ScrollView, StyleSheet } from 'react-native'
+import { dispatch } from '../game/store'
+import { spacing } from '../theme'
+import { Badge, Button, Card, Dim, Empty, Panel, Row, Section, Stat, Stats } from '../ui/parts'
+
+/**
+ * Люди: кого ведёшь и кто идёт с тобой.
+ *
+ * Отряд и спутники — на одном экране, потому что это один вопрос: кто со мной.
+ * Главное в отряде — не состав, а расход: жалованье и еда в сутки. Отряд
+ * должен читаться как обязательство, а не как приз.
+ */
+export function PeopleScreen({ game }: { game: GameState }) {
+  const party = game.party
+  const size = partySize(party)
+  const wages = dailyWages(party)
+  const food = dailyFood(party)
+  const stores = (game.character.inventory.grain ?? 0) + (game.character.inventory.fish ?? 0)
+  const daysOfFood = food > 0 ? Math.floor(stores / food) : null
+  const settlement = game.settlements[game.locationId]
+  const here = game.world.locations[game.locationId]
+
+  return (
+    <ScrollView contentContainerStyle={styles.content}>
+      <Panel tone={daysOfFood !== null && daysOfFood < 3 ? 'danger' : undefined}>
+        <Stats>
+          <Stat label="Под началом" value={size > 0 ? `${size}` : 'ты один'} />
+          {size > 0 ? <Stat label="В сутки" value={`${wages} монет · ${food} еды`} /> : null}
+          {size > 0 ? (
+            <Stat
+              label="Еды хватит"
+              value={daysOfFood === null ? '—' : daysOfFood === 0 ? 'нет' : `${daysOfFood} сут.`}
+              tone={daysOfFood !== null && daysOfFood < 3 ? 'danger' : undefined}
+            />
+          ) : null}
+          {size > 0 ? (
+            <Stat label="Дух" value={`${moraleWord(party.morale)} · ${party.morale}`} />
+          ) : null}
+          {size > 0 ? <Stat label="Сила" value={`${partyStrength(party)}`} /> : null}
+          <Stat label="Поклажа до" value={`${partyCapacity(game.character, party)}`} />
+        </Stats>
+        {size === 0 ? <Dim>Наёмных людей можно взять там, где они есть.</Dim> : null}
+      </Panel>
+
+      <Section title="Спутники">
+        {game.companions.length === 0 ? (
+          <Empty text="Ты идёшь один. Именных людей встречают в городах и обителях." />
+        ) : (
+          game.companions.map((companion) => (
+            <Row
+              key={companion.id}
+              title={companion.name}
+              subtitle={`${TEMPERS[companion.temper]?.label ?? ''} · ${roleWord(companion.role)}`}
+              right={
+                <>
+                  <Badge text={moodWord(companion.mood)} tone={moodTone(companion.mood)} />
+                  {companion.role.type !== 'party' ? (
+                    <Button
+                      compact
+                      label="Вернуть"
+                      onPress={() =>
+                        dispatch({
+                          type: 'assignCompanion',
+                          companionId: companion.id,
+                          role: { type: 'party' },
+                        })
+                      }
+                    />
+                  ) : (
+                    <Button
+                      compact
+                      label="Отпустить"
+                      tone="quiet"
+                      onPress={() =>
+                        dispatch({ type: 'dismissCompanion', companionId: companion.id })
+                      }
+                    />
+                  )}
+                </>
+              }
+            />
+          ))
+        )}
+      </Section>
+
+      <Section title="Кого можно позвать">
+        {companionsAt(game).length === 0 ? (
+          <Empty text="Здесь таких людей не встретишь." />
+        ) : (
+          companionsAt(game).map((def) => {
+            const command: Command = { type: 'recruitCompanion', companionId: def.id }
+            const check = canApply(game, command)
+            return (
+              <Card
+                key={def.id}
+                title={def.name}
+                meta={`${def.fee} монет`}
+                description={`${def.story} Нрав: ${TEMPERS[def.temper]?.label ?? ''}.`}
+                reason={check.ok ? null : check.message}
+                onPress={() => dispatch(command)}
+              />
+            )
+          })
+        )}
+      </Section>
+
+      {size > 0 ? (
+        <Section title="Под началом">
+          {TROOP_IDS.filter((troop) => troopCount(party, troop) > 0).map((troop: TroopId) => (
+            <Row
+              key={troop}
+              title={TROOPS[troop].label}
+              subtitle={`${troopCount(party, troop)} чел. · ${TROOPS[troop].wage} монет в сутки каждому`}
+              right={
+                <Button
+                  compact
+                  label="Распустить"
+                  tone="quiet"
+                  onPress={() => dispatch({ type: 'disband', troop, count: 1 })}
+                />
+              }
+            />
+          ))}
+        </Section>
+      ) : null}
+
+      <Section
+        title="Набор"
+        aside={settlement ? `готовых идти ${Math.floor(settlement.recruits)}` : undefined}
+      >
+        {TROOP_IDS.map((troop: TroopId) => {
+          const def = TROOPS[troop]
+          const command: Command = { type: 'hire', troop, count: 1 }
+          const check = canApply(game, command)
+          // Тех, кого тут не бывает вовсе, не показываем: это шум.
+          if (!here || !def.where.includes(here.archetype)) return null
+          return (
+            <Card
+              key={troop}
+              title={def.label}
+              description={def.description}
+              meta={`${def.hireCost} монет · ${def.wage}/сут`}
+              reason={check.ok ? null : check.message}
+              onPress={() => dispatch(command)}
+            />
+          )
+        })}
+        {here ? null : <Empty text="Здесь никого не нанять." />}
+      </Section>
+    </ScrollView>
+  )
+}
+
+/** Расположение спутника словом: число само по себе игроку ничего не говорит. */
+function moodWord(mood: number): string {
+  if (mood >= 75) return 'предан'
+  if (mood >= 50) return 'доволен'
+  if (mood >= 30) return 'холоден'
+  return 'вот-вот уйдёт'
+}
+
+function moodTone(mood: number): 'good' | 'neutral' | 'warn' | 'danger' {
+  if (mood >= 75) return 'good'
+  if (mood >= 50) return 'neutral'
+  if (mood >= 30) return 'warn'
+  return 'danger'
+}
+
+function roleWord(role: Companion['role']): string {
+  if (role.type === 'steward') return 'управляет владением'
+  if (role.type === 'factor') return 'ведёт дело'
+  return 'идёт с тобой'
+}
+
+export function moraleWord(morale: number): string {
+  if (morale >= 75) return 'рвутся в бой'
+  if (morale >= 50) return 'спокойны'
+  if (morale >= 30) return 'ропщут'
+  return 'вот-вот разбегутся'
+}
+
+const styles = StyleSheet.create({
+  content: { padding: spacing.lg, paddingBottom: spacing.xxl },
+})

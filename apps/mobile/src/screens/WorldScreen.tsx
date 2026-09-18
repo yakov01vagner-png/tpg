@@ -11,7 +11,7 @@ import {
 import { useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { colors, font, radius, spacing } from '../theme'
-import { Empty, Section } from '../ui/atoms'
+import { Empty, Section } from '../ui/parts'
 
 /**
  * Карта мира (этап 6, блок W).

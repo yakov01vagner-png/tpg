@@ -6,8 +6,8 @@ import type { Companion } from './companion'
 import type { Settlement } from './economy'
 import { createSettlements } from './economy'
 import type { Enterprise } from './enterprise'
-import type { GameEvent } from './events'
-import { describeEvent } from './events'
+import type { GameEvent, LogKind } from './events'
+import { describeEvent, kindOf } from './events'
 import type { Party } from './party'
 import { EMPTY_PARTY } from './party'
 import type { Plague } from './plague'
@@ -24,7 +24,7 @@ import { defaultStartLocationId, generateWorld } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 9
+export const SCHEMA_VERSION = 10
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -32,6 +32,7 @@ export const LOG_LIMIT = 200
 export interface LogEntry {
   readonly time: GameTime
   readonly text: string
+  readonly kind: LogKind
 }
 
 /**
@@ -124,6 +125,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
       {
         time: WORLD_START,
         text: `${character.name} начинает свой путь${home ? ` в месте под названием ${home.name}` : ''}.`,
+        kind: 'notice',
       },
     ],
   }
@@ -138,7 +140,7 @@ export function appendLog(
   const entries: LogEntry[] = []
   for (const event of events) {
     const text = describeEvent(event)
-    if (text !== null) entries.push({ time, text })
+    if (text !== null) entries.push({ time, text, kind: kindOf(event) })
   }
   if (entries.length === 0) return log
   return [...log, ...entries].slice(-LOG_LIMIT)

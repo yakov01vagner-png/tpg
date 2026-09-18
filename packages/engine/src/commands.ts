@@ -44,7 +44,7 @@ import { quoteBuy, quoteSell } from './economy'
 import type { Enterprise } from './enterprise'
 import { CARAVAN_COST, WORKSHOP_COST, tickEnterprises } from './enterprise'
 import { gearBonus, horseCarry, repairCost, withItem } from './equipment'
-import type { GameEvent } from './events'
+import type { GameEvent, LogKind } from './events'
 import {
   PLAYER,
   dailyTax,
@@ -1195,7 +1195,7 @@ function recruitCompanion(state: GameState, companionId: string): CommandResult 
   const draft = open(state)
   addMoney(draft, -def.fee)
   draft.companions = [...draft.companions, hireCompanion(def)]
-  notice(draft, `${def.name} идёт с тобой.`)
+  notice(draft, `${def.name} идёт с тобой.`, 'people')
   advance(draft, hours(1))
   return close(draft)
 }
@@ -1209,7 +1209,7 @@ function dismissCompanion(state: GameState, companionId: string): CommandResult 
   draft.enterprises = draft.enterprises.map((one) =>
     one.managerId === companionId ? { ...one, managerId: null } : one,
   )
-  notice(draft, `${companion.name} уходит своей дорогой.`)
+  notice(draft, `${companion.name} уходит своей дорогой.`, 'people')
   advance(draft, hours(1))
   return close(draft)
 }
@@ -1288,7 +1288,7 @@ function foundCaravan(state: GameState, awayId: string): CommandResult {
     },
   ]
   const where = state.world.locations[awayId]?.name ?? 'дальнее место'
-  notice(draft, `Караван снаряжён: отсюда и до ${where}.`)
+  notice(draft, `Караван снаряжён: отсюда и до ${where}.`, 'trade')
   advance(draft, hours(4))
   return close(draft)
 }
@@ -1327,7 +1327,7 @@ function foundWorkshop(state: GameState): CommandResult {
       earned: 0,
     },
   ]
-  notice(draft, `Мастерская открыта в месте ${here.name}.`)
+  notice(draft, `Мастерская открыта в месте ${here.name}.`, 'trade')
   advance(draft, hours(6))
   return close(draft)
 }
@@ -1344,7 +1344,7 @@ function closeEnterprise(state: GameState, enterpriseId: string): CommandResult 
       ? { ...one, role: { type: 'party' } }
       : one,
   )
-  notice(draft, 'Дело свёрнуто.')
+  notice(draft, 'Дело свёрнуто.', 'trade')
   advance(draft, hours(2))
   return close(draft)
 }
@@ -1409,7 +1409,7 @@ function proposeMarriage(state: GameState, lordId: string): CommandResult {
       relations: { ...draft.politics.relations, [key]: 100 },
     }
   }
-  notice(draft, `Сговорено: ${name} из дома ${lord.name}. Приданое — ${dowry}.`)
+  notice(draft, `Сговорено: ${name} из дома ${lord.name}. Приданое — ${dowry}.`, 'people')
   advance(draft, hours(8))
   return close(draft)
 }
@@ -1864,7 +1864,7 @@ function close(draft: Draft): CommandResult {
       for (const event of trade.events) {
         if (event.type === 'caravanRobbed') {
           const where = draft.base.world.locations[event.locationId]?.name ?? 'дорогой'
-          notice(draft, `Обоз разграблен под ${where}.`)
+          notice(draft, `Обоз разграблен под ${where}.`, 'trade')
         }
       }
     }
@@ -1954,14 +1954,20 @@ function bandNews(
       if (!near(event.locationId)) continue
       news.push({
         type: 'notice',
+        kind: 'war',
         text: `${placeName(event.locationId)} разорено: уведено и убито ${event.lost}.`,
       })
     } else if (event.type === 'bandSiege') {
       if (!near(event.locationId)) continue
-      news.push({ type: 'notice', text: `${placeName(event.locationId)} обложено войском.` })
+      news.push({
+        type: 'notice',
+        kind: 'war',
+        text: `${placeName(event.locationId)} обложено войском.`,
+      })
     } else if (event.type === 'bandTook') {
       news.push({
         type: 'notice',
+        kind: 'war',
         text: `${placeName(event.locationId)} взято: место перешло к ${lordName(
           state.bands.find((band) => band.id === event.bandId)?.lordId ?? '',
         )}.`,
@@ -1970,6 +1976,7 @@ function bandNews(
       if (!near(event.locationId)) continue
       news.push({
         type: 'notice',
+        kind: 'war',
         text: `Под ${placeName(event.locationId)} сошлись дружины: ${lordName(
           event.winner,
         )} одолел, полегло ${event.fallen}.`,
@@ -1977,10 +1984,15 @@ function bandNews(
     } else if (event.type === 'lordSubmits') {
       news.push({
         type: 'notice',
+        kind: 'war',
         text: `${lordName(event.lordId)} разбит и снова присягнул короне.`,
       })
     } else if (event.type === 'lordFell') {
-      news.push({ type: 'notice', text: `${lordName(event.lordId)} пал, и род его пресёкся.` })
+      news.push({
+        type: 'notice',
+        kind: 'war',
+        text: `${lordName(event.lordId)} пал, и род его пресёкся.`,
+      })
     }
   }
   return news
@@ -2001,6 +2013,7 @@ function warNews(
       const lord = lordById(state.politics, event.lordId)
       news.push({
         type: 'notice',
+        kind: 'war',
         text: lord
           ? `${lord.title} ${lord.name} поднял мятеж против короны.`
           : 'Один из вассалов поднял мятеж.',
@@ -2016,7 +2029,7 @@ function warNews(
         busy: 'архимаг короны занят своими делами',
         refused: 'архимаг короны отказался служить',
       }
-      news.push({ type: 'notice', text: `Говорят, ${words[event.state]}.` })
+      news.push({ type: 'notice', kind: 'war', text: `Говорят, ${words[event.state]}.` })
       continue
     }
 
@@ -2024,6 +2037,7 @@ function warNews(
       const { from, to, perDay } = event.tribute
       news.push({
         type: 'notice',
+        kind: 'war',
         text: `${kingdomName(from)} платит дань короне ${kingdomName(to)}: ${perDay} в день.`,
       })
       continue
@@ -2033,6 +2047,7 @@ function warNews(
     const names = `${kingdomName(event.war.a)} и ${kingdomName(event.war.b)}`
     news.push({
       type: 'notice',
+      kind: 'war',
       text:
         event.type === 'warDeclared'
           ? involved
@@ -2212,7 +2227,7 @@ function growOlder(draft: Draft, daysPassed: number): void {
   const grewUp = age > draft.character.age
   if (grewUp) {
     patch(draft, { age, attributes: agedAttributes(draft.character.attributes, age) })
-    if (age === PRIME_AGE + 1) notice(draft, 'Годы берут своё: тело уже не то, что было.')
+    if (age === PRIME_AGE + 1) notice(draft, 'Годы берут своё: тело уже не то, что было.', 'people')
 
     // Дети рождаются раз в год, не чаще: мир и так считает каждый день.
     const [family, afterBirth, born] = maybeBirth(draft.character.family, day, draft.rng)
@@ -2220,7 +2235,7 @@ function growOlder(draft: Draft, daysPassed: number): void {
     if (born) {
       patch(draft, { family })
       const child = family.children[family.children.length - 1]
-      notice(draft, `Родился ребёнок: ${child?.name ?? 'дитя'}.`)
+      notice(draft, `Родился ребёнок: ${child?.name ?? 'дитя'}.`, 'people')
     }
 
     const [dies, afterDeath] = rollChance(draft.rng, deathChance(age))
@@ -2240,7 +2255,7 @@ function succeed(draft: Draft, day: number): void {
   const heir = heirOf(draft.character.family, day)
   if (!heir) {
     draft.over = true
-    notice(draft, `${draft.character.name} умирает, и род пресекается.`)
+    notice(draft, `${draft.character.name} умирает, и род пресекается.`, 'people')
     return
   }
   const before = draft.character.name
@@ -2267,11 +2282,11 @@ function plagueNews(
     const name = state.world.locations[place]?.name ?? 'соседнее селение'
     const near = regionOf(state.world, place)?.id === here
     if (event.type === 'plagueBegan') {
-      news.push({ type: 'notice', text: `Говорят, в месте ${name} открылся мор.` })
+      news.push({ type: 'notice', kind: 'plague', text: `Говорят, в месте ${name} открылся мор.` })
     } else if (event.type === 'plagueSpread' && near) {
-      news.push({ type: 'notice', text: `Мор дошёл до ${name}.` })
+      news.push({ type: 'notice', kind: 'plague', text: `Мор дошёл до ${name}.` })
     } else if (event.type === 'plagueEnded' && near) {
-      news.push({ type: 'notice', text: `В месте ${name} мор отступил.` })
+      news.push({ type: 'notice', kind: 'plague', text: `В месте ${name} мор отступил.` })
     }
   }
   return news
@@ -2289,18 +2304,22 @@ function settleNews(
     const name = world.locations[event.locationId]?.name ?? 'новое место'
     const near = world.locations[event.locationId]?.provinceId === here
     if (event.type === 'founded' && near) {
-      news.push({ type: 'notice', text: `Поставлены новые выселки: ${name}.` })
+      news.push({ type: 'notice', kind: 'world', text: `Поставлены новые выселки: ${name}.` })
     } else if (event.type === 'resettled' && near) {
-      news.push({ type: 'notice', text: `В ${name} вернулись люди.` })
+      news.push({ type: 'notice', kind: 'world', text: `В ${name} вернулись люди.` })
     } else if (event.type === 'grew' && near) {
-      news.push({ type: 'notice', text: `${name} разрослось: теперь это не деревня.` })
+      news.push({
+        type: 'notice',
+        kind: 'world',
+        text: `${name} разрослось: теперь это не деревня.`,
+      })
     }
   }
   return news
 }
 
-function notice(draft: Draft, text: string): void {
-  draft.events.push({ type: 'notice', text })
+function notice(draft: Draft, text: string, kind: LogKind = 'notice'): void {
+  draft.events.push({ type: 'notice', text, kind })
 }
 
 function advance(draft: Draft, minutes: number): void {

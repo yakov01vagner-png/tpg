@@ -25,9 +25,10 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import Svg, { G, Rect, Text as SvgText } from 'react-native-svg'
+import { openSheet } from '../game/nav'
 import { dispatch } from '../game/store'
 import { colors, font, radius, spacing } from '../theme'
-import { Button } from '../ui/atoms'
+import { Button, Chip, Chips } from '../ui/parts'
 
 /**
  * Карта мира.
@@ -181,35 +182,28 @@ export function MapScreen({ game }: { game: GameState }) {
 
   return (
     <View style={styles.wrap}>
-      <View style={styles.controls}>
+      <Chips>
         {MODES.map((option) => (
-          <Pressable
+          <Chip
             key={option.id}
+            label={option.label}
+            active={option.id === mode}
             onPress={() => setMode(option.id)}
-            style={[styles.chip, option.id === mode && styles.chipActive]}
-          >
-            <Text style={[styles.chipLabel, option.id === mode && styles.chipLabelActive]}>
-              {option.label}
-            </Text>
-          </Pressable>
+          />
         ))}
-      </View>
-      <View style={styles.controls}>
+        <Chip label="Сводка" onPress={() => openSheet('world')} />
+      </Chips>
+      <Chips>
         {ZOOMS.map((option) => (
-          <Pressable
+          <Chip
             key={option.id}
+            label={option.label}
+            active={option.id === level}
             onPress={() => setLevel(option.id)}
-            style={[styles.chip, option.id === level && styles.chipActive]}
-          >
-            <Text style={[styles.chipLabel, option.id === level && styles.chipLabelActive]}>
-              {option.label}
-            </Text>
-          </Pressable>
+          />
         ))}
-        <Pressable onPress={() => centerOn(here)} style={styles.chip}>
-          <Text style={styles.chipLabel}>К себе</Text>
-        </Pressable>
-      </View>
+        <Chip label="К себе" onPress={() => centerOn(here)} />
+      </Chips>
 
       <ScrollView
         ref={horizontal}
@@ -509,20 +503,7 @@ function foodWord(security: number): string {
 }
 
 const styles = StyleSheet.create({
-  wrap: { flex: 1 },
-  controls: { flexDirection: 'row', gap: spacing.sm, paddingBottom: spacing.sm },
-  chip: {
-    backgroundColor: colors.surface,
-    borderColor: colors.line,
-    borderRadius: radius,
-    borderWidth: 1,
-    minHeight: 36,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.md,
-  },
-  chipActive: { backgroundColor: colors.surfaceAlt, borderColor: colors.gold },
-  chipLabel: { color: colors.dim, fontSize: font.small },
-  chipLabelActive: { color: colors.gold },
+  wrap: { flex: 1, paddingHorizontal: spacing.lg, paddingTop: spacing.md },
   canvas: { backgroundColor: '#15120f' },
   panel: {
     backgroundColor: colors.surface,

@@ -10,11 +10,10 @@ import {
   templateOptionIds,
 } from '@tpg/engine'
 import { useState } from 'react'
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { ScrollView, StyleSheet, TextInput, View } from 'react-native'
 import { startGame } from '../game/store'
-import { colors, font, radius, spacing } from '../theme'
-import { ActionCard } from '../ui/ActionCard'
-import { Button, Section } from '../ui/atoms'
+import { font, palette, radii, spacing, touch } from '../theme'
+import { Body, Button, Card, Dim, Panel, Section, Title } from '../ui/parts'
 
 /**
  * Создание персонажа: биография с ветвлением или готовый шаблон (DESIGN.md, п.6).
@@ -37,14 +36,16 @@ export function CreateCharacterScreen({ error }: { error: string | null }) {
   if (!inBiography) {
     return (
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.title}>Новый персонаж</Text>
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+        <View style={styles.head}>
+          <Title>Новый персонаж</Title>
+          {error ? <Dim tone="danger">{error}</Dim> : null}
+        </View>
 
         <Section title="Имя">
           <TextInput
             onChangeText={setName}
             placeholder="Странник"
-            placeholderTextColor={colors.faint}
+            placeholderTextColor={palette.faint}
             style={styles.input}
             value={name}
           />
@@ -52,7 +53,7 @@ export function CreateCharacterScreen({ error }: { error: string | null }) {
 
         <Section title="Быстрый старт">
           {BIOGRAPHY.templates.map((template) => (
-            <ActionCard
+            <Card
               key={template.id}
               title={template.label}
               description={template.description}
@@ -76,18 +77,19 @@ export function CreateCharacterScreen({ error }: { error: string | null }) {
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <Text style={styles.title}>{progress.stage ? progress.stage.label : 'Готов'}</Text>
-      <Text style={styles.question}>
-        {progress.stage ? progress.stage.question : `${heroName}, вот что из тебя вышло.`}
-      </Text>
+      <View style={styles.head}>
+        <Title>{progress.stage ? progress.stage.label : 'Готов'}</Title>
+        <Body>
+          {progress.stage ? progress.stage.question : `${heroName}, вот что из тебя вышло.`}
+        </Body>
+      </View>
 
       {progress.stage
         ? progress.options.map((option) => (
-            <ActionCard
+            <Card
               key={option.id}
               title={option.label}
               description={option.text}
-              meta=""
               onPress={() => setChosen([...chosen, option.id])}
             />
           ))
@@ -122,46 +124,32 @@ function Summary({ draft }: { draft: CharacterDraft | null }) {
   if (!draft) return null
   const skills = Object.entries(draft.skills ?? {}).filter(([, level]) => (level ?? 0) > 0)
   return (
-    <View style={styles.summary}>
-      <Text style={styles.summaryLine}>Кошель: {draft.money ?? 0} монет</Text>
-      <Text style={styles.summaryLine}>
+    <Panel>
+      <Dim>{`Кошель: ${draft.money ?? 0} монет`}</Dim>
+      <Dim>
         {ATTRIBUTE_IDS.map((id) => `${ATTRIBUTE_LABELS[id]} ${draft.attributes?.[id] ?? 3}`).join(
           ' · ',
         )}
-      </Text>
-      <Text style={styles.summaryLine}>
+      </Dim>
+      <Dim>
         {skills.map(([id, level]) => `${SKILLS[id as SkillId].label} ${level}`).join(' · ')}
-      </Text>
-    </View>
+      </Dim>
+    </Panel>
   )
 }
 
 const styles = StyleSheet.create({
-  content: { padding: spacing.lg, paddingBottom: spacing.xl },
-  title: { color: colors.text, fontSize: font.title },
-  question: { color: colors.dim, fontSize: font.body, marginBottom: spacing.lg },
-  error: {
-    color: colors.danger,
-    fontSize: font.small,
-    marginTop: spacing.sm,
-  },
+  content: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  head: { gap: spacing.xs, marginBottom: spacing.lg },
   input: {
-    backgroundColor: colors.surface,
-    borderColor: colors.line,
-    borderRadius: radius,
+    backgroundColor: palette.surface,
+    borderColor: palette.line,
+    borderRadius: radii.md,
     borderWidth: 1,
-    color: colors.text,
+    color: palette.text,
     fontSize: font.body,
-    minHeight: 48,
+    minHeight: touch.comfortable,
     paddingHorizontal: spacing.md,
   },
-  summary: {
-    backgroundColor: colors.surface,
-    borderRadius: radius,
-    gap: spacing.xs,
-    marginBottom: spacing.lg,
-    padding: spacing.md,
-  },
-  summaryLine: { color: colors.dim, fontSize: font.small },
   back: { marginTop: spacing.md },
 })

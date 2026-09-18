@@ -7,6 +7,54 @@ import { SKILLS } from './skills'
  * События — единственный способ, которым движок рассказывает о результате
  * команды. UI не считает ничего сам: он рисует то, что пришло в событиях.
  */
+/**
+ * Вид записи журнала. По нему лента ставит знак и группирует: деньги отдельно
+ * от войны, война отдельно от людей. Виды — это то, о чём мир вообще умеет
+ * рассказывать, поэтому список короткий и закрытый.
+ */
+export type LogKind =
+  | 'money'
+  | 'skill'
+  | 'level'
+  | 'rank'
+  | 'war'
+  | 'plague'
+  | 'world'
+  | 'people'
+  | 'trade'
+  | 'notice'
+
+export const LOG_KIND_LABELS: Record<LogKind, string> = {
+  money: 'деньги',
+  skill: 'навык',
+  level: 'уровень',
+  rank: 'ранг',
+  war: 'война',
+  plague: 'мор',
+  world: 'мир',
+  people: 'люди',
+  trade: 'дело',
+  notice: 'событие',
+}
+
+export function kindOf(event: GameEvent): LogKind {
+  switch (event.type) {
+    case 'money':
+      return 'money'
+    case 'skillUp':
+      return 'skill'
+    case 'levelUp':
+      return 'level'
+    case 'rankGranted':
+    case 'examFailed':
+      return 'rank'
+    case 'notice':
+      return event.kind ?? 'notice'
+    default:
+      return 'notice'
+  }
+}
+
 export type GameEvent =
   | { readonly type: 'timeAdvanced'; readonly minutes: number }
   | { readonly type: 'money'; readonly delta: number }
@@ -20,7 +68,7 @@ export type GameEvent =
     }
   | { readonly type: 'rankGranted'; readonly rank: MagicRankId }
   | { readonly type: 'examFailed'; readonly rank: MagicRankId }
-  | { readonly type: 'notice'; readonly text: string }
+  | { readonly type: 'notice'; readonly text: string; readonly kind?: LogKind }
 
 /**
  * Текст для лога. Возвращает null для событий, которые не стоит проговаривать

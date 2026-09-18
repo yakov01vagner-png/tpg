@@ -10,11 +10,11 @@ import {
   unitsSize,
 } from '@tpg/engine'
 import { useState } from 'react'
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { ScrollView, StyleSheet, Text, View } from 'react-native'
 import { dispatch } from '../game/store'
-import { colors, font, radius, spacing } from '../theme'
-import { Button } from '../ui/atoms'
-import { moraleWord } from './PartyScreen'
+import { font, lineHeight, palette, spacing } from '../theme'
+import { Button, Dim, Faint, Heading, Panel, Row, Stat, Stats, Title } from '../ui/parts'
+import { moraleWord } from './PeopleScreen'
 
 /** Приказы, которые имеет смысл давать конкретной группе. */
 const ORDERS_FOR: Record<GroupId, readonly OrderId[]> = {
@@ -36,8 +36,9 @@ const DEFAULT_ORDERS: Record<GroupId, OrderId> = {
 /**
  * Бой: приказы группам, а не отдельным людям (DESIGN.md, п.5).
  *
- * Экран устроен так, чтобы раунд был выбором: видно, кто чем занят, что
- * делает враг и во что обошёлся прошлый раунд.
+ * Раунд — это выбор: видно, кто чем занят, что делает враг и во что обошёлся
+ * прошлый раунд. Строй и рассказ раундами — этап 13; здесь бой ложится на общий
+ * язык, чтобы к тому этапу было куда класть.
  */
 export function BattleScreen({ game }: { game: GameState }) {
   const battle = game.battle
@@ -57,21 +58,20 @@ export function BattleScreen({ game }: { game: GameState }) {
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <View style={styles.head}>
-        <Text style={styles.title}>{battle.enemy.name}</Text>
-        <Text style={styles.line}>
-          Против тебя {enemySize} · они {moraleWord(battle.enemy.morale)}
-        </Text>
-        <Text style={styles.line}>
-          Раунд {battle.round} · твои {moraleWord(battle.morale)}
-        </Text>
+      <Panel tone="danger">
+        <Title>{battle.enemy.name}</Title>
+        <Stats>
+          <Stat label="Против тебя" value={`${enemySize}`} />
+          <Stat label="Они" value={moraleWord(battle.enemy.morale)} />
+          <Stat label="Раунд" value={`${battle.round}`} />
+          <Stat label="Твои" value={moraleWord(battle.morale)} />
+        </Stats>
         {battle.strain > 0 ? (
-          <Text style={battle.strain > 70 ? styles.strainHigh : styles.line}>
-            Истощение круга: {battle.strain}
-            {battle.strain > 70 ? ' — колдовать опасно' : ''}
-          </Text>
+          <Dim tone={battle.strain > 70 ? 'danger' : undefined}>
+            {`Истощение круга: ${battle.strain}${battle.strain > 70 ? ' — колдовать опасно' : ''}`}
+          </Dim>
         ) : null}
-      </View>
+      </Panel>
 
       {finished ? null : (
         <>
@@ -80,18 +80,16 @@ export function BattleScreen({ game }: { game: GameState }) {
             const size = unitsSize(units)
             if (size === 0) return null
             return (
-              <Pressable key={group} onPress={() => cycle(group)} style={styles.group}>
-                <View style={styles.groupInfo}>
-                  <Text style={styles.groupName}>
-                    {GROUP_LABELS[group]} · {size}
-                  </Text>
-                  <Text style={styles.groupUnits}>{describeUnits(units)}</Text>
-                </View>
-                <Text style={styles.order}>{ORDER_LABELS[orders[group]]}</Text>
-              </Pressable>
+              <Row
+                key={group}
+                title={`${GROUP_LABELS[group]} · ${size}`}
+                subtitle={describeUnits(units)}
+                right={<Text style={styles.order}>{ORDER_LABELS[orders[group]]}</Text>}
+                onPress={() => cycle(group)}
+              />
             )
           })}
-          <Text style={styles.hint}>Нажми на группу, чтобы сменить приказ.</Text>
+          <Faint>Нажми на группу, чтобы сменить приказ.</Faint>
 
           <View style={styles.actions}>
             <Button
@@ -105,14 +103,15 @@ export function BattleScreen({ game }: { game: GameState }) {
       )}
 
       {finished ? (
-        <View style={styles.outcome}>
-          <Text style={styles.outcomeTitle}>{outcomeWord(battle.outcome)}</Text>
+        <Panel tone={battle.outcome === 'won' ? 'good' : 'danger'}>
+          <Heading>{outcomeWord(battle.outcome)}</Heading>
           {battle.outcome === 'won' ? (
             <>
-              <Text style={styles.line}>
-                Добыча: {battle.spoils.money} монет
-                {battle.spoils.prisoners > 0 ? ` · пленных ${battle.spoils.prisoners}` : ''}
-              </Text>
+              <Dim>
+                {`Добыча: ${battle.spoils.money} монет${
+                  battle.spoils.prisoners > 0 ? ` · пленных ${battle.spoils.prisoners}` : ''
+                }`}
+              </Dim>
               {battle.spoils.prisoners > 0 ? (
                 <View style={styles.actions}>
                   <Button
@@ -148,7 +147,7 @@ export function BattleScreen({ game }: { game: GameState }) {
               />
             </View>
           )}
-        </View>
+        </Panel>
       ) : null}
 
       <View style={styles.log}>
@@ -175,48 +174,19 @@ function outcomeWord(outcome: string): string {
 }
 
 const styles = StyleSheet.create({
-  content: { padding: spacing.lg, paddingBottom: spacing.xl },
-  head: {
-    backgroundColor: colors.surface,
-    borderRadius: radius,
-    gap: spacing.xs,
-    marginBottom: spacing.lg,
-    padding: spacing.md,
-  },
-  title: { color: colors.text, fontSize: font.title },
-  line: { color: colors.dim, fontSize: font.small },
-  strainHigh: { color: colors.danger, fontSize: font.small },
-  group: {
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderColor: colors.line,
-    borderRadius: radius,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-    minHeight: 60,
-    padding: spacing.md,
-  },
-  groupInfo: { flex: 1 },
-  groupName: { color: colors.text, fontSize: font.body },
-  groupUnits: { color: colors.faint, fontSize: font.tiny },
-  order: { color: colors.gold, fontSize: font.small, textAlign: 'right' },
-  hint: { color: colors.faint, fontSize: font.tiny, marginBottom: spacing.md },
-  actions: { gap: spacing.sm, marginTop: spacing.sm },
-  outcome: {
-    backgroundColor: colors.surfaceAlt,
-    borderRadius: radius,
-    gap: spacing.xs,
-    marginBottom: spacing.lg,
-    padding: spacing.md,
-  },
-  outcomeTitle: { color: colors.gold, fontSize: font.heading },
+  content: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  order: { color: palette.gold, fontSize: font.small, textAlign: 'right' },
+  actions: { gap: spacing.sm, marginTop: spacing.md },
   log: {
-    borderTopColor: colors.line,
+    borderTopColor: palette.line,
     borderTopWidth: 1,
     marginTop: spacing.lg,
     paddingTop: spacing.md,
   },
-  logLine: { color: colors.dim, fontSize: font.small, marginBottom: spacing.xs },
+  logLine: {
+    color: palette.dim,
+    fontSize: font.small,
+    lineHeight: lineHeight.small,
+    marginBottom: spacing.xs,
+  },
 })
