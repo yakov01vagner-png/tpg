@@ -14,9 +14,11 @@ import {
 import { landCapacityOf } from '../life'
 import type { Rng } from '../rng'
 import { createRng, nextFloat, nextInt } from '../rng'
-import { MAP_SIZE, SITE_GAP, Spacer, placeLocations } from './layout'
+import { MAP_SIZE, SITE_GAP, Spacer, placeLocations, provinceCentersOf } from './layout'
 import { hopsBetween } from './queries'
 import { buildRoads, hoursBetweenPlaces, neighbourPairs, spotOf } from './roads'
+import type { Sea } from './sea'
+import { buildSea, onShore } from './sea'
 import { FRONTIER, isSettlement, isSite } from './types'
 import type {
   Kingdom,
@@ -219,8 +221,84 @@ export function generateWorld(
   fillBetween(roll, names, spacer, { provinces, locations: placed })
   fillLongLegs(roll, names, spacer, { provinces, locations: placed })
 
-  const skeleton = { kingdoms, regions, provinces, locations: placed }
+  // Вода кладётся после мест и до дорог: суша — это то, что вокруг людей и
+  // вдоль дорог между ними, а дорога по морю не идёт (sea.ts). Соседство
+  // считается заранее и тем же правилом, каким его потом посчитают дороги.
+  const links = neighbourPairs(Object.values(placed).map(spotOf)).map(
+    (pair) => [pair.from, pair.to] as const,
+  )
+  const sea = buildSea(
+    Object.values(placed),
+    links,
+    Object.values(provinceCentersOf({ kingdoms, regions, provinces } as World)),
+    seed,
+  )
+
+  settlePorts(placed, provinces, regions, sea)
+
+  const skeleton = { kingdoms, regions, provinces, locations: placed, sea }
   return { ...skeleton, roads: buildRoads(skeleton) }
+}
+
+/**
+ * Порты ставятся по воде, а не по названию местности.
+ *
+ * Вид места выбирается по местности провинции («побережье»), а вода появляется
+ * позже и своим правилом — поэтому порт легко оказывался в полутора днях от
+ * моря, а у приморской области не оказывалось ни одного порта. Два правила:
+ * порт не на берегу меняется видом с тем местом своей провинции, что стоит на
+ * берегу (а если такого нет — становится городком, потому что порт без воды и
+ * есть городок); и всякая область, вышедшая к морю, получает хотя бы один порт
+ * — самое людное из своих береговых мест.
+ */
+function settlePorts(
+  locations: Record<string, Location>,
+  provinces: Record<string, Province>,
+  regions: Record<string, Region>,
+  sea: Sea,
+): void {
+  // Читаем текущее состояние, а не снимок: обмен видами меняет обоих, и по
+  // устаревшему списку порт легко поменяться сам с собой во второй раз.
+  for (const id of Object.keys(locations)) {
+    const location = locations[id]
+    if (!location || location.archetype !== 'port' || onShore(sea, location)) continue
+    const province = provinces[location.provinceId]
+    const neighbour = (province?.locationIds ?? [])
+      .map((one) => locations[one])
+      .find(
+        (one): one is Location =>
+          one !== undefined &&
+          one.id !== location.id &&
+          isSettlement(one.archetype) &&
+          // Со столицей не меняются — её место в мире назначено сеттингом; с
+          // другим портом меняться бессмысленно, оба останутся портами.
+          one.archetype !== 'capital' &&
+          one.archetype !== 'port' &&
+          onShore(sea, one),
+      )
+    if (neighbour) {
+      locations[location.id] = { ...location, archetype: neighbour.archetype }
+      locations[neighbour.id] = { ...neighbour, archetype: 'port' }
+      continue
+    }
+    locations[location.id] = { ...location, archetype: 'town' }
+  }
+
+  // У каждой области, вышедшей к морю, есть свой порт: без этого на весь мир
+  // оставалось два порта, и версия про воду начиналась с того, что плыть
+  // неоткуда.
+  for (const region of Object.values(regions)) {
+    const own = region.provinceIds
+      .flatMap((id) => provinces[id]?.locationIds ?? [])
+      .map((id) => locations[id])
+      .filter((one): one is Location => one !== undefined && isSettlement(one.archetype))
+    if (own.some((one) => one.archetype === 'port')) continue
+    const shore = own
+      .filter((one) => one.archetype !== 'capital' && onShore(sea, one))
+      .sort((a, b) => b.population - a.population)[0]
+    if (!shore) continue
+    locations[shore.id] = { ...shore, archetype: 'port' }
+  }
 }
 
 /**

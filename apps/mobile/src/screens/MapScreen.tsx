@@ -120,12 +120,9 @@ export function MapScreen({ game }: { game: GameState }) {
       }
       for (let column = 0; column < grid.size; column += 1) {
         const cell = grid.cells[row * grid.size + column]
-        const fill = colorOf(
-          cell,
-          mode,
-          regionPaint,
-          cell?.locationId ? held[cell.locationId] : undefined,
-        )
+        const fill = grid.water[row * grid.size + column]
+          ? SEA_COLOR
+          : colorOf(cell, mode, regionPaint, cell?.locationId ? held[cell.locationId] : undefined)
         if (fill !== running) {
           flush(column)
           running = fill
@@ -839,6 +836,15 @@ export function MapScreen({ game }: { game: GameState }) {
 const REBEL_COLOR = '#8c5a3c'
 const PLAYER_COLOR = '#c9a227'
 const NOBODY_COLOR = '#4a453e'
+
+/**
+ * Цвет воды.
+ *
+ * Один на все разбивки: море не принадлежит ни короне, ни области, и красить
+ * его по владельцу нечем. Тёмно-синий глуше суши — карта остаётся картой земли,
+ * а вода на ней фон, но фон, у которого есть край.
+ */
+const SEA_COLOR = '#1b2a38'
 
 function colorOf(
   cell: GridCell | null | undefined,

@@ -1,4 +1,5 @@
 import { layoutOf, provinceCentersOf } from './layout'
+import { isWater } from './sea'
 import type { Terrain, World } from './types'
 import { isSettlement } from './types'
 
@@ -49,8 +50,10 @@ export interface WorldGrid {
   readonly size: number
   /** Сторона клетки в единицах полотна. */
   readonly cell: number
-  /** Клетки построчно: индекс — y * size + x. `null` — ничья земля. */
+  /** Клетки построчно: индекс — y * size + x. `null` — ничья земля или вода. */
   readonly cells: readonly (GridCell | null)[]
+  /** Вода: та же разбивка, `true` — море (версия 0.5). */
+  readonly water: readonly boolean[]
 }
 
 /**
@@ -68,7 +71,7 @@ const REACH = 225
  * Докуда дотягивается околица поселения. Дальше начинается глушь: земля всё ещё
  * чья-то, но людей на ней нет и дорога через неё идёт сама по себе.
  */
-const SETTLED_REACH = 114
+const SETTLED_REACH = 55
 
 /** Неровность границы: без неё округа выходят циркулем, а не землёй. */
 function wobble(x: number, y: number): number {
@@ -118,10 +121,20 @@ export function worldGrid(world: World, mapSize: number, reach: number = REACH):
 
   const described = new Map<string, Omit<GridCell, 'locationId' | 'wilds'>>()
   const cells: (GridCell | null)[] = []
+  const water: boolean[] = []
+  const sea = world.sea ?? null
   for (let row = 0; row < GRID_SIZE; row += 1) {
     const cy = (row + 0.5) * cell
     for (let column = 0; column < GRID_SIZE; column += 1) {
       const cx = (column + 0.5) * cell
+      // Вода решает первой: земля короны кончается там, где начинается море, а
+      // не там, где кончается досягаемость провинции (версия 0.5).
+      const wet = sea !== null && isWater(sea, cx, cy)
+      water.push(wet)
+      if (wet) {
+        cells.push(null)
+        continue
+      }
       // Сравниваем квадраты: корень на каждую пару «клетка — якорь» стоил
       // тридцати миллисекунд на открытие карты, а порядок не меняет.
       const limit = reach * wobble(column, row)
@@ -172,7 +185,7 @@ export function worldGrid(world: World, mapSize: number, reach: number = REACH):
     }
   }
 
-  return { size: GRID_SIZE, cell, cells }
+  return { size: GRID_SIZE, cell, cells, water }
 }
 
 function describe(world: World, provinceId: string): Omit<GridCell, 'locationId' | 'wilds'> | null {

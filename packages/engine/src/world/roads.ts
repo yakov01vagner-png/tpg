@@ -1,5 +1,7 @@
 import { SITES } from '../content/sites'
 import { TERRAIN_TRAVEL } from '../content/world'
+import type { Sea } from './sea'
+import { crossesWater } from './sea'
 import type { Location, Road, Terrain, World } from './types'
 import { isSite } from './types'
 
@@ -47,6 +49,7 @@ export interface Spot {
 export function buildRoads(world: Omit<World, 'roads'>): Record<string, readonly Road[]> {
   const spots = Object.values(world.locations).map(toSpot)
   const roads: Record<string, Road[]> = {}
+  const sea = world.sea ?? null
 
   const connect = (a: Spot, b: Spot) => {
     const forward = roads[a.id] ?? []
@@ -60,14 +63,15 @@ export function buildRoads(world: Omit<World, 'roads'>): Record<string, readonly
   }
 
   const union = new Union(spots.map((spot) => spot.id))
-  for (const pair of neighbourPairs(spots)) {
+  for (const pair of neighbourPairs(spots, sea)) {
     connect(pair.from, pair.to)
     union.join(pair.from.id, pair.to.id)
   }
 
-  // Острова сшиваются кратчайшим переходом: мир должен быть связен, даже если
-  // между двумя его кусками пусто.
-  bridgeIslands(spots, union, connect)
+  // Острова сшиваются кратчайшим переходом посуху: мир должен быть связен,
+  // даже если между двумя его кусками пусто. Через воду перемычку не тянут —
+  // туда плывут (этап 35).
+  bridgeIslands(spots, union, connect, sea)
 
   return roads
 }
@@ -79,13 +83,21 @@ export function buildRoads(world: Omit<World, 'roads'>): Record<string, readonly
  * считается соседство поселений, а потом между соседями кладётся то, через что
  * к ним идут (этап 26).
  */
-export function neighbourPairs(spots: readonly Spot[]): { from: Spot; to: Spot }[] {
+export function neighbourPairs(
+  spots: readonly Spot[],
+  sea: Sea | null = null,
+): { from: Spot; to: Spot }[] {
   const index = new Grid(spots)
   const pairs: { from: Spot; to: Spot }[] = []
   for (const [i, a] of spots.entries()) {
     index.forEachNear(a, REACH, (j, b) => {
       // Пара считается один раз: соседство взаимно.
-      if (j > i && neighbours(a, b, index)) pairs.push({ from: a, to: b })
+      if (j <= i) return true
+      if (!neighbours(a, b, index)) return true
+      // По воде дороги не бывает: залив обходят берегом или переплывают, но
+      // тракта через него нет (этап 33).
+      if (sea && crossesWater(sea, a, b)) return true
+      pairs.push({ from: a, to: b })
       return true
     })
   }
@@ -150,6 +162,7 @@ function bridgeIslands(
   spots: readonly Spot[],
   union: Union,
   connect: (a: Spot, b: Spot) => void,
+  sea: Sea | null = null,
 ): void {
   for (let guard = 0; guard < 64; guard += 1) {
     const islands = new Map<string, Spot[]>()
@@ -170,6 +183,7 @@ function bridgeIslands(
     for (const from of island) {
       for (const to of spots) {
         if (mine.has(to.id)) continue
+        if (sea && crossesWater(sea, from, to)) continue
         const span = distance(from, to)
         if (!best || span < best.span) best = { from, to, span }
       }
