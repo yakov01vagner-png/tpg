@@ -40,7 +40,11 @@ describe('путь складывается из отрезков', () => {
   it('у деревни в соседях бывает не только деревня', () => {
     const wildNeighbours = Object.values(world.locations)
       .filter((one) => !isSite(one.archetype))
-      .filter((one) => roadsFrom(world, one.id).some((road) => isSite(world.locations[road.to]?.archetype ?? 'village')))
+      .filter((one) =>
+        roadsFrom(world, one.id).some((road) =>
+          isSite(world.locations[road.to]?.archetype ?? 'village'),
+        ),
+      )
     expect(wildNeighbours.length).toBeGreaterThan(Object.keys(world.provinces).length)
   })
 
@@ -48,7 +52,9 @@ describe('путь складывается из отрезков', () => {
     for (const seed of SEEDS) {
       const current = generateWorld(seed)
       for (const location of Object.values(current.locations)) {
-        expect(roadsFrom(current, location.id).length, `${location.name} отрезан`).toBeGreaterThan(0)
+        expect(roadsFrom(current, location.id).length, `${location.name} отрезан`).toBeGreaterThan(
+          0,
+        )
       }
     }
   })
@@ -76,13 +82,18 @@ describe('отрезок берёт цену у земли', () => {
       quick.push(...legsTo(current, 'shrine'), ...legsTo(current, 'spring'))
     }
     const mean = (values: number[]) => values.reduce((sum, one) => sum + one, 0) / values.length
-    console.log(`отрезок через топь и перевал ${mean(slow).toFixed(1)} ч, мимо святилища ${mean(quick).toFixed(1)} ч`)
+    console.log(
+      `отрезок через топь и перевал ${mean(slow).toFixed(1)} ч, мимо святилища ${mean(quick).toFixed(1)} ч`,
+    )
     expect(mean(slow)).toBeGreaterThan(mean(quick))
   })
 
   it('часы отрезка сходятся с тем, во сколько раз место замедляет', () => {
     for (const site of Object.values(world.locations)) {
       if (!isSite(site.archetype)) continue
+      // Застава в марке держит дорогу между коронами, а не отрезок внутри
+      // провинции: её часы меряются сутками пути, а не землёй под ногами.
+      if (site.provinceId.startsWith('march.')) continue
       const slow = SITES[site.archetype as SiteKind].slow
       for (const road of roadsFrom(world, site.id)) {
         expect(road.hours, `${site.name}`).toBeLessThanOrEqual(Math.round(7 * slow))

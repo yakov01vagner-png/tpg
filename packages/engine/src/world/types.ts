@@ -99,6 +99,13 @@ export function isSite(kind: PlaceKind): kind is SiteKind {
   return kind in SITE_LABELS
 }
 
+/**
+ * Пограничье вместо короны. Область с таким `kingdomId` не принадлежит никому:
+ * в `world.kingdoms` его нет нарочно, и всё, что спрашивает корону, честно
+ * отвечает «ничья».
+ */
+export const FRONTIER = 'frontier'
+
 export interface Kingdom {
   readonly id: string
   readonly name: string

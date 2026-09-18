@@ -339,7 +339,14 @@ function enemyPlaces(
   for (const [id, settlement] of Object.entries(settlements)) {
     if (settlement.population <= 0) continue
     const owner = settlement.owner
-    if (!owner || owner === band.lordId) continue
+    if (owner === band.lordId) continue
+    // Ничья земля — цель для всякого, и войны для этого не нужно: пограничье
+    // тем и живёт, что его всё время пробуют на зуб. Пока ничьё пропускали,
+    // марка была заповедником, в который никто не ходил.
+    if (!owner) {
+      found.push(id)
+      continue
+    }
     const side = sideOf(politics, owner)
     if (side === null) continue
     if (!hostileSides(politics, band.kingdomId ?? band.lordId, side)) continue

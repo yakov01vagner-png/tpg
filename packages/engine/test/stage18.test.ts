@@ -117,6 +117,9 @@ describe('до глуши можно дойти', () => {
 
   it('дорога в глушь ведёт к своим же соседям по провинции', () => {
     for (const site of sitesOf(world)) {
+      // Кроме заставы в марке: она нарочно смотрит в чужую корону, через неё
+      // и входят в соседнее королевство (этап 20).
+      if (site.provinceId.startsWith('march.')) continue
       for (const road of roadsFrom(world, site.id)) {
         expect(world.locations[road.to]?.provinceId).toBe(site.provinceId)
       }

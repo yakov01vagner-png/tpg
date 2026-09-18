@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { KINGDOM_BLUEPRINTS } from '../src/content/world'
+import { KINGDOM_BLUEPRINTS, MARCHES } from '../src/content/world'
 import { defaultStartLocationId, generateWorld } from '../src/world/generate'
 import { addressOf, hopsBetween, reachableFrom, roadsFrom } from '../src/world/queries'
-import { isSettlement } from '../src/world/types'
+import { FRONTIER, isSettlement } from '../src/world/types'
 import type { World } from '../src/world/types'
 
 const world = generateWorld(1)
@@ -36,7 +36,11 @@ describe('генерация мира', () => {
       `мир: ${Object.keys(world.kingdoms).length} королевств, ${counts.regions} областей, ` +
         `${counts.provinces} провинций, ${counts.locations} локаций`,
     )
-    expect(counts.regions).toBe(10)
+    // Десять областей корон плюс пять марок пограничья, которых не держит никто.
+    expect(counts.regions).toBe(10 + MARCHES.length)
+    expect(
+      Object.values(world.regions).filter((region) => region.kingdomId === FRONTIER).length,
+    ).toBe(MARCHES.length)
     expect(counts.provinces).toBeGreaterThanOrEqual(20)
     expect(counts.locations).toBeGreaterThanOrEqual(40)
   })
@@ -52,6 +56,12 @@ describe('генерация мира', () => {
       expect(listed, `${location.id} не числится в провинции`).toContain(location.id)
       const region = world.regions[province?.regionId ?? '']
       expect(region?.provinceIds).toContain(province?.id)
+      // У пограничья короны нет нарочно: марку не держит никто, и `kingdoms`
+      // о ней не знает — на этом и стоит вся её ничейность.
+      if (region?.kingdomId === FRONTIER) {
+        expect(world.kingdoms[FRONTIER]).toBeUndefined()
+        continue
+      }
       const kingdom = world.kingdoms[region?.kingdomId ?? '']
       expect(kingdom?.regionIds).toContain(region?.id)
     }
@@ -103,6 +113,19 @@ describe('дороги', () => {
     }
   })
 
+  it('в чужую корону идут через пограничье, а не из столицы в столицу', () => {
+    for (const march of MARCHES) {
+      const [first, second] = march.between
+      const hub = world.provinces[`march.${march.id}.p0`]?.locationIds[0] ?? ''
+      const fromCapital = world.kingdoms[first]?.capitalId ?? ''
+      const toCapital = world.kingdoms[second]?.capitalId ?? ''
+      // Прямой дороги между столицами больше нет: она шла мимо земли.
+      expect(roadsFrom(world, fromCapital).some((road) => road.to === toCapital)).toBe(false)
+      expect(roadsFrom(world, fromCapital).some((road) => road.to === hub)).toBe(true)
+      expect(hopsBetween(world, fromCapital, toCapital) ?? 0).toBeGreaterThan(1)
+    }
+  })
+
   it('делают соседние места ближе далёких', () => {
     // Внутри провинции ходьба занимает часы, между королевствами — сутки.
     // Соседом деревни теперь бывает брод или перевал: дорога идёт через землю,
@@ -119,9 +142,13 @@ describe('дороги', () => {
     expect(withinProvince.length).toBeGreaterThan(0)
     expect(Math.max(...withinProvince)).toBeLessThanOrEqual(13)
 
-    const capitals = Object.values(world.kingdoms).map((kingdom) => kingdom.capitalId)
-    const between = roadsFrom(world, capitals[0] ?? '').find((road) => road.to === capitals[1])
-    expect(between?.hours).toBeGreaterThanOrEqual(30)
+    // До чужой столицы теперь идут через марку, и один её отрезок сам по себе
+    // длиннее любой дороги внутри провинции.
+    const march = MARCHES[0]
+    const hub = world.provinces[`march.${march?.id}.p0`]?.locationIds[0] ?? ''
+    const fromCapital = world.kingdoms[march?.between[0] ?? '']?.capitalId ?? ''
+    const leg = roadsFrom(world, fromCapital).find((road) => road.to === hub)
+    expect(leg?.hours).toBeGreaterThanOrEqual(15)
   })
 
   it('держат дальние концы мира далеко друг от друга', () => {

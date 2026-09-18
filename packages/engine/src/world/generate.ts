@@ -4,6 +4,7 @@ import {
   IMPORT_RELIANCE,
   KINGDOM_BLUEPRINTS,
   type KingdomBlueprint,
+  MARCHES,
   NAME_QUALIFIERS,
   PROVINCE_NAMES,
   PROVINCE_PREFIXES,
@@ -14,7 +15,7 @@ import { landCapacityOf } from '../life'
 import type { Rng } from '../rng'
 import { createRng, nextFloat, nextInt } from '../rng'
 import { hopsBetween } from './queries'
-import { isSite } from './types'
+import { FRONTIER, isSite } from './types'
 import type {
   Kingdom,
   Location,
@@ -139,6 +140,79 @@ export function generateWorld(
     }
   }
 
+  // Пограничье кладётся после корон: ему нужны обе столицы, между которыми оно
+  // лежит, и оно нарочно не попадает ни в один `regionIds` — марку не держит
+  // никто (DESIGN.md, п.3.1.1).
+  for (const march of MARCHES) {
+    const [first, second] = march.between
+    if (!kingdoms[first] || !kingdoms[second]) continue
+    const regionId = `march.${march.id}`
+    const fertility = round2(roll.betweenFloat(TERRAIN_FERTILITY[march.terrain]))
+    const provinceIds: string[] = []
+
+    // Марка — полоса поперёк границы, а не точка на ней: две провинции, и в
+    // одной из них единственное вольное село. Одной провинции не хватало —
+    // пограничье читалось на карте пятном в две клетки.
+    for (const [side, provinceName] of march.provinceNames.entries()) {
+      const provinceId = `${regionId}.p${side}`
+      const locationIds: string[] = []
+      if (side === 0) {
+        const townId = `${provinceId}.l0`
+        locations[townId] = {
+          id: townId,
+          provinceId,
+          name: march.freeTown,
+          archetype: 'village',
+          terrain: march.terrain,
+          // Вольное село живёт проезжими, а не землёй: оно мельче деревни.
+          population: Math.max(
+            40,
+            Math.round(landCapacityOf('village', march.terrain, fertility) * 0.4),
+          ),
+        }
+        locationIds.push(townId)
+      }
+
+      // Застава при вольном селе стоит всегда: ничью землю всё равно сторожат.
+      const siteIds: string[] = []
+      const kinds: SiteKind[] =
+        side === 0
+          ? ['outpost', pickSite(roll, march.terrain)]
+          : [pickSite(roll, march.terrain), pickSite(roll, march.terrain), 'ruins']
+      for (const [index, kind] of kinds.entries()) {
+        const id = `${provinceId}.s${index}`
+        locations[id] = {
+          id,
+          provinceId,
+          name: names.forSite(kind),
+          archetype: kind,
+          terrain: march.terrain,
+          population: 0,
+        }
+        siteIds.push(id)
+      }
+
+      provinces[provinceId] = {
+        id: provinceId,
+        regionId,
+        name: provinceName,
+        terrain: march.terrain,
+        fertility,
+        locationIds,
+        siteIds,
+      }
+      provinceIds.push(provinceId)
+    }
+
+    regions[regionId] = {
+      id: regionId,
+      kingdomId: FRONTIER,
+      name: march.name,
+      terrain: march.terrain,
+      provinceIds,
+    }
+  }
+
   const roads = buildRoads(roll, { kingdoms, regions, provinces, locations })
   return { kingdoms, regions, provinces, locations, roads }
 }
@@ -243,12 +317,31 @@ function buildRoads(roll: Roller, world: Omit<World, 'roads'>): Record<string, r
     }
   }
 
-  // Королевства сшиваются через столицы: дорога между странами долгая.
-  const capitals = Object.values(world.kingdoms).map((kingdom) => kingdom.capitalId)
-  for (let i = 1; i < capitals.length; i += 1) {
-    const from = capitals[i - 1]
-    const to = capitals[i]
-    if (from && to) connect(from, to, roll.int(30, 50))
+  // Королевства сшиваются через пограничье, а не напрямую из столицы в
+  // столицу. Прямая дорога между странами была порталом: между ними не лежало
+  // ничего, и войско переходило границу, не касаясь земли.
+  for (const march of MARCHES) {
+    const [first, second] = march.between
+    const marchProvince = world.provinces[`march.${march.id}.p0`]
+    const hub = marchProvince?.locationIds[0]
+    const fromCapital = world.kingdoms[first]?.capitalId
+    const toCapital = world.kingdoms[second]?.capitalId
+    if (!hub || !fromCapital || !toCapital) continue
+    const gate = marchProvince?.siteIds[0]
+    connect(fromCapital, hub, roll.int(15, 24))
+    if (gate) {
+      // За вольным селом стоит застава: в чужую корону входят через неё.
+      connect(hub, gate, roll.int(3, 6))
+      connect(gate, toCapital, roll.int(13, 21))
+    } else {
+      connect(hub, toCapital, roll.int(15, 24))
+    }
+    // Всё прочее, что стоит в марке, висит отводом от вольного села: там
+    // некому строить тракт, но дойти можно до всего.
+    const far = world.provinces[`march.${march.id}.p1`]
+    for (const siteId of [...(marchProvince?.siteIds.slice(1) ?? []), ...(far?.siteIds ?? [])]) {
+      connect(hub, siteId, legHours(roll, world.locations, hub, siteId))
+    }
   }
 
   return roads

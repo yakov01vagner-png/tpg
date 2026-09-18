@@ -302,6 +302,69 @@ export const LORD_NAMES: readonly string[] = [
  * степи племён — на юго-востоке, а Ре-Эстиз посередине, потому что именно из
  * него игра начинается. Мир условно 1000 на 1000.
  */
+/**
+ * Пограничье: земля между коронами, которой не держит никто.
+ *
+ * До 0.3 королевства сшивались дорогой из столицы в столицу — и это был
+ * портал: между двумя странами не лежало ничего. Марка — провинция без короны
+ * и без лорда: через неё идёт дорога, по ней ходят войска, и её можно взять,
+ * потому что отнимать её не у кого.
+ */
+export interface MarchBlueprint {
+  readonly id: string
+  /** Имя марки: она же область на карте. */
+  readonly name: string
+  readonly provinceNames: readonly [string, string]
+  /** Между чьими столицами лежит. */
+  readonly between: readonly [string, string]
+  readonly terrain: Terrain
+  /** Единственное вольное село: живёт с проезжих и ничьих податей не платит. */
+  readonly freeTown: string
+}
+
+export const MARCHES: readonly MarchBlueprint[] = [
+  {
+    id: 'porubezhye',
+    name: 'Порубежье',
+    provinceNames: ['Спорное Поле', 'Ничейный Клин'],
+    between: ['reEstiz', 'robl'],
+    terrain: 'plains',
+    freeTown: 'Развилка',
+  },
+  {
+    id: 'wildField',
+    name: 'Дикое Поле',
+    provinceNames: ['Ковыльная Межа', 'Полынный Шлях'],
+    between: ['reEstiz', 'boharut'],
+    terrain: 'steppe',
+    freeTown: 'Торжок',
+  },
+  {
+    id: 'scree',
+    name: 'Предгорная Межа',
+    provinceNames: ['Ничья Осыпь', 'Щербатый Кряж'],
+    between: ['reEstiz', 'durHazad'],
+    terrain: 'hills',
+    freeTown: 'Рудный Стан',
+  },
+  {
+    id: 'mire',
+    name: 'Гнилая Межа',
+    provinceNames: ['Комариная Топь', 'Чёрная Старица'],
+    between: ['reEstiz', 'tribes'],
+    terrain: 'marsh',
+    freeTown: 'Гатище',
+  },
+  {
+    id: 'saltline',
+    name: 'Солёная Межа',
+    provinceNames: ['Сухая Балка', 'Солончак'],
+    between: ['boharut', 'tribes'],
+    terrain: 'steppe',
+    freeTown: 'Колодезь',
+  },
+]
+
 export const KINGDOM_CENTERS: Record<string, { readonly x: number; readonly y: number }> = {
   reEstiz: { x: 700, y: 700 },
   robl: { x: 270, y: 620 },

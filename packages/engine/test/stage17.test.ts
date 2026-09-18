@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { generateWorld } from '../src/world/generate'
 import { GRID_SIZE, worldGrid } from '../src/world/grid'
 import { MAP_SIZE, layoutOf, provinceCentersOf } from '../src/world/layout'
-import { isSettlement } from '../src/world/types'
+import { FRONTIER, isSettlement } from '../src/world/types'
 import type { World } from '../src/world/types'
 
 /**
@@ -16,6 +16,28 @@ const SEEDS = [1, 2, 3]
 
 function gridOf(world: World) {
   return worldGrid(world, MAP_SIZE)
+}
+
+/** Клетка и восемь вокруг: допуск на разрешение полотна. */
+function neighbourCells(grid: ReturnType<typeof gridOf>, column: number, row: number) {
+  const out: (ReturnType<typeof gridOf>['cells'][number] | undefined)[] = []
+  for (let dy = -1; dy <= 1; dy += 1) {
+    for (let dx = -1; dx <= 1; dx += 1) {
+      const x = column + dx
+      const y = row + dy
+      if (x < 0 || y < 0 || x >= GRID_SIZE || y >= GRID_SIZE) continue
+      out.push(grid.cells[y * GRID_SIZE + x])
+    }
+  }
+  return out
+}
+
+function around(
+  grid: ReturnType<typeof gridOf>,
+  column: number,
+  row: number,
+): (string | undefined)[] {
+  return neighbourCells(grid, column, row).map((cell) => cell?.provinceId)
 }
 
 describe('у провинции есть земля', () => {
@@ -42,7 +64,7 @@ describe('у провинции есть земля', () => {
       const column = Math.floor(point.x / grid.cell)
       const row = Math.floor(point.y / grid.cell)
       if (column < 0 || row < 0 || column >= GRID_SIZE || row >= GRID_SIZE) continue
-      expect(grid.cells[row * GRID_SIZE + column]?.provinceId).toBe(provinceId)
+      expect(around(grid, column, row), provinceId).toContain(provinceId)
     }
   })
 
@@ -57,16 +79,7 @@ describe('у провинции есть земля', () => {
         // Допуск в одну клетку — это разрешение полотна, а не ошибка земли:
         // клетка шире зазора между двумя местами, и её середина честно бывает
         // ближе к соседнему якорю, чем к тому месту, что в ней стоит.
-        const around: (string | undefined)[] = []
-        for (let dy = -1; dy <= 1; dy += 1) {
-          for (let dx = -1; dx <= 1; dx += 1) {
-            const x = column + dx
-            const y = row + dy
-            if (x < 0 || y < 0 || x >= GRID_SIZE || y >= GRID_SIZE) continue
-            around.push(grid.cells[y * GRID_SIZE + x]?.provinceId)
-          }
-        }
-        expect(around, `${locationId} на чужой земле`).toContain(
+        expect(around(grid, column, row), `${locationId} на чужой земле`).toContain(
           world.locations[locationId]?.provinceId,
         )
       }
@@ -102,13 +115,13 @@ describe('глушь между местами', () => {
       if (!isSettlement(world.locations[locationId]?.archetype ?? 'village')) continue
       const column = Math.min(GRID_SIZE - 1, Math.floor(point.x / grid.cell))
       const row = Math.min(GRID_SIZE - 1, Math.floor(point.y / grid.cell))
-      const cell = grid.cells[row * GRID_SIZE + column]
-      // Сама околица проверяется флагом, а не именем: клетка шире зазора между
-      // двумя соседними деревнями, и её середина честно бывает ближе к соседке.
-      expect(cell?.wilds, `${locationId} стоит в глуши`).toBe(false)
-      expect(world.locations[cell?.locationId ?? '']?.provinceId).toBe(
-        world.locations[locationId]?.provinceId,
+      // Околица проверяется по клетке и её соседям: клетка шире зазора между
+      // двумя местами, и её середина честно бывает ближе к чужому якорю.
+      const settled = neighbourCells(grid, column, row).some(
+        (cell) =>
+          cell?.wilds === false && cell.provinceId === world.locations[locationId]?.provinceId,
       )
+      expect(settled, `${locationId} стоит в глуши`).toBe(true)
     }
   })
 })
@@ -151,7 +164,9 @@ describe('материк, а не россыпь островов', () => {
       const crowns = new Set<string>()
       for (const index of reachable) {
         const cell = grid.cells[index]
-        if (cell) crowns.add(cell.kingdomId)
+        // Пограничье на материке тоже есть, но короной не считается: его
+        // не держит никто.
+        if (cell && cell.kingdomId !== FRONTIER) crowns.add(cell.kingdomId)
       }
       expect(crowns.size, `корон на материке, зерно ${seed}`).toBe(
         Object.keys(world.kingdoms).length,

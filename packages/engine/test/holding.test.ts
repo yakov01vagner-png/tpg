@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { createCharacter } from '../src/character'
 import { applyCommand } from '../src/commands'
 import { BUILDINGS } from '../src/content/buildings'
+import { MARCHES } from '../src/content/world'
 import { PLAYER, dailyTax, garrisonSize, hasBuilding, holdingsOf } from '../src/holding'
 import { foodSecurity, stockDays, tickDays } from '../src/life'
 import type { GameState } from '../src/state'
 import { createGame } from '../src/state'
 import { generateWorld } from '../src/world/generate'
+import { FRONTIER } from '../src/world/types'
 import type { LocationArchetype } from '../src/world/types'
 
 const world = generateWorld(1)
@@ -37,8 +39,18 @@ const ok = (result: ReturnType<typeof applyCommand>): GameState => {
 describe('земля роздана', () => {
   it('у каждого места есть держатель, а столицы за короной', () => {
     const base = createGame(createCharacter({ name: 'Тест' }), 1, world)
-    const ownerless = Object.values(base.settlements).filter((s) => s.owner === null)
+    // Кроме пограничья: марку не держит никто, в том и смысл. Вольное село в
+    // ней ничьё, и отнимать его не у кого — потому его и можно взять.
+    const ownerless = Object.values(base.settlements)
+      .filter((one) => one.owner === null)
+      .filter((one) => {
+        const provinceId = world.locations[one.locationId]?.provinceId ?? ''
+        const regionId = world.provinces[provinceId]?.regionId ?? ''
+        return world.regions[regionId]?.kingdomId !== FRONTIER
+      })
     expect(ownerless).toEqual([])
+    const free = Object.values(base.settlements).filter((one) => one.owner === null)
+    expect(free.length, 'вольных сёл в пограничье').toBe(MARCHES.length)
     for (const kingdom of Object.values(world.kingdoms)) {
       expect(base.settlements[kingdom.capitalId]?.owner).toBe(`crown:${kingdom.id}`)
     }

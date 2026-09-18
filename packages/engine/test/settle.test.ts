@@ -21,6 +21,9 @@ function someVillage(): string {
     .filter(
       (one) =>
         one.archetype === 'village' &&
+        // Провинция должна быть обитаемой не в одиночку: и выселок ставят
+        // соседи, и руины заселяют соседи, и городок мешает расти соседний.
+        (world.provinces[one.provinceId]?.locationIds ?? []).length >= 2 &&
         !(world.provinces[one.provinceId]?.locationIds ?? []).some((id) =>
           big.has(world.locations[id]?.archetype ?? ''),
         ),
@@ -132,7 +135,11 @@ describe('места основывают и бросают', () => {
       ...world,
       locations: Object.fromEntries(
         Object.entries(world.locations).map(([id, one]) =>
-          id !== village && one.provinceId === provinceId
+          // Городком становится соседнее поселение, а не курган: место без
+          // жителей в счёт провинции не идёт и расти никому не мешает.
+          id !== village &&
+          one.provinceId === provinceId &&
+          (world.provinces[provinceId]?.locationIds ?? []).includes(id)
             ? [id, { ...one, archetype: 'town' as const }]
             : [id, one],
         ),

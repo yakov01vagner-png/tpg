@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { generateWorld } from '../src/world/generate'
 import { GRID_SIZE, REGION_PALETTE, regionColors, worldGrid } from '../src/world/grid'
 import { MAP_SIZE, layoutOf } from '../src/world/layout'
+import { FRONTIER } from '../src/world/types'
 
 const world = generateWorld(1)
 const grid = worldGrid(world, MAP_SIZE)
@@ -27,17 +28,27 @@ describe('полотно мира клетками', () => {
     for (const [locationId, point] of Object.entries(points)) {
       const column = Math.min(GRID_SIZE - 1, Math.floor(point.x / grid.cell))
       const row = Math.min(GRID_SIZE - 1, Math.floor(point.y / grid.cell))
-      const cell = grid.cells[row * GRID_SIZE + column]
-      expect(cell).not.toBeNull()
-      const province = world.locations[locationId]?.provinceId
-      expect(cell?.provinceId).toBe(province)
+      expect(grid.cells[row * GRID_SIZE + column]).not.toBeNull()
+      // Допуск в одну клетку: полотно грубее, чем зазор между двумя местами,
+      // и середина клетки честно бывает ближе к чужому якорю (этап 17).
+      const nearby: (string | undefined)[] = []
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          const x = column + dx
+          const y = row + dy
+          if (x < 0 || y < 0 || x >= GRID_SIZE || y >= GRID_SIZE) continue
+          nearby.push(grid.cells[y * GRID_SIZE + x]?.provinceId)
+        }
+      }
+      expect(nearby, locationId).toContain(world.locations[locationId]?.provinceId)
     }
   })
 
   it('у каждого королевства есть земля, и ни одно не занимает весь мир', () => {
     const owned = new Map<string, number>()
     for (const cell of grid.cells) {
-      if (!cell) continue
+      // Пограничье на полотне есть, но короной не считается: его никто не держит.
+      if (!cell || cell.kingdomId === FRONTIER) continue
       owned.set(cell.kingdomId, (owned.get(cell.kingdomId) ?? 0) + 1)
     }
     expect(owned.size).toBe(Object.keys(world.kingdoms).length)

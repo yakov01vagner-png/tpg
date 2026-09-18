@@ -1,4 +1,4 @@
-import { KINGDOM_CENTERS } from '../content/world'
+import { KINGDOM_CENTERS, MARCHES } from '../content/world'
 import type { World } from './types'
 
 /**
@@ -16,6 +16,9 @@ export interface Point {
 }
 
 export const MAP_SIZE = 1400
+
+/** Насколько далеко половины марки расходятся вдоль границы. */
+const MARCH_SPAN = 62
 
 /** Устойчивый разброс: одно и то же место всегда оказывается в одной точке. */
 function jitter(seed: string, spread: number): Point {
@@ -73,6 +76,31 @@ export function provinceCentersOf(world: World): Readonly<Record<string, Point>>
     })
   }
 
+  // Пограничье ложится ровно между столицами тех корон, между которыми лежит.
+  // Оно и есть то, что между: у марки нет своего угла на карте, есть только
+  // промежуток.
+  for (const march of MARCHES) {
+    const [first, second] = march.between
+    const a = KINGDOM_CENTERS[first]
+    const b = KINGDOM_CENTERS[second]
+    if (!a || !b) continue
+    // Полоса ложится поперёк линии между столицами: марка — это то, что между,
+    // и вытянута она вдоль границы, а не вдоль дороги. Одной провинцией
+    // пограничье читалось на карте пятном в две клетки.
+    const middle = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+    const length = Math.max(1, Math.hypot(b.x - a.x, b.y - a.y))
+    const across = { x: -(b.y - a.y) / length, y: (b.x - a.x) / length }
+    for (const side of [0, 1]) {
+      const provinceId = `march.${march.id}.p${side}`
+      if (!world.provinces[provinceId]) continue
+      const shift = side === 0 ? -MARCH_SPAN : MARCH_SPAN
+      centers[provinceId] = {
+        x: middle.x + across.x * shift,
+        y: middle.y + across.y * shift,
+      }
+    }
+  }
+
   return centers
 }
 
@@ -81,40 +109,33 @@ export function layoutOf(world: World): Readonly<Record<string, Point>> {
   const taken: Point[] = []
   const centers = provinceCentersOf(world)
 
-  // Порядок обхода тот же, что и у центров: от него зависит, кого при тесноте
-  // отводят в сторону, а значит и вся раскладка.
-  for (const kingdom of Object.values(world.kingdoms)) {
-    for (const regionId of kingdom.regionIds) {
-      const region = world.regions[regionId]
-      if (!region) continue
+  // Обход идёт по всем провинциям сразу, а не по коронам: у пограничья короны
+  // нет, но места в нём есть, и раскладываются они по тому же правилу. Порядок
+  // обхода важен: от него зависит, кого при тесноте отводят в сторону.
+  for (const [provinceId, province] of Object.entries(world.provinces)) {
+    const provinceCenter = centers[provinceId]
+    if (!provinceCenter) continue
 
-      for (const provinceId of region.provinceIds) {
-        const province = world.provinces[provinceId]
-        const provinceCenter = centers[provinceId]
-        if (!province || !provinceCenter) continue
+    // Место стоит там, куда его кладёт собственное имя, — не там, где оно
+    // оказалось в списке. Пока положение считалось от номера в провинции,
+    // основание одной деревни двигало на карте все соседние: мир нельзя было
+    // пополнить, не перерисовав его целиком (DESIGN.md, п.3.1).
+    for (const locationId of province.locationIds) {
+      const spot = jitter(locationId, 40)
+      points[locationId] = separate(taken, {
+        x: clamp(provinceCenter.x + spot.x),
+        y: clamp(provinceCenter.y + spot.y),
+      })
+    }
 
-        // Места без жителей раскладываются вместе с поселениями и по тому же
-        // правилу, но дальше от середины: они и есть то, что лежит между.
-        for (const locationId of province.locationIds) {
-          // Место стоит там, куда его кладёт собственное имя, — не там, где оно
-          // оказалось в списке. Пока положение считалось от номера в провинции,
-          // основание одной деревни двигало на карте все соседние: мир нельзя
-          // было пополнить, не перерисовав его целиком (DESIGN.md, п.3.1).
-          const spot = jitter(locationId, 40)
-          points[locationId] = separate(taken, {
-            x: clamp(provinceCenter.x + spot.x),
-            y: clamp(provinceCenter.y + spot.y),
-          })
-        }
-
-        for (const siteId of province.siteIds ?? []) {
-          const spot = jitter(siteId, 52)
-          points[siteId] = separate(taken, {
-            x: clamp(provinceCenter.x + spot.x),
-            y: clamp(provinceCenter.y + spot.y),
-          })
-        }
-      }
+    // Места без жителей ложатся по тому же правилу, но дальше от середины:
+    // они и есть то, что лежит между.
+    for (const siteId of province.siteIds ?? []) {
+      const spot = jitter(siteId, 52)
+      points[siteId] = separate(taken, {
+        x: clamp(provinceCenter.x + spot.x),
+        y: clamp(provinceCenter.y + spot.y),
+      })
     }
   }
 
