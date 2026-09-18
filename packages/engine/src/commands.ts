@@ -107,7 +107,7 @@ import type { SkillId } from './skills'
 import { SKILLS } from './skills'
 import type { GameState } from './state'
 import { appendLog } from './state'
-import { DAYS_PER_YEAR } from './time'
+import { DAYS_PER_YEAR, timeOfDay } from './time'
 import type { GameTime } from './time'
 import type { TimeWindow } from './time'
 import {
@@ -128,7 +128,7 @@ import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
 import { kingdomOf, regionOf, roadsFrom } from './world/queries'
 import type { World } from './world/types'
-import { isSettlement, isSite } from './world/types'
+import { TERRAIN_LABELS, isSettlement, isSite } from './world/types'
 import { bedridden, defeatOutcome, healWound } from './wounds'
 
 /**
@@ -530,10 +530,23 @@ function turnBack(state: GameState): CommandResult {
  * Дорога идёт вместе с миром: сколько прошло времени, столько и прошли. Отсюда
  * же берутся усталость и навык — не разом на выходе, а по мере ходьбы.
  */
+/**
+ * Ночью идут медленнее.
+ *
+ * Не запрет, а цена: в темноте можно идти, но за час проходишь три пятых
+ * дневного. Вместе с ночной опасностью (`NIGHT_DANGER`) это и делает привал
+ * решением: встать лагерем до света или тащиться впотьмах.
+ */
+const NIGHT_PACE = 0.6
+
 function walk(draft: Draft, minutes: number): void {
   const journey = draft.journey
   if (!journey || minutes <= 0) return
-  const walked = Math.min(minutes / MINUTES_PER_HOUR, journeyLeft(journey))
+  const dark = timeOfDay(draft.base.time) === 'night'
+  const walked = Math.min(
+    (minutes / MINUTES_PER_HOUR) * (dark ? NIGHT_PACE : 1),
+    journeyLeft(journey),
+  )
   if (walked <= 0) return
   addFatigue(draft, travelFatigue(walked))
   practice(draft, 'athletics', walked * 2.5)
@@ -541,6 +554,13 @@ function walk(draft: Draft, minutes: number): void {
   const done = Math.round((journey.done + walked) * 100) / 100
   if (done < journey.hours) {
     draft.journey = { ...journey, done }
+    // Пока идём — дорога сама по себе: кто ждёт впереди и кто говорит рядом.
+    roadWatch(draft, journey)
+    roadTalk(draft)
+    // Опасность считается по часам на дороге, а не по пройденному: ночью и
+    // идёшь медленнее, и ждут чаще, поэтому ночной переход стоит вдвое дороже
+    // дневного при той же земле.
+    roadAmbush(draft, journey, minutes / MINUTES_PER_HOUR)
     return
   }
 
@@ -550,7 +570,25 @@ function walk(draft: Draft, minutes: number): void {
   const place = draft.world.locations[journey.toId]
   notice(draft, `Пришли: ${place?.name ?? 'место'}.`)
   roadTalk(draft)
-  ambush(draft, journey.toId)
+}
+
+/**
+ * Что видно с дороги.
+ *
+ * Войско на том конце отрезка видно заранее — это и есть разница между «идти» и
+ * «оказаться»: у мгновенного перемещения предупредить было некогда.
+ */
+function roadWatch(draft: Draft, journey: Journey): void {
+  if (journey.done > 0) return
+  const hosts = draft.bands.filter((band) => band.locationId === journey.toId && !band.travel)
+  const host = hosts[0]
+  if (!host) return
+  const where = draft.base.world.locations[journey.toId]?.name ?? 'впереди'
+  notice(
+    draft,
+    `Впереди на дороге войско: ${foeName(draft.base, host.lordId)} у ${where}.`,
+    'world',
+  )
 }
 
 /** Сколько народу «водится» в глуши: у места без жителей своего населения нет. */
@@ -563,19 +601,59 @@ const WILD_PARTY = 500
  * следствие экономики, а не случайное событие по таймеру. Одиночку не убивают,
  * а обирают: драться с ним незачем.
  */
-function ambush(draft: Draft, locationId: string): void {
+/**
+ * Насколько опасна земля места: разбой округи и дурная слава самой глуши.
+ *
+ * Опасность пути — свойство земли, а не только разбойной округи. Пока она
+ * считалась по разбою места назначения, в урочище и на перевале не могло
+ * случиться ничего: поселения там нет, а значит нет и разбоя.
+ */
+function dangerAt(draft: Draft, locationId: string): number {
   const here = draft.base.world.locations[locationId]
-  if (!here) return
-  const settlement = draft.settlements[locationId]
-  // Опасность пути — свойство земли, а не только разбойной округи. Пока она
-  // считалась по разбою места назначения, в урочище и на перевале не могло
-  // случиться ничего: поселения там нет, а значит нет и разбоя.
-  const banditry = settlement?.banditry ?? 0
+  if (!here) return 0
+  const banditry = draft.settlements[locationId]?.banditry ?? 0
   const wild = isSite(here.archetype) ? SITES[here.archetype].danger : 0
-  const risk = Math.min(0.45, 0.02 + banditry * 0.5 + wild * 0.3)
+  return Math.min(0.45, 0.02 + banditry * 0.5 + wild * 0.3)
+}
+
+/**
+ * Встреча на отрезке пути.
+ *
+ * Засада случается **на дороге**, а не в точке прибытия: земля отрезка — это
+ * оба его конца, и хуже тот, что хуже. Считается на каждый час пути, поэтому
+ * долгая дорога и правда опаснее короткой, а ночь опаснее дня — в темноте на
+ * тракте ждут чаще.
+ */
+const NIGHT_DANGER = 1.6
+/** За сколько часов пути набирается опасность целого отрезка старого мира. */
+const AMBUSH_SPAN = 4
+
+function roadAmbush(draft: Draft, journey: Journey, hoursOnRoad: number): void {
+  if (hoursOnRoad <= 0) return
+  const ahead = dangerAt(draft, journey.toId)
+  const behind = dangerAt(draft, journey.fromId)
+  const land = Math.max(ahead, behind)
+  const night = timeOfDay(draft.time) === 'night' ? NIGHT_DANGER : 1
+  const risk = Math.min(0.5, (land / AMBUSH_SPAN) * hoursOnRoad * night)
   const [meets, afterMeet] = rollChance(draft.rng, risk)
   draft.rng = afterMeet
   if (!meets) return
+  // Ждут там, где хуже: у того конца отрезка, чья земля опаснее.
+  ambush(draft, ahead >= behind ? journey.toId : journey.fromId, true)
+}
+
+function ambush(draft: Draft, locationId: string, onTheRoad = false): void {
+  const here = draft.base.world.locations[locationId]
+  if (!here) return
+  const settlement = draft.settlements[locationId]
+  const banditry = settlement?.banditry ?? 0
+  const wild = isSite(here.archetype) ? SITES[here.archetype].danger : 0
+  if (!onTheRoad) {
+    const risk = Math.min(0.45, 0.02 + banditry * 0.5 + wild * 0.3)
+    const [meets, afterMeet] = rollChance(draft.rng, risk)
+    draft.rng = afterMeet
+    if (!meets) return
+  }
 
   const terrain = here.terrain
   const lurking = Math.max(banditry, wild)
@@ -584,7 +662,12 @@ function ambush(draft: Draft, locationId: string): void {
     const [band, afterBand] = banditBand(lurking, around, draft.rng)
     draft.rng = afterBand
     draft.battle = startBattle(draft.party, band, terrain, { foeId: 'bandits' })
-    notice(draft, 'На дороге ждали: разбойники.')
+    notice(
+      draft,
+      onTheRoad
+        ? `На дороге ждали: разбойники. ${TERRAIN_LABELS[terrain]} — хорошее место для засады.`
+        : 'На дороге ждали: разбойники.',
+    )
     return
   }
 

@@ -557,6 +557,7 @@ function OnTheRoad({
           />
         </View>
         {wild ? <Dim>{wild.description}</Dim> : null}
+        <RoadState game={game} />
       </View>
 
       <Section title="Что делают в пути">
@@ -584,6 +585,41 @@ function OnTheRoad({
         />
       </Section>
     </ScrollView>
+  )
+}
+
+/**
+ * Каково на дороге прямо сейчас.
+ *
+ * Ночью идут медленнее и нарываются чаще; дурная слава земли впереди — это то,
+ * ради чего стоит встать лагерем до света.
+ */
+function RoadState({ game }: { game: GameState }) {
+  const journey = game.journey
+  if (!journey) return null
+  const dark = timeOfDay(game.time) === 'night'
+  const to = game.world.locations[journey.toId]
+  const wild = to && isSite(to.archetype) ? SITES[to.archetype] : null
+  const banditry = game.settlements[journey.toId]?.banditry ?? 0
+  const parts: { text: string; tone: 'warn' | 'danger' }[] = []
+  if (dark) parts.push({ text: 'ночь: идёшь медленнее', tone: 'warn' })
+  if (banditry > 0.4) parts.push({ text: 'впереди разбой', tone: 'danger' })
+  if ((wild?.danger ?? 0) >= 0.35) parts.push({ text: 'недоброе место', tone: 'danger' })
+  if (parts.length === 0) return null
+  return (
+    <View style={styles.state}>
+      {parts.map((part) => (
+        <Text
+          key={part.text}
+          style={[
+            styles.stateWord,
+            { color: part.tone === 'danger' ? palette.danger : palette.warn },
+          ]}
+        >
+          {part.text}
+        </Text>
+      ))}
+    </View>
   )
 }
 
