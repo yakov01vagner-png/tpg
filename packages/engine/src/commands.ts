@@ -123,6 +123,7 @@ import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
 import { kingdomOf, regionOf, roadsFrom } from './world/queries'
 import type { World } from './world/types'
+import { isSettlement } from './world/types'
 import { bedridden, defeatOutcome, healWound } from './wounds'
 
 /**
@@ -519,7 +520,11 @@ function hire(state: GameState, troop: TroopId, count: number): CommandResult {
   const here = state.world.locations[state.locationId]
   const settlement = state.settlements[state.locationId]
   if (!here || !settlement) return fail('invalid', 'Непонятно, где находится герой.')
-  if (!def.where.includes(here.archetype) || settlement.population < def.minPopulation) {
+  if (
+    !isSettlement(here.archetype) ||
+    !def.where.includes(here.archetype) ||
+    settlement.population < def.minPopulation
+  ) {
     return fail('unavailableHere', `${def.label} здесь не найдёшь.`)
   }
   if (settlement.recruits < count) {
@@ -881,7 +886,7 @@ function build(state: GameState, building: BuildingId): CommandResult {
   const here = state.world.locations[state.locationId]
   if (!settlement || !here) return fail('invalid', 'Непонятно, где находится герой.')
   if (!isOwnedByPlayer(settlement)) return fail('notYours', 'Это не твоя земля.')
-  if (def.where && !def.where.includes(here.archetype)) {
+  if (!isSettlement(here.archetype) || (def.where && !def.where.includes(here.archetype))) {
     return fail('unavailableHere', 'В таком месте это не построишь.')
   }
   if (hasBuilding(settlement, building)) return fail('invalid', 'Уже стоит.')
@@ -1105,7 +1110,7 @@ function buyItem(state: GameState, itemId: string): CommandResult {
   if (!item) return fail('unknownAction', 'Такого не продают.')
   const here = state.world.locations[state.locationId]
   if (!here) return fail('invalid', 'Непонятно, где находится герой.')
-  if (!item.where.includes(here.archetype)) {
+  if (!isSettlement(here.archetype) || !item.where.includes(here.archetype)) {
     return fail('unavailableHere', 'Здесь такого не делают и не возят.')
   }
   // Именную вещь делают в одной короне и за её пределы не возят.

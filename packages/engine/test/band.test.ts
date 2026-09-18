@@ -145,7 +145,9 @@ describe('война, у которой есть последствия', () => 
       `за 20 лет войн: население ${was} → ${now}, живых мест ${alive}, корон ${crowns.size}`,
     )
     expect(now).toBeGreaterThan(was * 0.5)
-    expect(alive).toBeGreaterThan(Object.keys(world.locations).length * 0.8)
+    // Считаем от поселений, а не от всех мест карты: половина мест — перевалы
+    // и курганы, жителей в них не бывает и не должно быть.
+    expect(alive).toBeGreaterThan(Object.keys(before).length * 0.8)
     expect(crowns.size).toBeGreaterThanOrEqual(3)
   })
 

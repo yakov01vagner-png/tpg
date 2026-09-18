@@ -139,6 +139,18 @@ export type IconName =
   | 'rest'
   | 'wound'
   | 'captive'
+  // --- места без жителей ----------------------------------------------------
+  | 'pass'
+  | 'ford'
+  | 'crossing'
+  | 'grove'
+  | 'wilds'
+  | 'barrow'
+  | 'outpost'
+  | 'quarry'
+  | 'shrine'
+  | 'spring'
+  | 'causeway'
 
 type Glyph = (c: string, f: string) => ReactNode
 const W = 1.7
@@ -745,6 +757,80 @@ const GLYPHS: Record<IconName, Glyph> = {
     <>
       <Path d="M4 20v-6h3v-4h3v6h4v-8h3v4h3v8z" {...s(c)} />
       <Path d="M3 20h18M9 6l2-3 2 3" {...s(c)} />
+    </>
+  ),
+  // --- места без жителей: то, что лежит между деревнями ---------------------
+  pass: (c) => (
+    <>
+      <Path d="M2 20l7-12 4 7 3-5 6 10z" {...s(c)} />
+      <Path d="M9 8l-2 4h4z" {...s(c)} />
+    </>
+  ),
+  ford: (c) => (
+    <>
+      <Path d="M2 10h20M2 15h20" {...s(c)} />
+      <Path d="M7 6v13M13 6v13M18 8v9" {...s(c)} strokeDasharray="2 3" />
+    </>
+  ),
+  crossing: (c, f) => (
+    <>
+      <Path d="M2 16h20" {...s(c)} />
+      <Path d="M6 16l1-4h10l1 4z" {...s(c)} fill={f} />
+      <Path d="M12 12V4M12 6h6" {...s(c)} />
+    </>
+  ),
+  grove: (c, f) => (
+    <>
+      <Path d="M8 19l-4-6h2.5L4 8h2.5L8 4l1.5 4H12L9.5 13H12z" {...s(c)} fill={f} />
+      <Path d="M17 19l-3-4.5h2L14 11h1.7L17 8l1.3 3H20l-2 3.5h2z" {...s(c)} />
+      <Path d="M8 19v2M17 19v2" {...s(c)} />
+    </>
+  ),
+  wilds: (c) => (
+    <>
+      <Path
+        d="M3 20c2-3 3-6 2-9M9 20c-1-5 0-9 2-12M15 20c1-4 1-8-1-11M21 20c-2-3-3-6-2-9"
+        {...s(c)}
+      />
+      <Path d="M2 20h20" {...s(c)} />
+    </>
+  ),
+  barrow: (c, f) => (
+    <>
+      <Path d="M3 19a9 6 0 0118 0z" {...s(c)} fill={f} />
+      <Path d="M12 13V7M9 9h6M2 19h20" {...s(c)} />
+    </>
+  ),
+  outpost: (c, f) => (
+    <>
+      <Path d="M7 20v-9l5-4 5 4v9z" {...s(c)} fill={f} />
+      <Path d="M2 14h5M17 14h5M12 7V3" {...s(c)} />
+    </>
+  ),
+  quarry: (c) => (
+    <>
+      <Path d="M2 20l5-7h6l4 7z" {...s(c)} />
+      <Path d="M8 13l3-5 4 3" {...s(c)} />
+      <Path d="M16 5l4 4M18 3l3 3" {...s(c)} />
+    </>
+  ),
+  shrine: (c, f) => (
+    <>
+      <Path d="M8 20V9l4-5 4 5v11z" {...s(c)} fill={f} />
+      <Path d="M12 4V1M10 12h4M6 20h12" {...s(c)} />
+    </>
+  ),
+  spring: (c) => (
+    <>
+      <Path d="M12 3s5 6 5 9a5 5 0 01-10 0c0-3 5-9 5-9z" {...s(c)} />
+      <Path d="M4 20h16M10 12c0 2 1 3 2 3" {...s(c)} />
+    </>
+  ),
+  causeway: (c) => (
+    <>
+      <Path d="M2 9h20M2 15h20" {...s(c)} />
+      <Path d="M5 9v6M9 9v6M13 9v6M17 9v6M21 9v6" {...s(c)} />
+      <Path d="M2 5c3 2 5-2 8 0s5-2 8 0" {...s(c)} strokeDasharray="3 2" />
     </>
   ),
   war: (c) => (

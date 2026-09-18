@@ -1,5 +1,6 @@
 import { layoutOf, provinceCentersOf } from './layout'
 import type { Terrain, World } from './types'
+import { isSettlement } from './types'
 
 /**
  * Полотно мира клетками.
@@ -92,11 +93,14 @@ export function worldGrid(world: World, mapSize: number, reach: number = REACH):
     if (provinceId) pushAnchor(point, provinceId)
   }
 
-  // Места по провинциям: внутри своей земли ищем ближайшее, чтобы знать округу.
+  // Поселения по провинциям: внутри своей земли ищем ближайшее, чтобы знать
+  // округу. Места без жителей сюда не идут: они держат землю, но не околицу —
+  // возле кургана люди не живут, и глушь вокруг него остаётся глушью.
   const settled = new Map<string, { ids: string[]; xs: number[]; ys: number[] }>()
   for (const [locationId, point] of Object.entries(points)) {
-    const provinceId = world.locations[locationId]?.provinceId
-    if (!provinceId) continue
+    const location = world.locations[locationId]
+    const provinceId = location?.provinceId
+    if (!provinceId || !location || !isSettlement(location.archetype)) continue
     const group = settled.get(provinceId) ?? { ids: [], xs: [], ys: [] }
     group.ids.push(locationId)
     group.xs.push(point.x)
@@ -110,11 +114,15 @@ export function worldGrid(world: World, mapSize: number, reach: number = REACH):
     const cy = (row + 0.5) * cell
     for (let column = 0; column < GRID_SIZE; column += 1) {
       const cx = (column + 0.5) * cell
+      // Сравниваем квадраты: корень на каждую пару «клетка — якорь» стоил
+      // тридцати миллисекунд на открытие карты, а порядок не меняет.
       const limit = reach * wobble(column, row)
       let best = -1
-      let bestDistance = limit
+      let bestDistance = limit * limit
       for (let i = 0; i < anchorX.length; i += 1) {
-        const distance = Math.hypot((anchorX[i] ?? 0) - cx, (anchorY[i] ?? 0) - cy)
+        const dx = (anchorX[i] ?? 0) - cx
+        const dy = (anchorY[i] ?? 0) - cy
+        const distance = dx * dx + dy * dy
         if (distance < bestDistance) {
           bestDistance = distance
           best = i
@@ -140,13 +148,19 @@ export function worldGrid(world: World, mapSize: number, reach: number = REACH):
       let nearest: string | null = null
       let nearestDistance = Number.POSITIVE_INFINITY
       for (let i = 0; i < (group?.ids.length ?? 0); i += 1) {
-        const distance = Math.hypot((group?.xs[i] ?? 0) - cx, (group?.ys[i] ?? 0) - cy)
+        const dx = (group?.xs[i] ?? 0) - cx
+        const dy = (group?.ys[i] ?? 0) - cy
+        const distance = dx * dx + dy * dy
         if (distance < nearestDistance) {
           nearestDistance = distance
           nearest = group?.ids[i] ?? null
         }
       }
-      cells.push({ ...land, locationId: nearest, wilds: nearestDistance > SETTLED_REACH })
+      cells.push({
+        ...land,
+        locationId: nearest,
+        wilds: nearestDistance > SETTLED_REACH * SETTLED_REACH,
+      })
     }
   }
 

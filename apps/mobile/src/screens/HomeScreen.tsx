@@ -1,9 +1,11 @@
 import {
-  ARCHETYPE_LABELS,
   BUILDINGS,
   type Command,
   type GameState,
+  PLACE_LABELS,
+  SITES,
   TERRAIN_LABELS,
+  addressOf,
   canApply,
   companionsAt,
   coursesAt,
@@ -14,6 +16,7 @@ import {
   formatDuration,
   hours,
   isOwnedByPlayer,
+  isSite,
   jobsAt,
   kingdomOf,
   lordById,
@@ -104,6 +107,12 @@ export function HomeScreen({ game }: { game: GameState }) {
   if (settlement?.building) {
     happening.push({ text: `Стройка: осталось ${settlement.building.daysLeft} сут.`, tone: 'info' })
   }
+  // Место без жителей: здесь не торгуют и не нанимаются, зато здесь можно
+  // оказаться — и это надо сказать словами, а не пустыми плитками.
+  const site = here && isSite(here.archetype) ? here.archetype : null
+  if (site && SITES[site].danger >= 0.35) {
+    happening.push({ text: 'Место недоброе: здесь ходят с оглядкой', tone: 'warn' })
+  }
   const wound = game.character.wound
   if (wound) {
     happening.push({
@@ -155,12 +164,15 @@ export function HomeScreen({ game }: { game: GameState }) {
         <View style={styles.sceneKind}>
           <Icon name={here?.archetype ?? 'village'} size={18} color={palette.faint} />
           <Icon name={here?.terrain ?? 'plains'} size={18} color={palette.faint} />
-          <Faint>{`${ARCHETYPE_LABELS[here?.archetype ?? 'village'].toUpperCase()} · ${TERRAIN_LABELS[here?.terrain ?? 'plains']}`}</Faint>
+          <Faint>{`${PLACE_LABELS[here?.archetype ?? 'village'].toUpperCase()} · ${TERRAIN_LABELS[here?.terrain ?? 'plains']}`}</Faint>
         </View>
         <Title>{here?.name ?? '…'}</Title>
         <Dim>
-          {`${people > 0 ? `${formatPopulation(people)} жителей` : 'заброшено'} · ${ownerName(game, settlement?.owner ?? null)}`}
+          {settlement
+            ? `${people > 0 ? `${formatPopulation(people)} жителей` : 'заброшено'} · ${ownerName(game, settlement.owner)}`
+            : `${addressOf(game.world, game.locationId)}`}
         </Dim>
+        {site ? <Dim>{SITES[site].description}</Dim> : null}
         <StateLine game={game} />
         {settlement && settlement.buildings.length > 0 ? (
           <View style={styles.built}>
@@ -260,68 +272,79 @@ export function HomeScreen({ game }: { game: GameState }) {
         </Chips>
       </Section>
 
-      <Tiles>
-        <Tile
-          glyph={<Icon name="earn" size={22} color={palette.gold} />}
-          title="Заработать"
-          subtitle={`${jobs} ${plural(jobs, 'работа', 'работы', 'работ')}${offers > 0 ? ` · ${offers} ${plural(offers, 'поручение', 'поручения', 'поручений')}` : ''}`}
-          count={jobs + offers}
-          onPress={() => openSheet('earn')}
-          tone="gold"
-        />
-        <Tile
-          glyph={<Icon name="learn" size={22} color={palette.good} />}
-          title="Научиться"
-          subtitle={lessons > 0 ? 'Наставники и испытания' : 'Учиться здесь не у кого'}
-          count={lessons}
-          onPress={() => openSheet('learn')}
-          tone="good"
-        />
-        <Tile
-          glyph={<Icon name="market" size={22} color={palette.gold} />}
-          title="Рынок"
-          subtitle={people > 0 ? 'Товары, снаряжение, починка' : 'Торговать не с кем'}
-          count={people > 0 ? 1 : 0}
-          onPress={() => openSheet('market')}
-          tone="gold"
-        />
-        <Tile
-          glyph={
-            <Icon
-              name={hosts.length > 0 ? 'army' : 'people'}
-              size={22}
-              color={hosts.length > 0 ? palette.danger : palette.info}
-            />
-          }
-          title="Люди"
-          subtitle={
-            hosts.length > 0
-              ? `Войско у ворот: ${hosts.length}`
-              : companions > 0
-                ? `Есть кого позвать: ${companions}`
-                : matches > 0
-                  ? 'Здесь сидит дом лорда'
-                  : 'Отряд и спутники'
-          }
-          count={1}
-          onPress={() => openSheet('people')}
-          tone={hosts.length > 0 ? 'danger' : 'info'}
-        />
-        <Tile
-          glyph={
-            <Icon
-              name={mine ? 'home' : besieging ? 'siege' : 'own'}
-              size={22}
-              color={palette.info}
-            />
-          }
-          title={ownTitle}
-          subtitle={ownSubtitle}
-          count={1}
-          onPress={() => openSheet('own')}
-          tone="info"
-        />
-      </Tiles>
+      {settlement ? null : (
+        <Section title="Что здесь есть">
+          <Dim>
+            Ни торга, ни работы, ни наставника: людей тут не живёт. Отсюда можно идти дальше, а
+            можно встать на ночь.
+          </Dim>
+        </Section>
+      )}
+
+      {settlement ? (
+        <Tiles>
+          <Tile
+            glyph={<Icon name="earn" size={22} color={palette.gold} />}
+            title="Заработать"
+            subtitle={`${jobs} ${plural(jobs, 'работа', 'работы', 'работ')}${offers > 0 ? ` · ${offers} ${plural(offers, 'поручение', 'поручения', 'поручений')}` : ''}`}
+            count={jobs + offers}
+            onPress={() => openSheet('earn')}
+            tone="gold"
+          />
+          <Tile
+            glyph={<Icon name="learn" size={22} color={palette.good} />}
+            title="Научиться"
+            subtitle={lessons > 0 ? 'Наставники и испытания' : 'Учиться здесь не у кого'}
+            count={lessons}
+            onPress={() => openSheet('learn')}
+            tone="good"
+          />
+          <Tile
+            glyph={<Icon name="market" size={22} color={palette.gold} />}
+            title="Рынок"
+            subtitle={people > 0 ? 'Товары, снаряжение, починка' : 'Торговать не с кем'}
+            count={people > 0 ? 1 : 0}
+            onPress={() => openSheet('market')}
+            tone="gold"
+          />
+          <Tile
+            glyph={
+              <Icon
+                name={hosts.length > 0 ? 'army' : 'people'}
+                size={22}
+                color={hosts.length > 0 ? palette.danger : palette.info}
+              />
+            }
+            title="Люди"
+            subtitle={
+              hosts.length > 0
+                ? `Войско у ворот: ${hosts.length}`
+                : companions > 0
+                  ? `Есть кого позвать: ${companions}`
+                  : matches > 0
+                    ? 'Здесь сидит дом лорда'
+                    : 'Отряд и спутники'
+            }
+            count={1}
+            onPress={() => openSheet('people')}
+            tone={hosts.length > 0 ? 'danger' : 'info'}
+          />
+          <Tile
+            glyph={
+              <Icon
+                name={mine ? 'home' : besieging ? 'siege' : 'own'}
+                size={22}
+                color={palette.info}
+              />
+            }
+            title={ownTitle}
+            subtitle={ownSubtitle}
+            count={1}
+            onPress={() => openSheet('own')}
+            tone="info"
+          />
+        </Tiles>
+      ) : null}
 
       <Section title="Отдых">
         <Chips>

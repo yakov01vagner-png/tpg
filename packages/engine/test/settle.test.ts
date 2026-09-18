@@ -14,13 +14,22 @@ const start = createSettlements(world)
 /** Деревня в провинции, где нет городка: только такая и может перерасти. */
 function someVillage(): string {
   const big = new Set(['town', 'city', 'capital', 'port'])
-  const found = Object.values(world.locations).find(
-    (one) =>
-      one.archetype === 'village' &&
-      !(world.provinces[one.provinceId]?.locationIds ?? []).some((id) =>
-        big.has(world.locations[id]?.archetype ?? ''),
-      ),
-  )
+  // Из подходящих берём ту, что на самой доброй земле. Выселок ставят с
+  // вероятностью в долю плодородия: на топях с их 0.15 ждать его можно век,
+  // и тест мерил бы удачу броска, а не правило.
+  const found = Object.values(world.locations)
+    .filter(
+      (one) =>
+        one.archetype === 'village' &&
+        !(world.provinces[one.provinceId]?.locationIds ?? []).some((id) =>
+          big.has(world.locations[id]?.archetype ?? ''),
+        ),
+    )
+    .sort(
+      (a, b) =>
+        (world.provinces[b.provinceId]?.fertility ?? 0) -
+        (world.provinces[a.provinceId]?.fertility ?? 0),
+    )[0]
   if (!found) throw new Error('нет деревни в провинции без городка')
   return found.id
 }
@@ -71,7 +80,16 @@ describe('места основывают и бросают', () => {
     const village = someVillage()
     const provinceId = world.locations[village]?.provinceId as string
     const before = world.provinces[provinceId]?.locationIds ?? []
+    // Выселок ставят не от тесноты, а от людного соседа: правило требует
+    // двух с половиной тысяч человек в провинции, а не просто полного места.
     let places = crowded(village, 6)
+    const packed = places[village]
+    if (packed) {
+      places = {
+        ...places,
+        [village]: { ...packed, population: Math.max(packed.population, 3000) },
+      }
+    }
     let current = world
     let rng = createRng(2)
     let founded: string | null = null

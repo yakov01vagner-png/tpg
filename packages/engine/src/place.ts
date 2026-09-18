@@ -3,6 +3,7 @@ import { CONTENT } from './content'
 import type { Availability } from './content/availability'
 import type { GameState } from './state'
 import type { Location } from './world/types'
+import { isSettlement } from './world/types'
 
 /**
  * Что можно делать в конкретном месте.
@@ -16,6 +17,12 @@ export function isAvailableAt(
   location: Location,
   population = location.population,
 ): boolean {
+  // Дело без людей не делается: на перевале нет ни конюшен, ни наставника, ни
+  // ярмарки. Поэтому в месте без жителей не бывает ничего, пока это место не
+  // названо прямо — тогда и дело там появится (этап 21).
+  if (!isSettlement(location.archetype)) {
+    return where?.archetypes?.includes(location.archetype) ?? false
+  }
   if (!where) return true
   if (where.archetypes && !where.archetypes.includes(location.archetype)) return false
   if (where.terrains && !where.terrains.includes(location.terrain)) return false

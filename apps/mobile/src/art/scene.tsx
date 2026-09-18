@@ -1,4 +1,5 @@
-import type { LocationArchetype, TimeOfDay } from '@tpg/engine'
+import type { LocationArchetype, PlaceKind, SiteKind, TimeOfDay } from '@tpg/engine'
+import { isSettlement } from '@tpg/engine'
 import Svg, { Circle, Path, Rect } from 'react-native-svg'
 
 /**
@@ -32,7 +33,7 @@ export function Scene({
   width,
   height = 96,
 }: {
-  archetype: LocationArchetype
+  archetype: PlaceKind
   timeOfDay: TimeOfDay
   width: number
   height?: number
@@ -57,12 +58,15 @@ export function Scene({
       ) : null}
       <Rect x="0" y="70" width="200" height="26" fill={ground} />
       {silhouette(archetype, dark)}
-      {night ? windows(archetype) : null}
+      {night && isSettlement(archetype) ? windows(archetype) : null}
     </Svg>
   )
 }
 
-function silhouette(archetype: LocationArchetype, fill: string) {
+function silhouette(archetype: PlaceKind, fill: string) {
+  // Место без жителей рисуется землёй, а не крышами: домов там нет, и ночью в
+  // нём не горит ни одно окно.
+  if (!isSettlement(archetype)) return wild(archetype, fill)
   switch (archetype) {
     case 'capital':
       return (
@@ -127,6 +131,33 @@ function silhouette(archetype: LocationArchetype, fill: string) {
         />
       )
   }
+}
+
+/**
+ * Силуэт места без жителей: гребень, вода или лес — смотря что это за место.
+ * Четыре очертания на двенадцать видов: сцена — настроение, а не чертёж.
+ */
+function wild(kind: SiteKind, fill: string) {
+  if (kind === 'pass' || kind === 'quarry') {
+    return <Path d="M0 96V60l26-28 18 22 14-16 22 30 16-12 28 32 30-26 26 34z" fill={fill} />
+  }
+  if (kind === 'ford' || kind === 'crossing' || kind === 'causeway') {
+    return (
+      <>
+        <Path d="M0 96V78h200v18z" fill={fill} />
+        <Path d="M0 74h200v4H0z" fill={fill} fillOpacity={0.45} />
+      </>
+    )
+  }
+  if (kind === 'grove' || kind === 'wilds') {
+    return (
+      <Path
+        d="M0 96V80l14-22 10 14 12-20 12 20 10-14 14 22 12-18 12 18 14-22 10 14 12-20 12 20 10-14 14 22z"
+        fill={fill}
+      />
+    )
+  }
+  return <Path d="M0 96V82c30-16 52-18 74-6 18 10 36 8 54-4 22-14 44-12 72 6v18z" fill={fill} />
 }
 
 function windows(archetype: LocationArchetype) {

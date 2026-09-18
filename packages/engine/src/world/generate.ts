@@ -1,3 +1,4 @@
+import { SITES, SITE_EPITHETS, sitesFor } from '../content/sites'
 import {
   ARCHETYPE_NAMES,
   IMPORT_RELIANCE,
@@ -20,6 +21,7 @@ import type {
   Province,
   Region,
   Road,
+  SiteKind,
   Terrain,
   World,
 } from './types'
@@ -86,6 +88,25 @@ export function generateWorld(
           locationIds.push(id)
         }
 
+        // Места без жителей: то, что лежит между деревнями. Их вид выбирается
+        // по земле провинции — гать бывает только в топях, перевал только в
+        // горах, — поэтому провинция читается ещё и по тому, что в ней стоит.
+        const siteIds: string[] = []
+        const siteCount = roll.int(2, 3)
+        for (let siteIndex = 0; siteIndex < siteCount; siteIndex += 1) {
+          const kind = pickSite(roll, terrain)
+          const id = `${provinceId}.s${siteIndex}`
+          locations[id] = {
+            id,
+            provinceId,
+            name: names.forSite(kind),
+            archetype: kind,
+            terrain,
+            population: 0,
+          }
+          siteIds.push(id)
+        }
+
         provinces[provinceId] = {
           id: provinceId,
           regionId,
@@ -93,6 +114,7 @@ export function generateWorld(
           terrain,
           fertility,
           locationIds,
+          siteIds,
         }
         provinceIds.push(provinceId)
       }
@@ -169,6 +191,19 @@ function buildRoads(roll: Roller, world: Omit<World, 'roads'>): Record<string, r
         if (ends.length >= 3 && firstInProvince && lastInProvince && roll.chance(0.6)) {
           connect(lastInProvince, firstInProvince, roll.int(4, 9))
         }
+
+        // Места без жителей встают на дорогу между своими же поселениями:
+        // иначе перевал на карте есть, а дойти до него нельзя. Дорога через
+        // такое место длиннее прямой — это его свойство, не дороги.
+        const kin = province.locationIds
+        province.siteIds.forEach((siteId, siteIndex) => {
+          if (kin.length === 0) return
+          const first = kin[siteIndex % kin.length]
+          const second = kin[(siteIndex + 1) % kin.length]
+          const hours = roll.int(2, 5)
+          if (first) connect(first, siteId, hours)
+          if (second && second !== first) connect(siteId, second, roll.int(2, 5))
+        })
 
         const hub = firstLocation(provinceId)
         if (!hub) continue
@@ -316,6 +351,7 @@ function makeRoller(seed: number): Roller {
 interface Namer {
   forProvince(terrain: Terrain): string
   forArchetype(archetype: LocationArchetype): string
+  forSite(kind: SiteKind): string
 }
 
 /**
@@ -364,7 +400,19 @@ function makeNamer(roll: Roller): Namer {
       const special = ARCHETYPE_NAMES[archetype]
       return special ? takeUnique(archetype, special) : takeUnique('settlement', SETTLEMENT_NAMES)
     },
+    // «Волчий Брод», но «Волчья Гать»: прилагательное согласуется с родом.
+    forSite: (kind) => {
+      const def = SITES[kind]
+      const names = SITE_EPITHETS.map((epithet) => `${epithet[def.gender]} ${def.noun}`)
+      return takeUnique(`site:${kind}`, names)
+    },
   }
+}
+
+/** Что уместно на такой земле. Если ничего — святилище бывает везде. */
+function pickSite(roll: Roller, terrain: Terrain): SiteKind {
+  const fitting = sitesFor(terrain)
+  return fitting.length > 0 ? roll.pick(fitting).id : 'shrine'
 }
 
 function round2(value: number): number {

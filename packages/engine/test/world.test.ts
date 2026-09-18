@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { KINGDOM_BLUEPRINTS } from '../src/content/world'
 import { defaultStartLocationId, generateWorld } from '../src/world/generate'
 import { addressOf, hopsBetween, reachableFrom, roadsFrom } from '../src/world/queries'
+import { isSettlement } from '../src/world/types'
 import type { World } from '../src/world/types'
 
 const world = generateWorld(1)
@@ -44,7 +45,11 @@ describe('генерация мира', () => {
     for (const location of allLocations(world)) {
       const province = world.provinces[location.provinceId]
       expect(province, `локация ${location.id} висит без провинции`).toBeDefined()
-      expect(province?.locationIds).toContain(location.id)
+      // Место числится в своей провинции: поселение среди поселений, место без
+      // жителей — среди мест без жителей. Списка нарочно два: всё, что считает
+      // людей, ходит по первому и никогда не спотыкается о перевал.
+      const listed = isSettlement(location.archetype) ? province?.locationIds : province?.siteIds
+      expect(listed, `${location.id} не числится в провинции`).toContain(location.id)
       const region = world.regions[province?.regionId ?? '']
       expect(region?.provinceIds).toContain(province?.id)
       const kingdom = world.kingdoms[region?.kingdomId ?? '']
@@ -59,8 +64,12 @@ describe('генерация мира', () => {
     expect(new Set(provinces).size).toBe(provinces.length)
   })
 
-  it('заселяет каждое место осмысленным числом жителей', () => {
+  it('заселяет каждое поселение осмысленным числом жителей', () => {
     for (const location of allLocations(world)) {
+      if (!isSettlement(location.archetype)) {
+        expect(location.population, `${location.name} с жителями`).toBe(0)
+        continue
+      }
       expect(location.population, `${location.name} пуст`).toBeGreaterThan(0)
       expect(location.population).toBeLessThan(50_000)
     }

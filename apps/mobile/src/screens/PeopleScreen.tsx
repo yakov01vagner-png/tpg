@@ -13,6 +13,7 @@ import {
   dailyFood,
   dailyWages,
   dayOf,
+  isSettlement,
   lordById,
   lordSays,
   matchesAt,
@@ -235,7 +236,8 @@ export function PeopleScreen({ game }: { game: GameState }) {
           const command: Command = { type: 'hire', troop, count: 1 }
           const check = canApply(game, command)
           // Тех, кого тут не бывает вовсе, не показываем: это шум.
-          if (!here || !def.where.includes(here.archetype)) return null
+          if (!here || !isSettlement(here.archetype) || !def.where.includes(here.archetype))
+            return null
           return (
             <Card
               key={troop}

@@ -41,6 +41,64 @@ export const ARCHETYPE_LABELS: Record<LocationArchetype, string> = {
   monastery: 'обитель',
 }
 
+/**
+ * Места без жителей (DESIGN.md, п.3.1.1).
+ *
+ * До 0.3 всякая локация была поселением: у неё были жители, запасы и хозяин.
+ * Из-за этого между деревнями не могло быть ничего — ни перевала, ни брода, ни
+ * кургана, — и дорога была числом часов. Место без жителей — это та же локация
+ * на той же карте, но без людей и без экономики: у него есть местность,
+ * опасность и то, ради чего туда идут.
+ */
+export const SITE_KINDS = [
+  'pass',
+  'ford',
+  'crossing',
+  'grove',
+  'wilds',
+  'barrow',
+  'ruins',
+  'outpost',
+  'quarry',
+  'shrine',
+  'spring',
+  'causeway',
+] as const
+
+export type SiteKind = (typeof SITE_KINDS)[number]
+
+export const SITE_LABELS: Record<SiteKind, string> = {
+  pass: 'перевал',
+  ford: 'брод',
+  crossing: 'переправа',
+  grove: 'бор',
+  wilds: 'урочище',
+  barrow: 'курган',
+  ruins: 'развалины',
+  outpost: 'застава',
+  quarry: 'каменоломня',
+  shrine: 'святилище',
+  spring: 'ключ',
+  causeway: 'гать',
+}
+
+/** Что вообще может стоять на карте: поселение либо место без жителей. */
+export type PlaceKind = LocationArchetype | SiteKind
+
+export const PLACE_LABELS: Record<PlaceKind, string> = { ...ARCHETYPE_LABELS, ...SITE_LABELS }
+
+/**
+ * Поселение ли это. Проверка нужна повсюду, где раньше можно было считать, что
+ * у локации есть жители: экономика, политика, расселение, работы.
+ */
+export function isSettlement(kind: PlaceKind): kind is LocationArchetype {
+  return kind in ARCHETYPE_LABELS
+}
+
+export function isSite(kind: PlaceKind): kind is SiteKind {
+  return kind in SITE_LABELS
+}
+
 export interface Kingdom {
   readonly id: string
   readonly name: string
@@ -65,16 +123,20 @@ export interface Province {
   readonly terrain: Terrain
   /** Плодородие 0..1: сколько еды провинция способна дать со своей земли. */
   readonly fertility: number
+  /** Поселения провинции. Пополняется с конца и ничего не теряет (п.3.1). */
   readonly locationIds: readonly string[]
+  /** Места без жителей: перевалы, броды, курганы. Земля между поселениями. */
+  readonly siteIds: readonly string[]
 }
 
 export interface Location {
   readonly id: string
   readonly provinceId: string
   readonly name: string
-  readonly archetype: LocationArchetype
+  /** Вид места: поселение либо место без жителей. */
+  readonly archetype: PlaceKind
   readonly terrain: Terrain
-  /** Точное число жителей, а не абстрактный уровень (DESIGN.md, п.7). */
+  /** Точное число жителей, а не абстрактный уровень (DESIGN.md, п.7). Ноль у мест без жителей. */
   readonly population: number
 }
 

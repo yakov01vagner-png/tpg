@@ -4,6 +4,7 @@ import type { Settlement } from './economy'
 import { RECRUIT_RECOVERY, recruitPool, targetStock } from './economy'
 import { hasBuilding } from './holding'
 import type { LocationArchetype, Terrain, World } from './world/types'
+import { isSettlement } from './world/types'
 
 /**
  * Жизнь поселений: еда, голод, рост и вымирание (DESIGN.md, п.7).
@@ -106,7 +107,9 @@ export function carryingCapacity(
   settlement?: Settlement,
 ): number {
   const location = world.locations[locationId]
-  if (!location) return 0
+  // Место без жителей не кормит никого: это не поселение с нулём людей, а
+  // земля, на которой людей не бывает.
+  if (!location || !isSettlement(location.archetype)) return 0
   const fertility = world.provinces[location.provinceId]?.fertility ?? 0.5
   const base = landCapacityOf(location.archetype, location.terrain, fertility)
   // Мельница кормит больше ртов с той же земли — значит, и предел выше.

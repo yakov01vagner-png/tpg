@@ -2,7 +2,8 @@ import type { Settlement } from './economy'
 import { createSettlement, recruitPool } from './economy'
 import { carryingCapacity } from './life'
 import { type Rng, nextInt, rollChance } from './rng'
-import type { Location, LocationArchetype, Province, World } from './world/types'
+import type { Location, LocationArchetype, PlaceKind, Province, World } from './world/types'
+import { isSettlement } from './world/types'
 
 /**
  * Места основывают и бросают.
@@ -88,7 +89,7 @@ function hasRoomFor(
   province: Province,
   wanted: LocationArchetype,
 ): boolean {
-  const big: readonly LocationArchetype[] = ['town', 'city', 'capital', 'port']
+  const big: readonly PlaceKind[] = ['town', 'city', 'capital', 'port']
   if (wanted === 'town') {
     const here = province.locationIds.filter((id) =>
       big.includes(locations[id]?.archetype ?? 'village'),
@@ -141,7 +142,7 @@ export function tickSettling(
     //    уже городок, как её ни называй.
     for (const settlement of own) {
       const location = locations[settlement.locationId]
-      if (!location) continue
+      if (!location || !isSettlement(location.archetype)) continue
       const step = GROWTH[location.archetype]
       if (!step) continue
       const ceiling = carryingCapacity(world, location.id, settlement)

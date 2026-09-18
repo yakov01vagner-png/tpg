@@ -128,10 +128,13 @@ describe('мор: чем отвечают', () => {
   })
 
   it('лекарь-спутник считается: с ним в отряде мор в твоём месте уносит меньше', () => {
+    // Мерить надо там, где мор виден. В деревне на четыре сотни душ он уносит
+    // человека в сутки, а прирост даёт столько же, и разница тонет в росте.
     const base = createGame(createCharacter({ name: 'Вит' }), 1, world)
-    const here = base.locationId
+    const here = bigPlace()
     const sick: GameState = {
       ...base,
+      locationId: here,
       plagues: [{ locationId: here, daysLeft: 30, severity: 1 }],
     }
     const healer = COMPANIONS.hedwar

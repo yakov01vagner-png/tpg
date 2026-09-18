@@ -4,6 +4,7 @@ import type { TroopId } from './content/troops'
 import { TROOPS } from './content/troops'
 import type { Settlement } from './economy'
 import type { World } from './world/types'
+import { isSettlement } from './world/types'
 
 /**
  * Своя земля (DESIGN.md, п.7).
@@ -31,7 +32,7 @@ export function hasBuilding(settlement: Settlement, building: BuildingId): boole
 
 export function freeSlots(world: World, settlement: Settlement): number {
   const archetype = world.locations[settlement.locationId]?.archetype
-  if (!archetype) return 0
+  if (!archetype || !isSettlement(archetype)) return 0
   return BUILDING_SLOTS[archetype] - settlement.buildings.length - (settlement.building ? 1 : 0)
 }
 

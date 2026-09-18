@@ -1,6 +1,6 @@
 import {
-  ARCHETYPE_LABELS,
   type GameState,
+  PLACE_LABELS,
   PLAYER,
   addressOf,
   foodSecurity,
@@ -113,7 +113,7 @@ export function WorldScreen({ game }: { game: GameState }) {
                                 if (!settlement || !location) return null
                                 return (
                                   <Text key={id} style={styles.place}>
-                                    {location.name} ({ARCHETYPE_LABELS[location.archetype]}) —{' '}
+                                    {location.name} ({PLACE_LABELS[location.archetype]}) —{' '}
                                     {ownerWord(game, settlement.owner)}, {foodWord(settlement)}
                                   </Text>
                                 )

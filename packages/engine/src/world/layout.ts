@@ -93,6 +93,8 @@ export function layoutOf(world: World): Readonly<Record<string, Point>> {
         const provinceCenter = centers[provinceId]
         if (!province || !provinceCenter) continue
 
+        // Места без жителей раскладываются вместе с поселениями и по тому же
+        // правилу, но дальше от середины: они и есть то, что лежит между.
         for (const locationId of province.locationIds) {
           // Место стоит там, куда его кладёт собственное имя, — не там, где оно
           // оказалось в списке. Пока положение считалось от номера в провинции,
@@ -100,6 +102,14 @@ export function layoutOf(world: World): Readonly<Record<string, Point>> {
           // было пополнить, не перерисовав его целиком (DESIGN.md, п.3.1).
           const spot = jitter(locationId, 40)
           points[locationId] = separate(taken, {
+            x: clamp(provinceCenter.x + spot.x),
+            y: clamp(provinceCenter.y + spot.y),
+          })
+        }
+
+        for (const siteId of province.siteIds ?? []) {
+          const spot = jitter(siteId, 52)
+          points[siteId] = separate(taken, {
             x: clamp(provinceCenter.x + spot.x),
             y: clamp(provinceCenter.y + spot.y),
           })

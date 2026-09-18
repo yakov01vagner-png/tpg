@@ -1,5 +1,4 @@
 import {
-  ARCHETYPE_LABELS,
   CARAVAN_COST,
   type Command,
   GOODS,
@@ -9,7 +8,9 @@ import {
   type GridCell,
   KINGDOM_COLORS,
   MAP_SIZE,
+  PLACE_LABELS,
   PLAYER,
+  SITES,
   TERRAIN_COLORS,
   TERRAIN_LABELS,
   addressOf,
@@ -19,6 +20,8 @@ import {
   formatDuration,
   holderOf,
   hours,
+  isSettlement,
+  isSite,
   layoutOf,
   lordById,
   plagueAt,
@@ -370,6 +373,42 @@ export function MapScreen({ game }: { game: GameState }) {
                 </G>
               )}
 
+              {level === 'world' ? null : (
+                <G>
+                  {Object.values(game.world.locations).map((location) => {
+                    const point = points[location.id]
+                    if (!point || isSettlement(location.archetype)) return null
+                    // Место без жителей — ромб вполовину меньше деревни: оно
+                    // есть на земле, но не спорит с поселением за внимание.
+                    const half = 3.4 * mark
+                    const picked = selected === location.id
+                    return (
+                      <G key={location.id}>
+                        <Rect
+                          x={point.x - half}
+                          y={point.y - half}
+                          width={half * 2}
+                          height={half * 2}
+                          fill={picked ? '#efe6d6' : '#9a8f7c'}
+                          stroke="#17140f"
+                          strokeWidth={0.8 * mark}
+                          transform={`rotate(45 ${point.x} ${point.y})`}
+                        />
+                        <Rect
+                          x={point.x - 12 * mark}
+                          y={point.y - 12 * mark}
+                          width={24 * mark}
+                          height={24 * mark}
+                          fill="transparent"
+                          onPress={() => setSelected(location.id)}
+                          onPressIn={() => setSelected(location.id)}
+                        />
+                      </G>
+                    )
+                  })}
+                </G>
+              )}
+
               <G>
                 {Object.values(game.world.locations).map((location) => {
                   const point = points[location.id]
@@ -531,22 +570,33 @@ export function MapScreen({ game }: { game: GameState }) {
         </ScrollView>
       </View>
 
-      {chosen && chosenSettlement ? (
+      {chosen ? (
         <View style={styles.panel}>
           <Text style={styles.name}>
-            {chosen.name} · {ARCHETYPE_LABELS[chosen.archetype]}
+            {chosen.name} · {PLACE_LABELS[chosen.archetype]}
           </Text>
           <Text style={styles.dim}>{addressOf(game.world, chosen.id)}</Text>
-          <Text style={styles.dim}>
-            {chosenSettlement.population > 0
-              ? `${chosenSettlement.population} чел. · ${ownerWord(game, chosenSettlement.owner)}`
-              : 'заброшено'}
-          </Text>
-          <Text style={styles.dim}>
-            {TERRAIN_LABELS[chosen.terrain]} · {foodWord(foodSecurity(chosenSettlement))}
-            {chosenSettlement.banditry > 0.3 ? ' · неспокойно' : ''}
-            {chosenSettlement.strain > 0.4 ? ' · земля истощена' : ''}
-          </Text>
+          {chosenSettlement ? (
+            <>
+              <Text style={styles.dim}>
+                {chosenSettlement.population > 0
+                  ? `${chosenSettlement.population} чел. · ${ownerWord(game, chosenSettlement.owner)}`
+                  : 'заброшено'}
+              </Text>
+              <Text style={styles.dim}>
+                {TERRAIN_LABELS[chosen.terrain]} · {foodWord(foodSecurity(chosenSettlement))}
+                {chosenSettlement.banditry > 0.3 ? ' · неспокойно' : ''}
+                {chosenSettlement.strain > 0.4 ? ' · земля истощена' : ''}
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.dim}>{`${TERRAIN_LABELS[chosen.terrain]} · здесь не живут`}</Text>
+              {isSite(chosen.archetype) ? (
+                <Text style={styles.dim}>{SITES[chosen.archetype].description}</Text>
+              ) : null}
+            </>
+          )}
           {plagueAt(game.plagues, chosen.id) ? (
             <Text style={styles.plague}>Здесь мор. Ехать туда — своей волей.</Text>
           ) : null}

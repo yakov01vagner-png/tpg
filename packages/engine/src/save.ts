@@ -62,6 +62,22 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
       quests: data.quests ?? [],
     }
   },
+  /**
+   * v14 → v15: у провинции появились места без жителей. Выдумать их задним
+   * числом нельзя — мир лежит в сейве целиком и уже разложен по карте, а новый
+   * перевал сдвинул бы соседей. Поэтому старый герой доигрывает на старой
+   * земле: у его провинций список мест без жителей пуст, и это честнее, чем
+   * подсунуть ему другой мир под тем же именем.
+   */
+  14: (data) => {
+    const world = (data.world ?? {}) as Record<string, unknown>
+    const provinces = (world.provinces ?? {}) as Record<string, Record<string, unknown>>
+    const filled: Record<string, unknown> = {}
+    for (const [id, province] of Object.entries(provinces)) {
+      filled[id] = { ...province, siteIds: province.siteIds ?? [] }
+    }
+    return { ...data, world: { ...world, provinces: filled } }
+  },
   /** v13 → v14: поручения руками и счёт побед. Старый герой ничего не брал. */
   13: (data) => ({
     ...data,

@@ -9,6 +9,7 @@ import {
 } from './content/goods'
 import type { TroopId } from './content/troops'
 import type { World } from './world/types'
+import { isSettlement } from './world/types'
 
 /**
  * Экономика места: сколько товара тут держат и почём он идёт.
@@ -67,7 +68,9 @@ export function recruitPool(population: number): number {
 /** Во сколько раз место обеспечено товаром сверх собственной нужды. */
 export function supplyRatio(world: World, locationId: string, good: GoodId): number {
   const location = world.locations[locationId]
-  if (!location) return 1
+  // У места без жителей нет ни своего производства, ни своей нужды: там просто
+  // земля. Цены в нём никто не спрашивает, но вызвать эту функцию могут.
+  if (!location || !isSettlement(location.archetype)) return 1
   const byArchetype = ARCHETYPE_SUPPLY[location.archetype][good] ?? 1
   const byTerrain = TERRAIN_SUPPLY[location.terrain][good] ?? 1
   const fertility = world.provinces[location.provinceId]?.fertility ?? 0.5
@@ -130,7 +133,10 @@ export function createSettlement(world: World, locationId: string): Settlement {
 /** Все поселения мира на момент начала игры. */
 export function createSettlements(world: World): Record<string, Settlement> {
   const settlements: Record<string, Settlement> = {}
-  for (const locationId of Object.keys(world.locations)) {
+  for (const [locationId, location] of Object.entries(world.locations)) {
+    // Перевал — не поселение с нулём жителей, а место, где людей не бывает.
+    // Поэтому у него нет ни запасов, ни хозяина, ни строки в `settlements`.
+    if (!isSettlement(location.archetype)) continue
     settlements[locationId] = createSettlement(world, locationId)
   }
   return settlements

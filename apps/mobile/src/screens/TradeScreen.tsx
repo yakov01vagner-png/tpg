@@ -11,6 +11,7 @@ import {
   carried,
   carriedWeight,
   dayOf,
+  isSettlement,
   itemsSoldAt,
   kingdomOf,
   knownMarkets,
@@ -130,10 +131,7 @@ export function TradeScreen({ game }: { game: GameState }) {
       </Section>
 
       <Section title="Снаряжение">
-        {itemsSoldAt(
-          game.world.locations[game.locationId]?.archetype ?? 'village',
-          kingdomOf(game.world, game.locationId)?.id ?? null,
-        ).map((item) => {
+        {itemsSoldAtHere(game).map((item) => {
           const command: Command = { type: 'buyItem', itemId: item.id }
           const check = canApply(game, command)
           const worn = game.character.equipment[item.slot]?.id === item.id
@@ -240,6 +238,13 @@ function sparkline(values: readonly number[], width: number, height: number): st
       return `${x.toFixed(1)},${y.toFixed(1)}`
     })
     .join(' ')
+}
+
+/** Что продают там, где стоит герой. В глуши — ничего: лавки там нет. */
+function itemsSoldAtHere(game: GameState) {
+  const kind = game.world.locations[game.locationId]?.archetype
+  if (!kind || !isSettlement(kind)) return []
+  return itemsSoldAt(kind, kingdomOf(game.world, game.locationId)?.id ?? null)
 }
 
 /** Дёшево или дорого — относительно обычной цены этого товара в мире. */
