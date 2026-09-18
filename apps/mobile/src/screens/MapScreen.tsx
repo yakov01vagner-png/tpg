@@ -13,6 +13,7 @@ import {
   MAP_SIZE,
   PLACE_LABELS,
   PLAYER,
+  type Passage,
   SITES,
   TERRAIN_COLORS,
   TERRAIN_LABELS,
@@ -26,10 +27,13 @@ import {
   isSettlement,
   isSite,
   journeyProgress,
+  lanesFrom,
   layoutOf,
   legHoursFor,
   lordById,
   paceOf,
+  partySize,
+  passageCost,
   plagueAt,
   pointBetween,
   regionColors,
@@ -37,6 +41,7 @@ import {
   riversOf,
   roadsFrom,
   routeTo,
+  seaHours,
   worldGrid,
 } from '@tpg/engine'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -255,6 +260,23 @@ export function MapScreen({ game }: { game: GameState }) {
     [game.world],
   )
 
+  // Морские пути: те же отрезки, только по воде. Рисуются пунктиром — тракт
+  // лежит на земле, а путь по морю только держат в уме (этап 35).
+  const lanes = useMemo(() => {
+    const out: { id: string; x1: number; y1: number; x2: number; y2: number }[] = []
+    for (const [fromId, list] of Object.entries(game.world.lanes ?? {})) {
+      const from = points[fromId]
+      if (!from) continue
+      for (const lane of list) {
+        if (fromId > lane.to) continue
+        const to = points[lane.to]
+        if (!to) continue
+        out.push({ id: `${fromId}~${lane.to}`, x1: from.x, y1: from.y, x2: to.x, y2: to.y })
+      }
+    }
+    return out
+  }, [game.world.lanes, points])
+
   // Дороги: отрезок между соседями. Рисуются один раз на пару, цвет — от того,
   // чего он стоит: тракт по равнине бледный и тонкий, гать через топь толще и
   // темнее. До 0.4 карта дорог не показывала вовсе — а дорога и есть земля.
@@ -330,6 +352,11 @@ export function MapScreen({ game }: { game: GameState }) {
   const chosenSettlement = selected ? game.settlements[selected] : null
   const road = selected
     ? roadsFrom(game.world, game.locationId).find((candidate) => candidate.to === selected)
+    : undefined
+  // Есть ли отсюда морской путь именно сюда: карта предлагает уйти морем там,
+  // где море есть (этап 35).
+  const lane = selected
+    ? lanesFrom(game.world, game.locationId).find((one) => one.to === selected)
     : undefined
   // Почему туда нельзя пойти прямо сейчас: весной брод под водой, и кнопка
   // «идти» должна не молчать, а сказать это (этап 34).
@@ -479,6 +506,22 @@ export function MapScreen({ game }: { game: GameState }) {
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     fill="none"
+                  />
+                ))}
+              </G>
+
+              <G opacity={0.55}>
+                {lanes.map((lane) => (
+                  <Line
+                    key={lane.id}
+                    x1={lane.x1}
+                    y1={lane.y1}
+                    x2={lane.x2}
+                    y2={lane.y2}
+                    stroke={LANE_COLOR}
+                    strokeWidth={1.1 * mark}
+                    strokeDasharray={`${4 * mark},${5 * mark}`}
+                    strokeLinecap="round"
                   />
                 ))}
               </G>
@@ -859,6 +902,24 @@ export function MapScreen({ game }: { game: GameState }) {
               onPress={() => dispatch({ type: 'foundCaravan', awayId: chosen.id })}
             />
           ) : null}
+          {lane ? (
+            <Button
+              label={`Морем сюда — ${formatDuration(hours(seaHours(lane.hours, seaManner(game), game.ship)))}${
+                seaManner(game) === 'own'
+                  ? ' (своим судном)'
+                  : ` (${passageCost(seaManner(game), seaHours(lane.hours, seaManner(game), game.ship), partySize(game.party) + 1)} монет)`
+              }`}
+              tone="primary"
+              onPress={() => {
+                const command: Command = {
+                  type: 'sail',
+                  toLocationId: chosen.id,
+                  manner: seaManner(game),
+                }
+                if (canApply(game, command).ok) dispatch(command)
+              }}
+            />
+          ) : null}
           {road && travelGate && !travelGate.ok && travelGate.code === 'flood' ? (
             <Text style={styles.plague}>{travelGate.message}</Text>
           ) : road ? (
@@ -879,6 +940,17 @@ export function MapScreen({ game }: { game: GameState }) {
       ) : null}
     </View>
   )
+}
+
+/**
+ * Каким способом карта предлагает уйти морем.
+ *
+ * Своим судном, если оно есть, — оно уже оплачено; иначе нанятым: на карте
+ * выбирают куда, а не на чём. Все три способа лежат на домашнем экране, в
+ * гавани (этап 35).
+ */
+function seaManner(game: GameState): Passage {
+  return game.ship ? 'own' : 'hire'
 }
 
 /** Чем красить клетку: в этом вся разница между режимами карты. */
@@ -904,6 +976,9 @@ const SEA_COLOR = '#1b2a38'
  * сливалось с ней в тень под холмами.
  */
 const RIVER_COLOR = '#5f9dc0'
+
+/** Цвет морского пути: светлее воды, чтобы пунктир читался на тёмном море. */
+const LANE_COLOR = '#7fa9c4'
 
 function colorOf(
   cell: GridCell | null | undefined,

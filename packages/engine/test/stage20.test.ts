@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { musterBands, tickBands } from '../src/band'
 import { createCharacter } from '../src/character'
 import { applyCommand } from '../src/commands'
-import { MARCHES } from '../src/content/world'
+import { ISLANDS, MARCHES } from '../src/content/world'
 import { PLAYER } from '../src/holding'
 import { createRng } from '../src/rng'
 import type { GameState } from '../src/state'
@@ -66,7 +66,15 @@ describe('земля, которой не держит никто', () => {
       const frontier = Object.values(current.regions).filter(
         (region) => region.kingdomId === FRONTIER,
       )
-      expect(frontier).toHaveLength(MARCHES.length)
+      // Земли без короны стало больше: к пяти маркам с версии 0.5 прибавились
+      // три острова — это тоже ничья земля, только за морем (этап 35).
+      expect(frontier.filter((region) => region.id.startsWith('march.'))).toHaveLength(
+        MARCHES.length,
+      )
+      expect(frontier.filter((region) => region.id.startsWith('island.'))).toHaveLength(
+        ISLANDS.length,
+      )
+      expect(frontier).toHaveLength(MARCHES.length + ISLANDS.length)
       for (const region of frontier) {
         expect(current.kingdoms[region.kingdomId]).toBeUndefined()
         for (const kingdom of Object.values(current.kingdoms)) {

@@ -1,5 +1,6 @@
 import type { Party } from './party'
 import { partySize, troopCount } from './party'
+import type { Passage } from './ship'
 import type { World } from './world/types'
 
 /**
@@ -21,6 +22,17 @@ export interface Journey {
   readonly hours: number
   /** Сколько часов уже прошли. */
   readonly done: number
+  /**
+   * Путь идёт морем (этап 35).
+   *
+   * Тот же путь и те же часы, но всё остальное другое: в море не встают
+   * лагерем, не встречают обозов и не попадают в засаду — там шторм, штиль и
+   * те, кто ходит под чёрным парусом. Необязательное поле: сухопутный путь
+   * версии 0.4 остаётся сухопутным.
+   */
+  readonly sea?: boolean
+  /** Чьим судном идут: своим, нанятым или попутным. */
+  readonly manner?: Passage
 }
 
 /** Доля пройденного, 0..1: ею и заполняется полоса. */

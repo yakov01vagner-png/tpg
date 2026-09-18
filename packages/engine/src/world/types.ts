@@ -1,3 +1,4 @@
+import type { Lane } from './lanes'
 import type { River } from './rivers'
 import type { Sea } from './sea'
 
@@ -57,6 +58,7 @@ export const SITE_KINDS = [
   'pass',
   'ford',
   'crossing',
+  'bridge',
   'grove',
   'wilds',
   'barrow',
@@ -74,6 +76,7 @@ export const SITE_LABELS: Record<SiteKind, string> = {
   pass: 'перевал',
   ford: 'брод',
   crossing: 'переправа',
+  bridge: 'мост',
   grove: 'бор',
   wilds: 'урочище',
   barrow: 'курган',
@@ -137,6 +140,13 @@ export interface Province {
   readonly locationIds: readonly string[]
   /** Места без жителей: перевалы, броды, курганы. Земля между поселениями. */
   readonly siteIds: readonly string[]
+  /**
+   * Остров: земля, до которой не доходит дорога (этап 35).
+   *
+   * Лежит в скелете, потому что это свойство земли, а не следствие расчёта:
+   * по нему и цены, и власть, и то, что сюда нельзя привести обоз.
+   */
+  readonly island?: boolean
 }
 
 export interface Location {
@@ -191,4 +201,12 @@ export interface World {
    * с дурной репутацией.
    */
   readonly rivers?: readonly River[]
+  /**
+   * Морские пути между гаванями (lanes.ts, этап 35).
+   *
+   * Тот же список, что и дороги, только по воде и только между портами. Лежит
+   * в скелете рядом с ними и необязателен по той же причине: в мире версии 0.4
+   * моря не было, а значит не было и пути по нему.
+   */
+  readonly lanes?: Readonly<Record<string, readonly Lane[]>>
 }

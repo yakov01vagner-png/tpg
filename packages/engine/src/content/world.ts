@@ -1,4 +1,4 @@
-import type { LocationArchetype, Terrain } from '../world/types'
+import type { LocationArchetype, SiteKind, Terrain } from '../world/types'
 
 /**
  * Авторские таблицы мира.
@@ -420,6 +420,73 @@ export const MARCHES: readonly MarchBlueprint[] = [
     between: ['boharut', 'tribes'],
     terrain: 'steppe',
     freeTown: 'Колодезь',
+  },
+]
+
+/**
+ * Острова (версия 0.5, этап 35).
+ *
+ * Остров — не украшение берега, а место, до которого нельзя дойти ногами. Он
+ * лежит в стороне от материка, дорога до него не доходит никогда, и потому у
+ * него своя цена на хлеб, своя власть и свои люди. Короны ему не хозяева: до
+ * острова у них те же полдня морем, что и у всех.
+ *
+ * Стоят острова по углам полотна — там, где кончается земля корон: от
+ * ближайшей середины провинции до острова не меньше четырёх сотен единиц, и
+ * между ними вода, а не пролив в один шаг.
+ */
+export interface IslandBlueprint {
+  readonly id: string
+  /** Имя области: остров — это область без короны, как и марка. */
+  readonly name: string
+  readonly flavor: string
+  readonly provinceName: string
+  readonly terrain: Terrain
+  readonly at: { readonly x: number; readonly y: number }
+  /** Порт стоит первым: с него на остров и попадают. */
+  readonly places: readonly { readonly name: string; readonly archetype: LocationArchetype }[]
+  readonly sites: readonly SiteKind[]
+}
+
+export const ISLANDS: readonly IslandBlueprint[] = [
+  {
+    id: 'whiteStone',
+    name: 'Белый Камень',
+    flavor: 'Меловые обрывы, тюлени и десяток родов, которые помнят всех своих утопленников.',
+    provinceName: 'Меловой Берег',
+    terrain: 'coast',
+    at: { x: 320, y: 320 },
+    places: [
+      { name: 'Гавань Белого Камня', archetype: 'port' },
+      { name: 'Тюленья', archetype: 'village' },
+    ],
+    sites: ['ruins', 'shrine'],
+  },
+  {
+    id: 'windy',
+    name: 'Ветреный',
+    flavor: 'Голый камень, овцы и ветер, который не стихает и в затишье.',
+    provinceName: 'Овечья Коса',
+    terrain: 'coast',
+    at: { x: 1790, y: 320 },
+    places: [
+      { name: 'Ветреная Пристань', archetype: 'port' },
+      { name: 'Рыбий Хвост', archetype: 'village' },
+    ],
+    sites: ['shrine', 'outpost'],
+  },
+  {
+    id: 'crooked',
+    name: 'Кривой',
+    flavor: 'Бухты, в которые заходят не спрашивая позволения, и берег, который об этом молчит.',
+    provinceName: 'Смоляная Бухта',
+    terrain: 'coast',
+    at: { x: 320, y: 1790 },
+    places: [
+      { name: 'Кривая Гавань', archetype: 'port' },
+      { name: 'Смоляная', archetype: 'village' },
+    ],
+    sites: ['outpost', 'ruins'],
   },
 ]
 

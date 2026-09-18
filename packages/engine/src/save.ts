@@ -289,6 +289,12 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
       over: data.over ?? false,
     }
   },
+  /**
+   * v19 → v20: у героя появилось судно (этап 35). У старого героя его нет и
+   * быть не может: он доигрывает в мире без моря — а если море в его мире
+   * есть, корабль он купит сам.
+   */
+  19: (data) => ({ ...data, ship: data.ship ?? null }),
 }
 
 export type LoadResult =

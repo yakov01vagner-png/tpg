@@ -143,6 +143,7 @@ export type IconName =
   | 'pass'
   | 'ford'
   | 'crossing'
+  | 'bridge'
   | 'grove'
   | 'wilds'
   | 'barrow'
@@ -777,6 +778,15 @@ const GLYPHS: Record<IconName, Glyph> = {
       <Path d="M2 16h20" {...s(c)} />
       <Path d="M6 16l1-4h10l1 4z" {...s(c)} fill={f} />
       <Path d="M12 12V4M12 6h6" {...s(c)} />
+    </>
+  ),
+  // Мост: быки из камня и настил поверх воды.
+  bridge: (c, f) => (
+    <>
+      <Path d="M2 13h20" {...s(c)} />
+      <Path d="M2 13c4 0 4-5 10-5s6 5 10 5" {...s(c)} fill={f} />
+      <Path d="M7 13v7M17 13v7M12 11v9" {...s(c)} />
+      <Path d="M2 20h20" {...s(c)} />
     </>
   ),
   grove: (c, f) => (

@@ -88,7 +88,9 @@ describe('мир стал гуще', () => {
           `${counts.places} мест (${counts.settlements} с жителями)`,
       )
       // В 0.3 было 20 областей, 44 провинции, 213 мест, 102 из них с жителями.
-      expect(counts.regions).toBe(25)
+      // Двадцать пять областей стали двадцатью восемью: с версии 0.5 к пяти
+      // маркам прибавились три острова (этап 35).
+      expect(counts.regions).toBe(28)
       expect(counts.provinces).toBeGreaterThanOrEqual(50)
       expect(counts.places).toBeGreaterThan(450)
       expect(counts.settlements).toBeGreaterThan(120)

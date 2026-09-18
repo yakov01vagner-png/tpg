@@ -39,6 +39,8 @@ import { ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import { TEMPER_LINES } from './content/lines'
+import type { ShipKind } from './content/ships'
+import { SHIPS, SHIP_NAMES } from './content/ships'
 import { SITES } from './content/sites'
 import type { TroopId } from './content/troops'
 import { TROOPS, TROOP_FOOD_PER_DAY } from './content/troops'
@@ -100,9 +102,25 @@ import type { Quest } from './quest'
 import { isShunned, lordRep, placeRep, priceFactor, withLordRep, withPlaceRep } from './reputation'
 import type { Reputation } from './reputation'
 import type { Rng } from './rng'
-import { nextInt, rollChance } from './rng'
+import { nextFloat, nextInt, rollChance } from './rng'
 import type { SettleEvent } from './settle'
 import { tickSettling } from './settle'
+import type { Passage, Ship } from './ship'
+import {
+  ABOARD_MAX,
+  HIRE_MAX,
+  PASSAGE_LABELS,
+  battered,
+  fits,
+  passageCost,
+  repairPrice,
+  resalePrice,
+  seaHours,
+  shipCarries,
+  shipDef,
+  shipUpkeep,
+  waitHours,
+} from './ship'
 import type { SkillId } from './skills'
 import { SKILLS } from './skills'
 import type { GameState } from './state'
@@ -126,6 +144,7 @@ import { allied, pairOf } from './war'
 import type { Politics } from './war'
 import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
+import { lanesFrom } from './world/lanes'
 import { kingdomOf, regionOf, roadsFrom } from './world/queries'
 import { fordShut } from './world/rivers'
 import type { World } from './world/types'
@@ -140,6 +159,12 @@ export type Command =
   /** Просто идущее время: мир живёт, пока игрок стоит и смотрит. */
   | { readonly type: 'tick'; readonly minutes: number }
   | { readonly type: 'travel'; readonly toLocationId: string }
+  /** Уйти морем: своим судном, нанятым или попутным (этап 35). */
+  | { readonly type: 'sail'; readonly toLocationId: string; readonly manner: Passage }
+  /** Купить судно в порту, починить своё, продать своё. */
+  | { readonly type: 'buyShip'; readonly kind: ShipKind }
+  | { readonly type: 'repairShip' }
+  | { readonly type: 'sellShip' }
   | { readonly type: 'hire'; readonly troop: TroopId; readonly count: number }
   | { readonly type: 'disband'; readonly troop: TroopId; readonly count: number }
   | { readonly type: 'battleOrders'; readonly orders: Readonly<Record<GroupId, OrderId>> }
@@ -309,6 +334,14 @@ export function applyCommand(
       return tick(state, command.minutes)
     case 'travel':
       return travel(state, command.toLocationId)
+    case 'sail':
+      return sail(state, command.toLocationId, command.manner)
+    case 'buyShip':
+      return buyShip(state, command.kind)
+    case 'repairShip':
+      return repairShip(state)
+    case 'sellShip':
+      return sellShip(state)
     case 'turnBack':
       return turnBack(state)
     case 'hire':
@@ -459,6 +492,7 @@ const BEDRIDDEN_BLOCKS: ReadonlySet<Command['type']> = new Set<Command['type']>(
 /** Как зовут того, кто стоит напротив: лорд, корона или просто разбойники. */
 export function foeName(state: GameState, foeId: string | null): string {
   if (!foeId || foeId === 'bandits') return 'разбойники'
+  if (foeId === 'pirates') return 'морские разбойники'
   if (foeId.startsWith('crown:')) {
     return state.world.kingdoms[foeId.slice('crown:'.length)]?.name ?? 'короны'
   }
@@ -515,6 +549,139 @@ function travel(state: GameState, toLocationId: string): CommandResult {
   return close(draft)
 }
 
+/**
+ * Уйти морем.
+ *
+ * Тот же путь, что и по дороге, только часы считает вода: расстояние по морю,
+ * судно и то, чьё оно. Способов три, и это не три кнопки одного и того же.
+ * Своё судно уходит когда хочешь и берёт всю дружину, но стоит как три
+ * каравана и тонет вместе с тобой. Нанятое — дорого за раз, зато сразу и
+ * почти на всех. Попутное — гроши, но ждать отплытия, идти дольше и взять с
+ * собой шестерых: чужому шкиперу рать на палубе не нужна.
+ */
+function sail(state: GameState, toLocationId: string, manner: Passage): CommandResult {
+  const destination = state.world.locations[toLocationId]
+  if (!destination) return fail('unknownAction', 'Такого места нет.')
+  const lane = lanesFrom(state.world, state.locationId).find((one) => one.to === toLocationId)
+  if (!lane) return fail('unknownAction', `Отсюда нет морского пути в ${destination.name}.`)
+  if (manner === 'own' && !state.ship) {
+    return fail('requirements', 'Своего судна у тебя нет.')
+  }
+  if (!fits(manner, state.party, state.ship)) {
+    const people = partySize(state.party) + 1
+    return fail(
+      'noRoom',
+      manner === 'own'
+        ? `На борт влезет ${shipCarries(state.ship as NonNullable<typeof state.ship>)}, а вас ${people}.`
+        : manner === 'hire'
+          ? `Столько на нанятое судно не берут: ${people} против ${HIRE_MAX}.`
+          : `Попутный шкипер возьмёт шестерых, а не ${people}. Рать на чужой палубе никому не нужна.`,
+    )
+  }
+
+  const hours = seaHours(lane.hours, manner, state.ship)
+  const people = partySize(state.party) + 1
+  const cost = passageCost(manner, hours, people)
+  if (cost > state.character.money) {
+    return fail('noMoney', `За перевоз просят ${cost}, а у тебя ${state.character.money}.`)
+  }
+  const blocked = checkFatigue(state.character, travelFatigue(hours) / 2)
+  if (blocked) return blocked
+
+  const draft = open(state)
+  const wait = waitHours(manner)
+  if (cost > 0) addMoney(draft, -cost)
+  notice(
+    draft,
+    `Морем в ${destination.name}: ${formatDuration(hoursOf(hours))} ходу, ${PASSAGE_LABELS[manner]}${
+      cost > 0 ? `, за ${cost}` : ''
+    }.${wait > 0 ? ` Отплытие ждали ${formatDuration(hoursOf(wait))}.` : ''}`,
+  )
+  // Ожидание отплытия — это уже время: чужое судно уходит по своей надобности.
+  if (wait > 0) advance(draft, hoursOf(wait))
+  draft.journey = {
+    fromId: state.locationId,
+    toId: toLocationId,
+    hours,
+    done: 0,
+    sea: true,
+    manner,
+  }
+  return close(draft)
+}
+
+/** Часы в минуты — в этом файле `hours` уже занято именем импорта. */
+function hoursOf(count: number): number {
+  return hours(count)
+}
+
+/**
+ * Купить судно.
+ *
+ * Только в гавани, из которой есть куда плыть: судно продают там, где его
+ * строят и держат. Цена — как у трёх караванов, и это правильная цена: корабль
+ * открывает половину карты и тонет вместе со всем, что на нём.
+ */
+function buyShip(state: GameState, kind: ShipKind): CommandResult {
+  const def = SHIPS[kind]
+  if (!def) return fail('unknownAction', 'Таких судов не строят.')
+  if (lanesFrom(state.world, state.locationId).length === 0) {
+    return fail('unavailableHere', 'Судно покупают в гавани, а не здесь.')
+  }
+  if (state.ship) return fail('requirements', 'У тебя уже есть судно. Двумя сразу не ходят.')
+  if (state.character.money < def.price) {
+    return fail(
+      'noMoney',
+      `За ${def.label.toLowerCase()} просят ${def.price}, а у тебя ${state.character.money}.`,
+    )
+  }
+
+  const draft = open(state)
+  const [index, afterName] = nextInt(draft.rng, 0, SHIP_NAMES.length - 1)
+  draft.rng = afterName
+  const name = SHIP_NAMES[index] ?? 'Чайка'
+  addMoney(draft, -def.price)
+  advance(draft, hoursOf(3))
+  draft.ship = { kind, name, condition: 1 }
+  notice(draft, `Куплено судно: ${def.label.toLowerCase()} «${name}» за ${def.price}.`, 'trade')
+  return close(draft)
+}
+
+function repairShip(state: GameState): CommandResult {
+  const ship = state.ship
+  if (!ship) return fail('requirements', 'Чинить нечего: судна нет.')
+  if (lanesFrom(state.world, state.locationId).length === 0) {
+    return fail('unavailableHere', 'Судно чинят в гавани.')
+  }
+  const price = repairPrice(ship)
+  if (price <= 0) return fail('invalid', `«${ship.name}» и так цела.`)
+  if (state.character.money < price) {
+    return fail('noMoney', `Починка стоит ${price}, а у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -price)
+  advance(draft, hoursOf(8))
+  draft.ship = { ...ship, condition: 1 }
+  notice(draft, `«${ship.name}» проконопачена и просмолена. Отдано ${price}.`, 'trade')
+  return close(draft)
+}
+
+function sellShip(state: GameState): CommandResult {
+  const ship = state.ship
+  if (!ship) return fail('requirements', 'Продавать нечего.')
+  if (lanesFrom(state.world, state.locationId).length === 0) {
+    return fail('unavailableHere', 'Судно продают в гавани.')
+  }
+  const price = resalePrice(ship)
+  const draft = open(state)
+  addMoney(draft, price)
+  advance(draft, hoursOf(2))
+  draft.ship = null
+  notice(draft, `«${ship.name}» продана за ${price}.`, 'trade')
+  return close(draft)
+}
+
 /** Повернуть назад: то, чего у мгновенного перемещения быть не могло. */
 function turnBack(state: GameState): CommandResult {
   const journey = state.journey
@@ -550,6 +717,12 @@ const NIGHT_PACE = 0.6
 function walk(draft: Draft, minutes: number): void {
   const journey = draft.journey
   if (!journey || minutes <= 0) return
+  // Море идёт по своим правилам: там не ночуют на обочине и не встречают
+  // обозов (этап 35).
+  if (journey.sea) {
+    float(draft, minutes)
+    return
+  }
   const dark = timeOfDay(draft.base.time) === 'night'
   const walked = Math.min(
     (minutes / MINUTES_PER_HOUR) * (dark ? NIGHT_PACE : 1),
@@ -579,6 +752,144 @@ function walk(draft: Draft, minutes: number): void {
   const place = draft.world.locations[journey.toId]
   notice(draft, `Пришли: ${place?.name ?? 'место'}.`)
   roadTalk(draft)
+}
+
+/**
+ * Час под парусом.
+ *
+ * Тот же счётчик часов, что и на дороге, но всё остальное другое. Ночь не
+ * замедляет: судно идёт и в темноте, вахту стоят по очереди. Устают вдвое
+ * меньше — идёт судно, а не ты. И вместо засады на отрезке — погода и те, кто
+ * ходит под чужим флагом.
+ */
+const SEA_FATIGUE = 0.5
+
+function float(draft: Draft, minutes: number): void {
+  const journey = draft.journey
+  if (!journey || minutes <= 0) return
+  const sailed = Math.min(minutes / MINUTES_PER_HOUR, journeyLeft(journey))
+  if (sailed <= 0) return
+  addFatigue(draft, Math.round(travelFatigue(sailed) * SEA_FATIGUE))
+  practice(draft, 'survival', sailed * 1.2)
+  const done = Math.round((journey.done + sailed) * 100) / 100
+  if (done < journey.hours) {
+    draft.journey = { ...journey, done }
+    seaWeather(draft, sailed)
+    seaRaiders(draft, sailed)
+    return
+  }
+
+  // Пришли.
+  draft.journey = null
+  draft.locationId = journey.toId
+  const place = draft.world.locations[journey.toId]
+  notice(draft, `Сошли на берег: ${place?.name ?? 'гавань'}.`)
+  roadTalk(draft)
+}
+
+/**
+ * Погода в море.
+ *
+ * Шторм и штиль — это одно и то же с точки зрения пути: время, которого не
+ * было в расчёте. Разница в том, что штиль только держит, а шторм ещё и треплет
+ * судно и заставляет выбрасывать за борт товар. Своё судно от этого ветшает —
+ * потому его и чинят в порту, а не «оно само».
+ */
+const STORM_CHANCE = 0.022
+const CALM_CHANCE = 0.03
+
+function seaWeather(draft: Draft, hoursAtSea: number): void {
+  const journey = draft.journey
+  if (!journey || hoursAtSea <= 0) return
+
+  const [calm, afterCalm] = rollChance(draft.rng, Math.min(0.5, CALM_CHANCE * hoursAtSea))
+  draft.rng = afterCalm
+  if (calm) {
+    const [lost, afterLost] = nextInt(draft.rng, 1, 4)
+    draft.rng = afterLost
+    draft.journey = { ...journey, hours: journey.hours + lost }
+    notice(draft, `Штиль. Парус повис, и ${formatDuration(hours(lost))} прошли впустую.`, 'world')
+    return
+  }
+
+  const [storm, afterStorm] = rollChance(draft.rng, Math.min(0.5, STORM_CHANCE * hoursAtSea))
+  draft.rng = afterStorm
+  if (!storm) return
+  const [blown, afterBlown] = nextInt(draft.rng, 2, 7)
+  draft.rng = afterBlown
+  const current = draft.journey
+  if (current) draft.journey = { ...current, hours: current.hours + blown }
+  notice(draft, `Шторм. Судно отнесло, и до берега ещё ${formatDuration(hours(blown))}.`, 'world')
+
+  // За борт идёт то, что тяжелее людей.
+  const [share, afterShare] = nextFloat(draft.rng)
+  draft.rng = afterShare
+  if (share < 0.45) tossCargo(draft)
+
+  const ship = draft.ship
+  if (!ship) return
+  const [force, afterForce] = nextInt(draft.rng, 6, 18)
+  draft.rng = afterForce
+  const beaten = battered(ship, force / 100)
+  draft.ship = beaten
+  if (beaten.condition > 0) {
+    notice(draft, `«${ship.name}» приняла воды: целость ${Math.round(beaten.condition * 100)}%.`)
+    return
+  }
+  // Судно не пережило. Хозяина подобрали — судно нет.
+  draft.ship = null
+  notice(draft, `«${ship.name}» не выдержала. Судна больше нет; вас сняли с обломков.`, 'world')
+}
+
+/** Что выбрасывают за борт: половину самого тяжёлого из котомки. */
+function tossCargo(draft: Draft): void {
+  const inventory = { ...draft.character.inventory }
+  let worst: GoodId | null = null
+  let most = 0
+  for (const [good, amount] of Object.entries(inventory)) {
+    if ((amount ?? 0) > most) {
+      most = amount ?? 0
+      worst = good as GoodId
+    }
+  }
+  if (!worst || most <= 0) return
+  const lost = Math.max(1, Math.round(most / 2))
+  inventory[worst] = most - lost
+  draft.character = { ...draft.character, inventory }
+  notice(draft, `За борт пошло ${lost} — ${GOODS[worst].label.toLowerCase()}. Волна не спрашивает.`)
+}
+
+/**
+ * Те, кто ходит под чужим флагом.
+ *
+ * В море разбойник опаснее дорожного: уйти некуда, и свидетелей не остаётся.
+ * Отряд принимает бой на палубе, одиночку обирают до нитки — как и на дороге,
+ * только дороже.
+ */
+const PIRATE_CHANCE = 0.012
+
+function seaRaiders(draft: Draft, hoursAtSea: number): void {
+  if (draft.battle || hoursAtSea <= 0) return
+  const [met, afterMet] = rollChance(draft.rng, Math.min(0.4, PIRATE_CHANCE * hoursAtSea))
+  draft.rng = afterMet
+  if (!met) return
+
+  if (partySize(draft.party) >= 3) {
+    const [band, afterBand] = banditBand(0.6, 400, draft.rng)
+    draft.rng = afterBand
+    draft.battle = startBattle(draft.party, band, 'coast', { foeId: 'pirates' })
+    notice(draft, 'Из-за мыса вышли под чёрным парусом. Уйти некуда — только драться.')
+    return
+  }
+  const loss = Math.round(draft.character.money * 0.4)
+  if (loss > 0) addMoney(draft, -loss)
+  tossCargo(draft)
+  notice(
+    draft,
+    loss > 0
+      ? `Пираты взяли ${loss} монет и ушли. Могли и за борт.`
+      : 'Пираты обшарили и отпустили: взять нечего.',
+  )
 }
 
 /**
@@ -755,6 +1066,35 @@ function tick(state: GameState, minutes: number): CommandResult {
     addFatigue(draft, (-REST_RECOVERY_PER_HOUR / 2) * (minutes / MINUTES_PER_HOUR))
   }
   return close(draft)
+}
+
+/**
+ * Содержание судна.
+ *
+ * Корабль ест деньги и тогда, когда стоит у причала: смола, канаты и те, кто
+ * его стережёт. Нечем платить — судно не исчезает, оно просто ветшает: команда
+ * расходится, течь не конопатят. Это и есть разница между «купил корабль» и
+ * «держу корабль».
+ */
+function paySailors(draft: Draft, days: number): void {
+  const ship = draft.ship
+  if (!ship || days <= 0) return
+  const due = shipUpkeep(ship) * days
+  if (draft.character.money >= due) {
+    addMoney(draft, -due)
+    return
+  }
+  addMoney(draft, -draft.character.money)
+  const rot = Math.min(0.5, 0.015 * days)
+  const worn = Math.max(0, Math.round((ship.condition - rot) * 100) / 100)
+  draft.ship = worn > 0 ? { ...ship, condition: worn } : null
+  notice(
+    draft,
+    worn > 0
+      ? `Платить команде «${ship.name}» нечем: судно ветшает у причала.`
+      : `«${ship.name}» брошена и растащена: на содержание не нашлось денег.`,
+    'trade',
+  )
 }
 
 /** Сколько времени уходит на сделку — торг не бывает мгновенным. */
@@ -1956,6 +2296,10 @@ function camp(state: GameState): CommandResult {
   if (!state.journey && state.settlements[state.locationId]) {
     return fail('unavailableHere', 'Здесь есть крыша: лагерем встают там, где её нет.')
   }
+  // В море костра не разводят: палуба — не обочина.
+  if (state.journey?.sea) {
+    return fail('unavailableHere', 'Ты в море. Тут не встают лагерем — тут стоят вахту.')
+  }
 
   const draft = open(state)
   notice(
@@ -2697,6 +3041,7 @@ interface Draft {
   journey: Journey | null
   settlements: Readonly<Record<string, Settlement>>
   party: Party
+  ship: Ship | null
   battle: Battle | null
   politics: Politics
   /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
@@ -2730,6 +3075,7 @@ function open(state: GameState): Draft {
     journey: state.journey,
     settlements: state.settlements,
     party: state.party,
+    ship: state.ship,
     battle: state.battle,
     politics: state.politics,
     world: state.world,
@@ -2900,6 +3246,7 @@ function close(draft: Draft): CommandResult {
     journey: draft.journey,
     settlements: draft.settlements,
     party: draft.party,
+    ship: draft.ship,
     battle: draft.battle,
     politics: draft.politics,
     bands: draft.bands,
@@ -3083,6 +3430,7 @@ function warNews(
  */
 function payUpkeep(draft: Draft, days: number): void {
   collectHoldings(draft, days)
+  paySailors(draft, days)
   if (partySize(draft.party) === 0) return
 
   let unpaid = 0

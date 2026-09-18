@@ -4,7 +4,10 @@ import {
   type Command,
   type GameState,
   PLACE_LABELS,
+  type Passage,
   type PlaceKind,
+  SHIPS,
+  SHIP_KINDS,
   SITES,
   TERRAIN_LABELS,
   addressOf,
@@ -24,14 +27,24 @@ import {
   journeyLeft,
   kingdomOf,
   landHolderOf,
+  lanesFrom,
   lordById,
   lordSays,
   matchesAt,
   offersAt,
+  partySize,
+  passageCost,
   plagueAt,
+  repairPrice,
+  resalePrice,
   roadsFrom,
+  seaHours,
+  shipCarries,
+  shipDef,
   timeOfDay,
+  waitHours,
 } from '@tpg/engine'
+import { useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useWindowDimensions } from 'react-native'
 import { Icon } from '../art/icons'
@@ -301,6 +314,8 @@ export function HomeScreen({ game }: { game: GameState }) {
         </Chips>
       </Section>
 
+      <SeaSection game={game} dispatch={dispatch} />
+
       {settlement ? null : (
         <Section title="Что здесь делают">
           <Card
@@ -524,6 +539,139 @@ function ownerName(game: GameState, owner: string | null): string {
  * идёшь. Отсюда же два решения, которых у мгновенного перемещения быть не
  * могло: повернуть назад и встать лагерем прямо на дороге.
  */
+/**
+ * Море отсюда (этап 35).
+ *
+ * Гавань — это не строчка в описании места, а развилка: куда плыть и чьим
+ * судном. Способ выбирается отдельно от цели нарочно — цена и скорость зависят
+ * от него сильнее, чем от того, куда идти: своё судно уходит когда хочешь,
+ * нанятое стоит денег, а на попутное не пустят дружину.
+ */
+function SeaSection({
+  game,
+  dispatch,
+}: {
+  game: GameState
+  dispatch: (command: Command) => void
+}) {
+  const lanes = lanesFrom(game.world, game.locationId)
+  const [chosen, setChosen] = useState<string | null>(null)
+  if (lanes.length === 0) return null
+  const target = lanes.find((lane) => lane.to === chosen) ?? lanes[0]
+  if (!target) return null
+  const people = partySize(game.party) + 1
+  const manners: { manner: Passage; title: string; description: string }[] = [
+    {
+      manner: 'own',
+      title: 'Своим судном',
+      description: game.ship
+        ? `«${game.ship.name}» — уходит когда скажешь и берёт ${shipCarries(game.ship)} душ.`
+        : 'Своего судна у тебя нет: его покупают тут же, в гавани.',
+    },
+    {
+      manner: 'hire',
+      title: 'Нанять судно',
+      description: 'Судно с командой на один переход: дорого, зато сразу и почти на всех.',
+    },
+    {
+      manner: 'aboard',
+      title: 'Попутным',
+      description: 'Подсесть к чужому шкиперу: гроши, но ждать отплытия и идти дольше.',
+    },
+  ]
+
+  return (
+    <>
+      <Section title="Морем отсюда" aside={`${lanes.length} путей`}>
+        <Chips>
+          {lanes.map((lane) => {
+            const place = game.world.locations[lane.to]
+            if (!place) return null
+            return (
+              <Chip
+                key={lane.to}
+                label={`${place.name} · ${formatDuration(hours(lane.hours))}`}
+                active={lane.to === target.to}
+                onPress={() => setChosen(lane.to)}
+              />
+            )
+          })}
+        </Chips>
+        {manners.map((one) => {
+          const command: Command = { type: 'sail', toLocationId: target.to, manner: one.manner }
+          const going = seaHours(target.hours, one.manner, game.ship)
+          const price = passageCost(one.manner, going, people)
+          const wait = waitHours(one.manner)
+          // Часы своего судна считаются по этому судну. Нет судна — нет и
+          // часов: показывать чужие было бы враньём.
+          const unknown = one.manner === 'own' && !game.ship
+          return (
+            <Card
+              key={one.manner}
+              glyph={<Icon name="port" size={20} color={palette.gold} />}
+              title={one.title}
+              description={one.description}
+              meta={
+                unknown
+                  ? 'судна нет'
+                  : `${formatDuration(hours(going))} ходу${price > 0 ? ` · ${price} монет` : ''}${
+                      wait > 0 ? ` · ждать ${formatDuration(hours(wait))}` : ''
+                    }`
+              }
+              reason={reasonOf(canApply(game, command))}
+              onPress={() => dispatch(command)}
+            />
+          )
+        })}
+      </Section>
+
+      <Section title="Пристань">
+        {game.ship ? (
+          <>
+            <Card
+              glyph={<Icon name="port" size={20} color={palette.info} />}
+              title={`«${game.ship.name}» · ${shipDef(game.ship).label.toLowerCase()}`}
+              description={shipDef(game.ship).description}
+              meta={`целость ${Math.round(game.ship.condition * 100)}% · содержание ${shipDef(game.ship).upkeep} в день`}
+            />
+            <Card
+              glyph={<Icon name="tools" size={20} color={palette.gold} />}
+              title="Починить"
+              description="Проконопатить, просмолить, сменить снасти. После шторма это не роскошь."
+              meta={`${repairPrice(game.ship)} монет`}
+              reason={reasonOf(canApply(game, { type: 'repairShip' }))}
+              onPress={() => dispatch({ type: 'repairShip' })}
+            />
+            <Card
+              glyph={<Icon name="silver" size={20} color={palette.dim} />}
+              title="Продать"
+              description="Судно уйдёт к другому хозяину, а море останется чужим."
+              meta={`${resalePrice(game.ship)} монет`}
+              reason={reasonOf(canApply(game, { type: 'sellShip' }))}
+              onPress={() => dispatch({ type: 'sellShip' })}
+            />
+          </>
+        ) : (
+          SHIP_KINDS.map((kind) => {
+            const def = SHIPS[kind]
+            return (
+              <Card
+                key={kind}
+                glyph={<Icon name="port" size={20} color={palette.gold} />}
+                title={`Купить: ${def.label.toLowerCase()}`}
+                description={def.description}
+                meta={`${def.price} монет · ${def.carries} душ · ${def.upkeep} в день`}
+                reason={reasonOf(canApply(game, { type: 'buyShip', kind }))}
+                onPress={() => dispatch({ type: 'buyShip', kind })}
+              />
+            )
+          })
+        )}
+      </Section>
+    </>
+  )
+}
+
 function OnTheRoad({
   game,
   dispatch,
@@ -539,6 +687,9 @@ function OnTheRoad({
   const to = game.world.locations[journey.toId]
   const left = journeyLeft(journey)
   const wild = to && isSite(to.archetype) ? SITES[to.archetype] : null
+  // В море всё то же самое и всё другое: часы идут, но лагерем не встают, и
+  // впереди не разбой, а погода (этап 35).
+  const atSea = journey.sea === true
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <View style={styles.scene}>
@@ -551,9 +702,17 @@ function OnTheRoad({
           />
         </View>
         <View style={styles.sceneKind}>
-          <Icon name="road" size={18} color={palette.faint} />
-          <Icon name={to?.terrain ?? 'plains'} size={18} color={palette.faint} />
-          <Faint>{`В ПУТИ · ${TERRAIN_LABELS[to?.terrain ?? 'plains']}`}</Faint>
+          <Icon name={atSea ? 'port' : 'road'} size={18} color={palette.faint} />
+          <Icon
+            name={atSea ? 'coast' : (to?.terrain ?? 'plains')}
+            size={18}
+            color={palette.faint}
+          />
+          <Faint>
+            {atSea
+              ? `В МОРЕ · ${game.ship && journey.manner === 'own' ? `«${game.ship.name}»` : journey.manner === 'hire' ? 'нанятое судно' : 'попутное судно'}`
+              : `В ПУТИ · ${TERRAIN_LABELS[to?.terrain ?? 'plains']}`}
+          </Faint>
         </View>
         <Title>{to?.name ?? '…'}</Title>
         <Dim>{`из ${from?.name ?? '…'} · осталось ${formatDuration(hours(Math.ceil(left)))}`}</Dim>
@@ -565,29 +724,36 @@ function OnTheRoad({
             label={`Пройдено из ${journey.hours} ч`}
           />
         </View>
-        {wild ? <Dim>{wild.description}</Dim> : null}
+        {wild && !atSea ? <Dim>{wild.description}</Dim> : null}
+        {atSea ? <Dim>Вокруг вода. Вахту стоят по очереди, берега не видно.</Dim> : null}
         <RoadState game={game} />
       </View>
 
-      <Section title="Что делают в пути">
+      <Section title={atSea ? 'Что делают в море' : 'Что делают в пути'}>
         <Card
-          glyph={<Icon name="road" size={20} color={palette.gold} />}
-          title="Идти дальше"
-          description="Часы идут сами: ускорь время наверху, и дорога кончится."
+          glyph={<Icon name={atSea ? 'port' : 'road'} size={20} color={palette.gold} />}
+          title={atSea ? 'Идти прежним курсом' : 'Идти дальше'}
+          description={
+            atSea
+              ? 'Часы идут сами: ускорь время наверху, и берег покажется.'
+              : 'Часы идут сами: ускорь время наверху, и дорога кончится.'
+          }
           meta={`${formatDuration(hours(Math.ceil(left)))} до места`}
           onPress={() => dispatch({ type: 'tick', minutes: 60 })}
         />
-        <Card
-          glyph={<Icon name="rest" size={20} color={palette.info} />}
-          title="Встать лагерем"
-          description="Ночёвка под небом прямо на дороге: отдохнёшь хуже, чем под крышей, и неизвестно, кто выйдет на огонь."
-          meta={`${CAMP_HOURS} ч`}
-          reason={reasonOf(canApply(game, { type: 'camp' }))}
-          onPress={() => dispatch({ type: 'camp' })}
-        />
+        {atSea ? null : (
+          <Card
+            glyph={<Icon name="rest" size={20} color={palette.info} />}
+            title="Встать лагерем"
+            description="Ночёвка под небом прямо на дороге: отдохнёшь хуже, чем под крышей, и неизвестно, кто выйдет на огонь."
+            meta={`${CAMP_HOURS} ч`}
+            reason={reasonOf(canApply(game, { type: 'camp' }))}
+            onPress={() => dispatch({ type: 'camp' })}
+          />
+        )}
         <Card
           glyph={<Icon name="map" size={20} color={palette.dim} />}
-          title="Повернуть назад"
+          title={atSea ? 'Повернуть к прежнему берегу' : 'Повернуть назад'}
           description={`Обратно в ${from?.name ?? 'откуда вышел'}: столько же, сколько уже прошёл.`}
           meta={formatDuration(hours(Math.ceil(journey.hours - left)))}
           onPress={() => dispatch({ type: 'turnBack' })}
@@ -606,6 +772,17 @@ function OnTheRoad({
 function RoadState({ game }: { game: GameState }) {
   const journey = game.journey
   if (!journey) return null
+  if (journey.sea) {
+    const worn = game.ship && journey.manner === 'own' && game.ship.condition < 0.6
+    return (
+      <View style={styles.state}>
+        <Text style={[styles.stateWord, { color: palette.warn }]}>в море не сворачивают</Text>
+        {worn ? (
+          <Text style={[styles.stateWord, { color: palette.danger }]}>судно течёт</Text>
+        ) : null}
+      </View>
+    )
+  }
   const dark = timeOfDay(game.time) === 'night'
   const to = game.world.locations[journey.toId]
   const wild = to && isSite(to.archetype) ? SITES[to.archetype] : null

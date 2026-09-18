@@ -19,6 +19,7 @@ import type { Reputation } from './reputation'
 import { NO_REPUTATION } from './reputation'
 import type { Rng } from './rng'
 import { createRng } from './rng'
+import type { Ship } from './ship'
 import type { GameTime } from './time'
 import { WORLD_START } from './time'
 import type { Politics } from './war'
@@ -27,7 +28,7 @@ import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 19
+export const SCHEMA_VERSION = 20
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -73,6 +74,13 @@ export interface GameState {
   readonly journey: Journey | null
   /** Люди под началом игрока. */
   readonly party: Party
+  /**
+   * Своё судно, если куплено (этап 35).
+   *
+   * Лежит в состоянии, а не в мире: корабль — имущество героя, как деньги и
+   * снаряжение. Пустое почти всю игру: своё судно стоит как три каравана.
+   */
+  readonly ship: Ship | null
   /** Идущий бой. Пока он есть, мир стоит: время боя своё (DESIGN.md, п.2). */
   readonly battle: Battle | null
   /** Кто с кем воюет. */
@@ -133,6 +141,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     locationId,
     journey: null,
     party: EMPTY_PARTY,
+    ship: null,
     battle: null,
     politics,
     bands,

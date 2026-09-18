@@ -49,8 +49,14 @@ describe('земля роздана', () => {
         return world.regions[regionId]?.kingdomId !== FRONTIER
       })
     expect(ownerless).toEqual([])
+    // Ничьих поселений ровно столько, сколько ничьей земли: вольное село в
+    // каждой марке и все места островов — до острова короне не дотянуться
+    // (этап 35).
     const free = Object.values(base.settlements).filter((one) => one.owner === null)
-    expect(free.length, 'вольных сёл в пограничье').toBe(MARCHES.length)
+    const islandPlaces = Object.values(world.provinces)
+      .filter((province) => province.island)
+      .reduce((sum, province) => sum + province.locationIds.length, 0)
+    expect(free.length, 'вольных сёл и мест на островах').toBe(MARCHES.length + islandPlaces)
     for (const kingdom of Object.values(world.kingdoms)) {
       expect(base.settlements[kingdom.capitalId]?.owner).toBe(`crown:${kingdom.id}`)
     }

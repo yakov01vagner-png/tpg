@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createCharacter } from '../src/character'
-import { KINGDOM_BLUEPRINTS, KINGDOM_SHORT, MARCHES } from '../src/content/world'
+import { ISLANDS, KINGDOM_BLUEPRINTS, KINGDOM_SHORT, MARCHES } from '../src/content/world'
 import { createGame } from '../src/state'
 import { generateWorld } from '../src/world/generate'
 import { worldGrid } from '../src/world/grid'
@@ -55,7 +55,10 @@ describe('мир вдвое больше', () => {
   it('пограничье не потерялось в большом мире', () => {
     const world = generateWorld(1)
     const frontier = Object.values(world.regions).filter((one) => one.kingdomId === FRONTIER)
-    expect(frontier).toHaveLength(MARCHES.length)
+    // Ничья земля — это марки и острова (этап 35): и те и другие не числятся
+    // ни за одной короной.
+    expect(frontier.filter((one) => one.id.startsWith('march.'))).toHaveLength(MARCHES.length)
+    expect(frontier).toHaveLength(MARCHES.length + ISLANDS.length)
   })
 
   it('у каждой короны есть короткое имя для общего вида', () => {

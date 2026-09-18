@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { KINGDOM_BLUEPRINTS, MARCHES } from '../src/content/world'
+import { ISLANDS, KINGDOM_BLUEPRINTS, MARCHES } from '../src/content/world'
 import { defaultStartLocationId, generateWorld } from '../src/world/generate'
 import { MAP_SIZE } from '../src/world/layout'
 import { addressOf, hopsBetween, reachableFrom, roadsFrom } from '../src/world/queries'
@@ -37,12 +37,14 @@ describe('генерация мира', () => {
       `мир: ${Object.keys(world.kingdoms).length} королевств, ${counts.regions} областей, ` +
         `${counts.provinces} провинций, ${counts.locations} локаций`,
     )
-    // Пятнадцать областей корон плюс пять марок пограничья.
+    // Двадцать областей корон, пять марок пограничья и три острова: и марка, и
+    // остров — земля без короны, только одна лежит между ними, а другая за
+    // морем от всех (этап 35).
     const crownRegions = KINGDOM_BLUEPRINTS.reduce((sum, one) => sum + one.regions.length, 0)
-    expect(counts.regions).toBe(crownRegions + MARCHES.length)
+    expect(counts.regions).toBe(crownRegions + MARCHES.length + ISLANDS.length)
     expect(
       Object.values(world.regions).filter((region) => region.kingdomId === FRONTIER).length,
-    ).toBe(MARCHES.length)
+    ).toBe(MARCHES.length + ISLANDS.length)
     expect(counts.provinces).toBeGreaterThanOrEqual(20)
     expect(counts.locations).toBeGreaterThanOrEqual(40)
   })

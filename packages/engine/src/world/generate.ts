@@ -2,6 +2,7 @@ import { SITES, SITE_EPITHETS, sitesFor } from '../content/sites'
 import {
   ARCHETYPE_NAMES,
   IMPORT_RELIANCE,
+  ISLANDS,
   KINGDOM_BLUEPRINTS,
   type KingdomBlueprint,
   MARCHES,
@@ -15,6 +16,7 @@ import {
 import { landCapacityOf } from '../life'
 import type { Rng } from '../rng'
 import { createRng, nextFloat, nextInt } from '../rng'
+import { buildLanes } from './lanes'
 import type { Point } from './layout'
 import { MAP_SIZE, MIN_GAP, SITE_GAP, Spacer, placeLocations, provinceCentersOf } from './layout'
 import { hopsBetween } from './queries'
@@ -212,6 +214,65 @@ export function generateWorld(
     }
   }
 
+  // Острова кладутся последними из рукописного: они не принадлежат ни одной
+  // короне, лежат за морем от всех и потому не участвуют ни в одном расчёте
+  // материка (этап 35).
+  for (const island of ISLANDS) {
+    const regionId = `island.${island.id}`
+    const provinceId = `${regionId}.p0`
+    const fertility = round2(roll.betweenFloat(TERRAIN_FERTILITY[island.terrain]))
+    const locationIds: string[] = []
+    for (const [index, place] of island.places.entries()) {
+      const id = `${provinceId}.l${index}`
+      locations[id] = {
+        id,
+        provinceId,
+        name: place.name,
+        archetype: place.archetype,
+        terrain: island.terrain,
+        // Остров кормится морем, а не землёй: своей земли под ним мало, и людей
+        // на нём втрое меньше того, что дала бы эта земля на материке. Гавань
+        // в две тысячи душ — это большой остров, а не город: шесть тысяч,
+        // которые выходили по общей мере, стояли бы на голом камне.
+        population: Math.max(
+          60,
+          Math.round(landCapacityOf(place.archetype, island.terrain, fertility) * 0.3),
+        ),
+      }
+      locationIds.push(id)
+    }
+    const siteIds: string[] = []
+    for (const [index, kind] of island.sites.entries()) {
+      const id = `${provinceId}.s${index}`
+      locations[id] = {
+        id,
+        provinceId,
+        name: names.forSite(kind),
+        archetype: kind,
+        terrain: island.terrain,
+        population: 0,
+      }
+      siteIds.push(id)
+    }
+    provinces[provinceId] = {
+      id: provinceId,
+      regionId,
+      name: island.provinceName,
+      terrain: island.terrain,
+      fertility,
+      locationIds,
+      siteIds,
+      island: true,
+    }
+    regions[regionId] = {
+      id: regionId,
+      kingdomId: FRONTIER,
+      name: island.name,
+      terrain: island.terrain,
+      provinceIds: [provinceId],
+    }
+  }
+
   // Сперва поселения ложатся на карту, потом между соседями встаёт то, через
   // что к ним идут, и только потом по всему этому прокладывают дороги: дорога —
   // следствие земли, а не списка (roads.ts).
@@ -232,7 +293,14 @@ export function generateWorld(
   const pairs = neighbourPairs(Object.values(placed).map(spotOf))
   const links = pairs.map((pair) => [pair.from, pair.to] as const)
   const centres = provinceCentersOf({ kingdoms, regions, provinces } as World)
-  const sea = buildSea(Object.values(placed), links, Object.values(centres), seed)
+  // Середина острова землю вокруг себя не держит: её держат только сами места.
+  // Иначе остров выходит куском материка в море — полтораста единиц суши, у
+  // которой середина дальше от воды, чем деревня в глубине королевства, и порт
+  // на нём оказывается не у моря (этап 35).
+  const mainland = Object.entries(centres)
+    .filter(([provinceId]) => !provinces[provinceId]?.island)
+    .map(([, point]) => point)
+  const sea = buildSea(Object.values(placed), links, mainland, seed)
 
   // Реки текут по уже готовой суше к уже готовому морю, а броды встают там,
   // где их переходит дорога: иначе переправа оказывается местом с дурной
@@ -246,7 +314,9 @@ export function generateWorld(
   settlePorts(placed, provinces, regions, sea)
 
   const skeleton = { kingdoms, regions, provinces, locations: placed, sea, rivers }
-  return { ...skeleton, roads: buildRoads(skeleton) }
+  // Морские пути строятся последними: им нужны и вода, и уже назначенные порты
+  // (этап 35).
+  return { ...skeleton, roads: buildRoads(skeleton), lanes: buildLanes(placed, sea) }
 }
 
 /**
@@ -333,12 +403,16 @@ function fillFords(
         : to
     const province = world.provinces[host.provinceId]
     if (!province) continue
-    const kind: SiteKind =
-      province.terrain === 'marsh' ? 'causeway' : province.terrain === 'coast' ? 'crossing' : 'ford'
-    // Распорядитель может отвести точку от русла, если тут уже тесно, — тогда
-    // брод не брод: он обязан стоять на реке, иначе через реку не пройти.
-    const spaced = spacer.place(crossing, MIN_GAP)
-    const point = onRiver(currents, spaced.x, spaced.y) ? spaced : crossing
+    // Вид переправы выбирает земля — и выбирает из того, что на такой земле
+    // вообще бывает (правило этапа 26: гать только в топях, перевал только в
+    // горах). В горах реку переходят по мосту, потому что брода там нет.
+    const kind: SiteKind = crossingFor(province.terrain)
+    // Брод обязан стоять на русле: отведённый в сторону, он уже не брод. Если
+    // в самой точке перехода тесно, место ищется вдоль русла — по кругу, но
+    // только там, где река ещё течёт. Не нашлось — брода не будет, и дорога
+    // здесь не пройдёт вовсе.
+    const point = freeOnRiver(spacer, currents, crossing)
+    if (!point) continue
     const next = (counters.get(province.id) ?? 0) + 1
     counters.set(province.id, next)
     const id = `${province.id}.s${next - 1}`
@@ -416,6 +490,32 @@ function settlePorts(
     if (!shore) continue
     locations[shore.id] = { ...shore, archetype: 'port' }
   }
+}
+
+/** Ближайшая к переходу точка на русле, где ещё не тесно. */
+function freeOnRiver(spacer: Spacer, currents: RiverMask, at: Point): Point | null {
+  if (spacer.free(at, MIN_GAP)) return spacer.take(at, MIN_GAP)
+  for (const radius of [18, 26, 34, 44]) {
+    for (let i = 0; i < 12; i += 1) {
+      const angle = (i / 12) * Math.PI * 2
+      const point = {
+        x: Math.round(at.x + Math.cos(angle) * radius),
+        y: Math.round(at.y + Math.sin(angle) * radius),
+      }
+      if (!onRiver(currents, point.x, point.y)) continue
+      if (!spacer.free(point, MIN_GAP)) continue
+      return spacer.take(point, MIN_GAP)
+    }
+  }
+  return null
+}
+
+/** Чем переходят реку на такой земле. */
+function crossingFor(terrain: Terrain): SiteKind {
+  if (terrain === 'marsh') return 'causeway'
+  if (terrain === 'coast') return 'crossing'
+  if (terrain === 'mountains') return 'bridge'
+  return 'ford'
 }
 
 /**
@@ -679,7 +779,14 @@ interface Namer {
  * настоящая карта, где рядом стоят Верхний и Нижний выселки.
  */
 function makeNamer(roll: Roller): Namer {
-  const used = new Set<string>()
+  // Рукописные имена занимают своё место сразу: столицы, вольные сёла марок и
+  // места островов написаны руками, и раздатчик не должен выдать такое же
+  // имя деревне в другом конце мира.
+  const used = new Set<string>([
+    ...KINGDOM_BLUEPRINTS.map((one) => one.capitalName),
+    ...MARCHES.map((one) => one.freeTown),
+    ...ISLANDS.flatMap((one) => one.places.map((place) => place.name)),
+  ])
   const pools = new Map<string, string[]>()
 
   const poolFor = (key: string, source: readonly string[]): string[] => {

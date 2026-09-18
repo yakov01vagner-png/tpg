@@ -108,14 +108,18 @@ describe('дорога переходит реку только в перепр�
     }
   })
 
-  it('мир остаётся связным: река делит землю, но не рвёт её', () => {
+  it('материк остаётся связным: река делит землю, но не рвёт её', () => {
     for (const seed of SEEDS) {
       const world = generateWorld(seed)
-      const ids = Object.keys(world.locations)
-      const first = ids[0]
+      // Считаем материк: острова (этап 35) отрезаны от него морем нарочно, и
+      // спрашивать с реки за это нельзя.
+      const mainland = Object.values(world.locations).filter(
+        (one) => !world.provinces[one.provinceId]?.island,
+      )
+      const first = mainland[0]
       if (!first) continue
-      const seen = new Set([first])
-      const queue = [first]
+      const seen = new Set([first.id])
+      const queue = [first.id]
       while (queue.length > 0) {
         const at = queue.pop() as string
         for (const road of world.roads[at] ?? []) {
@@ -124,7 +128,7 @@ describe('дорога переходит реку только в перепр�
           queue.push(road.to)
         }
       }
-      expect(seen.size, `зерно ${seed}: мир распался`).toBe(ids.length)
+      expect(seen.size, `зерно ${seed}: материк распался`).toBe(mainland.length)
     }
   })
 })

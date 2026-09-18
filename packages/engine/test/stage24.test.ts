@@ -26,10 +26,19 @@ import type { World } from '../src/world/types'
 const YEAR = 360
 
 /** Сколько людей живёт в мире против того, сколько кормит его земля. */
+/**
+ * Сколько людей стоит на земле, которая их кормит.
+ *
+ * Острова (этап 35) в счёт не идут: они кормятся морем, а не своей землёй, —
+ * поэтому людей на них нарочно втрое меньше того, что дала бы их земля, и в
+ * общей мере они врали бы о материке.
+ */
 function landLoad(world: World, settlements: Readonly<Record<string, Settlement>>): number {
   let people = 0
   let land = 0
   for (const [id, settlement] of Object.entries(settlements)) {
+    const provinceId = world.locations[id]?.provinceId ?? ''
+    if (world.provinces[provinceId]?.island) continue
     people += settlement.population
     land += carryingCapacity(world, id, settlement)
   }

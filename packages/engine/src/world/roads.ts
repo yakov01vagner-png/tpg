@@ -182,24 +182,32 @@ function bridgeIslands(
     }
     if (islands.size <= 1) return
 
-    // Берём остров поменьше и тянем от него кратчайший переход к чужой земле.
+    // Берём кусок поменьше и тянем от него кратчайший переход к чужой земле.
+    // Тот, до которого посуху не дотянуться вовсе (настоящий остров за морем),
+    // пропускаем и берёмся за следующий: иначе один остров отменяет сшивание
+    // всего остального — а в мире с версии 0.5 острова есть нарочно (этап 35).
     const sorted = [...islands.values()].sort((one, other) => one.length - other.length)
-    const island = sorted[0]
-    if (!island) return
-    const mine = new Set(island.map((spot) => spot.id))
-    let best: { from: Spot; to: Spot; span: number } | null = null
-    for (const from of island) {
-      for (const to of spots) {
-        if (mine.has(to.id)) continue
-        if (sea && crossesWater(sea, from, to)) continue
-        if (crossesRiver(rivers, from, to)) continue
-        const span = distance(from, to)
-        if (!best || span < best.span) best = { from, to, span }
+    let joined = false
+    for (const island of sorted) {
+      const mine = new Set(island.map((spot) => spot.id))
+      let best: { from: Spot; to: Spot; span: number } | null = null
+      for (const from of island) {
+        for (const to of spots) {
+          if (mine.has(to.id)) continue
+          if (sea && crossesWater(sea, from, to)) continue
+          if (crossesRiver(rivers, from, to)) continue
+          const span = distance(from, to)
+          if (!best || span < best.span) best = { from, to, span }
+        }
       }
+      if (!best) continue
+      connect(best.from, best.to)
+      union.join(best.from.id, best.to.id)
+      joined = true
+      break
     }
-    if (!best) return
-    connect(best.from, best.to)
-    union.join(best.from.id, best.to.id)
+    // Всё, что осталось, за морем друг от друга: сшивать больше нечего.
+    if (!joined) return
   }
 }
 

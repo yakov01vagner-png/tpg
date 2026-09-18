@@ -1,4 +1,4 @@
-import { KINGDOM_CENTERS, MARCHES } from '../content/world'
+import { ISLANDS, KINGDOM_CENTERS, MARCHES } from '../content/world'
 import type { World } from './types'
 
 /**
@@ -115,6 +115,14 @@ export function provinceCentersOf(world: World): Readonly<Record<string, Point>>
         y: middle.y + across.y * shift,
       }
     }
+  }
+
+  // Остров стоит там, где ему назначено, и больше нигде: у него нет короны, от
+  // которой можно было бы отложить угол и радиус (этап 35).
+  for (const island of ISLANDS) {
+    const provinceId = `island.${island.id}.p0`
+    if (!world.provinces[provinceId]) continue
+    centers[provinceId] = island.at
   }
 
   return centers
@@ -237,13 +245,33 @@ export class Spacer {
   }
 
   /**
+   * Свободно ли тут.
+   *
+   * Нужно тому, кто не может встать куда попало: брод обязан стоять на русле, и
+   * если русло занято — брода не будет вовсе (этап 34). Зазор здесь требуется
+   * весь, а не меньший из двух: тот, кто выбирает место сам, не имеет права
+   * встать другому на голову.
+   */
+  free(point: Point, gap: number = MIN_GAP): boolean {
+    return !this.crowded({ x: clamp(point.x), y: clamp(point.y) }, gap, true)
+  }
+
+  /** Занять точку, не двигая её. */
+  take(point: Point, gap: number = MIN_GAP): Point {
+    const at = { x: clamp(point.x), y: clamp(point.y) }
+    this.taken.push({ point: at, gap })
+    return at
+  }
+
+  /**
    * Тесно ли тут. Двоим хватает того зазора, которого просит меньший: место без
    * жителей встаёт у самой околицы, а два поселения расходятся широко.
    */
-  private crowded(point: Point, gap: number): boolean {
+  private crowded(point: Point, gap: number, strict = false): boolean {
     return this.taken.some(
       (other) =>
-        Math.hypot(other.point.x - point.x, other.point.y - point.y) < Math.min(gap, other.gap),
+        Math.hypot(other.point.x - point.x, other.point.y - point.y) <
+        (strict ? gap : Math.min(gap, other.gap)),
     )
   }
 }

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { KINGDOM_CENTERS } from '../src/content/world'
 import { generateWorld } from '../src/world/generate'
-import { MAP_SIZE, layoutOf } from '../src/world/layout'
+import { MAP_SIZE, SETTLEMENT_GAP, SITE_GAP, layoutOf } from '../src/world/layout'
 import { roadsFrom } from '../src/world/queries'
+import { isSite } from '../src/world/types'
 
 const world = generateWorld(1)
 const layout = layoutOf(world)
@@ -28,14 +29,25 @@ describe('раскладка карты', () => {
     }
   })
 
-  it('не кладёт поселения друг на друга: каждое видно и по каждому можно попасть', () => {
-    const all = Object.values(layout)
-    for (let i = 0; i < all.length; i += 1) {
-      const a = all[i]
-      for (let j = i + 1; j < all.length; j += 1) {
-        const b = all[j]
+  it('не кладёт места друг на друга: каждое видно и по каждому можно попасть', () => {
+    // Зазор у каждого свой: поселение держит вокруг себя околицу (`SETTLEMENT_GAP`
+    // — в неё и встают места между соседями), а место без жителей — только то,
+    // чтобы его было видно отдельно (`SITE_GAP`). Двоим хватает меньшего из
+    // двух: брод встаёт у самой околицы, а две деревни расходятся широко.
+    const gapOf = (id: string) =>
+      isSite(world.locations[id]?.archetype ?? 'village') ? SITE_GAP : SETTLEMENT_GAP
+    const ids = Object.keys(layout)
+    for (let i = 0; i < ids.length; i += 1) {
+      for (let j = i + 1; j < ids.length; j += 1) {
+        const one = ids[i] as string
+        const two = ids[j] as string
+        const a = layout[one]
+        const b = layout[two]
         if (!a || !b) continue
-        expect(distance(a, b)).toBeGreaterThanOrEqual(16)
+        expect(
+          distance(a, b),
+          `${world.locations[one]?.name} и ${world.locations[two]?.name}`,
+        ).toBeGreaterThanOrEqual(Math.min(gapOf(one), gapOf(two)))
       }
     }
   })

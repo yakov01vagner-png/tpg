@@ -1,3 +1,4 @@
+import { lanesFrom } from './lanes'
 import type { Kingdom, Location, Province, Region, Road, World } from './types'
 import { isSettlement } from './types'
 
@@ -47,11 +48,16 @@ export function locationsOfProvince(world: World, provinceId: string): readonly 
  * околицей» через `roadsFrom`, теперь спрашивает это: идём по дорогам, пока не
  * упрёмся в людей, и останавливаемся на них. Без этого мор перестал
  * перекидываться вовсе: за околицей у него оказывались одни курганы.
+ *
+ * Восемь шагов, а не шесть: с версии 0.5 между поселениями лежит ещё и
+ * переправа через реку, и у вольного села пограничья ближайшие люди оказались в
+ * семи переходах — то есть «без соседей вовсе». Среднее при этом три с
+ * небольшим: восемь — это запас на самый глухой угол, а не новая мера.
  */
 export function neighbourSettlements(
   world: World,
   fromId: string,
-  maxHops = 6,
+  maxHops = 8,
 ): readonly { readonly id: string; readonly hops: number; readonly hours: number }[] {
   const seen = new Set<string>([fromId])
   const found: { id: string; hops: number; hours: number }[] = []
@@ -77,7 +83,7 @@ export function neighbourSettlements(
 }
 
 /** Все локации, куда можно дойти по дорогам. Используется проверкой связности. */
-export function reachableFrom(world: World, startId: string): ReadonlySet<string> {
+export function reachableFrom(world: World, startId: string, bySea = true): ReadonlySet<string> {
   const seen = new Set<string>()
   const queue = [startId]
   while (queue.length > 0) {
@@ -86,6 +92,12 @@ export function reachableFrom(world: World, startId: string): ReadonlySet<string
     seen.add(current)
     for (const road of roadsFrom(world, current)) {
       if (!seen.has(road.to)) queue.push(road.to)
+    }
+    // Море — такая же дорога: на остров не прийти пешком, но прийти можно
+    // (этап 35). Кому важна именно суша, тот просит `bySea = false`.
+    if (!bySea) continue
+    for (const lane of lanesFrom(world, current)) {
+      if (!seen.has(lane.to)) queue.push(lane.to)
     }
   }
   return seen
