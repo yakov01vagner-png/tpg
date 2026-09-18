@@ -41,6 +41,15 @@ export interface Character {
   readonly wound: Wound | null
   /** Плен: у кого, надолго ли и почём. Пусто — на воле. */
   readonly captivity: Captivity | null
+  /**
+   * Оберег: до какого времени (в минутах мира) засада и мороз обходят героя
+   * стороной (этап 41). Необязательно — сейвы до 0.5 чар не знают.
+   */
+  readonly warded?: number
+  /** Свет над дорогой: до какого времени ночь не замедляет. */
+  readonly lit?: number
+  /** Зрение: следующее «искать» удаётся наверняка. */
+  readonly insight?: boolean
 }
 
 export const FATIGUE_MAX = 100

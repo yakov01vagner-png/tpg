@@ -9,6 +9,7 @@ import {
   TROOPS,
   type TroopId,
   type Units,
+  bestSpell,
   canApply,
   unitsSize,
 } from '@tpg/engine'
@@ -116,7 +117,18 @@ export function BattleScreen({ game }: { game: GameState }) {
                   </View>
                   <UnitsRow units={units} color={palette.text} />
                   <View style={styles.order}>
-                    <Text style={styles.orderLabel}>{ORDER_LABELS[orders[group]]}</Text>
+                    <Text style={styles.orderLabel}>
+                      {group === 'mages'
+                        ? (bestSpell(
+                            game.character,
+                            orders[group] === 'fireball'
+                              ? 'fire'
+                              : orders[group] === 'curse'
+                                ? 'curse'
+                                : 'ward',
+                          )?.label ?? ORDER_LABELS[orders[group]])
+                        : ORDER_LABELS[orders[group]]}
+                    </Text>
                     <Text style={styles.orderHint}>нажми — сменить</Text>
                   </View>
                 </Pressable>

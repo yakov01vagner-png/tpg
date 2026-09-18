@@ -42,6 +42,8 @@ import { TEMPER_LINES } from './content/lines'
 import type { ShipKind } from './content/ships'
 import { SHIPS, SHIP_NAMES } from './content/ships'
 import { SITES } from './content/sites'
+import type { SpellDef, SpellWhere } from './content/spells'
+import { SPELLS_BY_ID } from './content/spells'
 import type { TroopId } from './content/troops'
 import { TROOPS, TROOP_FOOD_PER_DAY } from './content/troops'
 import { tickDiplomacy } from './diplomacy'
@@ -132,6 +134,7 @@ import {
 } from './ship'
 import type { SkillId } from './skills'
 import { SKILLS } from './skills'
+import { battlePower, bestSpell, castChance } from './spell'
 import type { GameState } from './state'
 import { appendLog } from './state'
 import { DAYS_PER_YEAR, timeOfDay } from './time'
@@ -229,6 +232,8 @@ export type Command =
   | { readonly type: 'repairItem'; readonly slot: SlotId }
   | { readonly type: 'outfitParty'; readonly weapons: number }
   | { readonly type: 'giveFood'; readonly amount: number }
+  /** Сотворить заклинание вне боя (этап 41). */
+  | { readonly type: 'cast'; readonly spellId: string }
   /** Сдать товар тому, кто ждёт его к ярмарке (этап 39). */
   | { readonly type: 'deliverGoods'; readonly good: GoodId; readonly amount: number }
   | { readonly type: 'takeQuest'; readonly questId: string }
@@ -299,6 +304,7 @@ const ROAD_COMMANDS: ReadonlySet<Command['type']> = new Set([
   'battleFlee',
   'battleEnd',
   'payTribute',
+  'cast',
   'duel',
   'payRansom',
   'attackBand',
@@ -443,6 +449,8 @@ export function applyCommand(
       return giveFood(state, command.amount)
     case 'deliverGoods':
       return deliverGoods(state, command.good, command.amount)
+    case 'cast':
+      return cast(state, command.spellId)
     case 'takeQuest':
       return takeQuest(state, command.questId)
     case 'finishQuest':
@@ -805,7 +813,8 @@ function walk(draft: Draft, minutes: number): void {
     float(draft, minutes)
     return
   }
-  const dark = timeOfDay(draft.base.time) === 'night'
+  const dark =
+    timeOfDay(draft.base.time) === 'night' && (draft.character.lit ?? 0) <= draft.base.time
   const walked = Math.min(
     (minutes / MINUTES_PER_HOUR) * (dark ? NIGHT_PACE : 1),
     journeyLeft(journey),
@@ -883,6 +892,8 @@ const CALM_CHANCE = 0.03
 function seaWeather(draft: Draft, hoursAtSea: number): void {
   const journey = draft.journey
   if (!journey || hoursAtSea <= 0) return
+  // Тишь (этап 41): море спит до самого берега.
+  if (journey.calm) return
 
   const [calm, afterCalm] = rollChance(draft.rng, Math.min(0.5, CALM_CHANCE * hoursAtSea))
   draft.rng = afterCalm
@@ -1112,6 +1123,8 @@ function roadAmbush(draft: Draft, journey: Journey, hoursOnRoad: number): void {
 function ambush(draft: Draft, locationId: string, onTheRoad = false): void {
   const here = draft.base.world.locations[locationId]
   if (!here) return
+  // Оберег (этап 41): пока он держится, засада ждёт кого-то другого.
+  if ((draft.character.warded ?? 0) > draft.time) return
   const settlement = draft.settlements[locationId]
   const banditry = settlement?.banditry ?? 0
   const wild = isSite(here.archetype) ? SITES[here.archetype].danger : 0
@@ -1157,6 +1170,7 @@ function ambush(draft: Draft, locationId: string, onTheRoad = false): void {
  */
 function frostbite(draft: Draft): void {
   if (draft.character.wound) return
+  if ((draft.character.warded ?? 0) > draft.time) return
   const skill = skillLevel(draft.character, 'survival')
   const risk = Math.max(0, 0.3 - skill * 0.04)
   const [bitten, afterRoll] = rollChance(draft.rng, risk)
@@ -1298,6 +1312,11 @@ function battleOrders(state: GameState, orders: Readonly<Record<GroupId, OrderId
     {
       command: skillLevel(state.character, 'command'),
       magic: skillLevel(state.character, 'magic'),
+      spells: {
+        fire: spellInBattle(state.character, 'fire'),
+        curse: spellInBattle(state.character, 'curse'),
+        ward: spellInBattle(state.character, 'ward'),
+      },
       // Снаряжение отряда множит силу строя, железо героя прибавляет своё.
       gear: gearFactor(state.party),
       heroAttack: hero.attack * woundFactor,
@@ -1995,6 +2014,159 @@ function giveFood(state: GameState, amount: number): CommandResult {
 
 // --- поручения --------------------------------------------------------------
 
+/** Что стоит за приказом кругу: сильнейшее известное заклинание рода. */
+function spellInBattle(
+  character: Character,
+  family: 'fire' | 'curse' | 'ward',
+): { readonly power: number; readonly label: string } | null {
+  const spell = bestSpell(character, family)
+  return spell ? { power: battlePower(character, family), label: spell.label } : null
+}
+
+/**
+ * Сотворить заклинание вне боя (этап 41).
+ *
+ * Заклинание — содержимое: команда читает, что оно делает и чего стоит, и
+ * ветвится только по роду действия. Неудача стоит того же, что удача, —
+ * усталость и время уходят, чуда нет. Это и есть цена: магия дорога, иначе она
+ * съедает остальную игру.
+ */
+function cast(state: GameState, spellId: string): CommandResult {
+  const spell = SPELLS_BY_ID[spellId]
+  if (!spell) return fail('unknownAction', 'Такого заклинания нет.')
+  if (spell.where === 'battle') return fail('invalid', 'Это творят в бою, по приказу кругу.')
+  const magic = skillLevel(state.character, 'magic')
+  if (magic < spell.requiredSkill) {
+    return fail(
+      'requirements',
+      `«${spell.label}» даётся с навыка ${spell.requiredSkill}, у тебя ${magic}.`,
+    )
+  }
+  const where = castingPlace(state)
+  if (spell.where !== 'anywhere' && spell.where !== where) {
+    return fail('unavailableHere', `«${spell.label}» здесь не творят: не то место.`)
+  }
+  const blocked = checkFatigue(state.character, spell.fatigue)
+  if (blocked) return blocked
+
+  const draft = open(state)
+  advance(draft, spell.minutes)
+  addFatigue(draft, spell.fatigue)
+  practice(draft, 'magic', 6 + spell.requiredSkill / 4)
+  const [done, afterRoll] = rollChance(draft.rng, castChance(magic, spell))
+  draft.rng = afterRoll
+  if (!done) {
+    notice(draft, `«${spell.label}» не далось: сила ушла в песок.`)
+    return close(draft)
+  }
+  applySpell(draft, spell)
+  return close(draft)
+}
+
+/** Где герой сейчас — для того, какие чары уместны. */
+function castingPlace(state: GameState): SpellWhere {
+  if (state.journey?.sea) return 'sea'
+  if (state.journey) return 'road'
+  const here = state.world.locations[state.locationId]
+  if (here && isSite(here.archetype)) return 'site'
+  return 'place'
+}
+
+function applySpell(draft: Draft, spell: SpellDef): void {
+  const effect = spell.effect
+  switch (effect.kind) {
+    case 'heal': {
+      const wound = draft.character.wound
+      if (!wound) {
+        notice(draft, `«${spell.label}»: лечить некого — ты цел.`)
+        return
+      }
+      const left = wound.daysLeft - effect.days
+      draft.character = {
+        ...draft.character,
+        wound: left > 0 ? { ...wound, daysLeft: left } : null,
+      }
+      notice(
+        draft,
+        left > 0
+          ? `«${spell.label}»: рана затянется на ${effect.days} суток раньше.`
+          : `«${spell.label}»: рана закрылась.`,
+      )
+      return
+    }
+    case 'calm': {
+      const journey = draft.journey
+      if (!journey) return
+      // Снимает то, что прибавил шторм, но не короче самого пути.
+      const hours = Math.max(journey.done + 1, journey.hours - effect.hours)
+      draft.journey = { ...journey, hours, calm: true }
+      notice(draft, `«${spell.label}»: волна легла, и шторм этот переход обойдёт.`)
+      return
+    }
+    case 'wind': {
+      const journey = draft.journey
+      if (!journey) return
+      const left = journey.hours - journey.done
+      const hours = Math.max(journey.done + 1, Math.round(journey.hours - left * effect.share))
+      draft.journey = { ...journey, hours }
+      notice(draft, `«${spell.label}»: до берега на ${journey.hours - hours} ч ближе.`)
+      return
+    }
+    case 'guard':
+      draft.character = { ...draft.character, warded: draft.time + hours(effect.hours) }
+      notice(draft, `«${spell.label}»: до утра тебя обойдут и засада, и мороз.`)
+      return
+    case 'light':
+      draft.character = { ...draft.character, lit: draft.time + hours(effect.hours) }
+      notice(draft, `«${spell.label}»: ночь над дорогой светла, как день.`)
+      return
+    case 'insight':
+      draft.character = { ...draft.character, insight: true }
+      notice(draft, `«${spell.label}»: видно, где лежит. Осталось взять.`)
+      return
+    case 'mend': {
+      const ship = draft.ship
+      if (!ship) {
+        notice(draft, `«${spell.label}»: чинить нечего — судна нет.`)
+        return
+      }
+      draft.ship = {
+        ...ship,
+        condition: Math.min(1, Math.round((ship.condition + effect.condition) * 100) / 100),
+      }
+      notice(
+        draft,
+        `«${spell.label}»: «${ship.name}» держит воду. Целость ${Math.round((draft.ship.condition ?? 0) * 100)}%.`,
+      )
+      return
+    }
+    case 'bless': {
+      const settlement = draft.settlements[draft.locationId]
+      if (!settlement) return
+      const grain = settlement.population * LIFE.foodPerPerson * effect.days
+      draft.settlements = {
+        ...draft.settlements,
+        [draft.locationId]: {
+          ...settlement,
+          stock: { ...settlement.stock, grain: settlement.stock.grain + grain },
+        },
+      }
+      draft.reputation = withPlaceRep(draft.reputation, draft.locationId, 1 + effect.days)
+      notice(
+        draft,
+        `«${spell.label}»: хлеба в амбарах прибавилось на ${effect.days} ${effect.days === 1 ? 'день' : 'дня'}. Здесь это запомнят.`,
+      )
+      return
+    }
+    case 'cleanse':
+      draft.cleansed = { locationId: draft.locationId, untilDay: dayOf(draft.time) + effect.days }
+      notice(draft, `«${spell.label}»: мор здесь берёт вполовину на ${effect.days} суток.`)
+      return
+    default:
+      return
+  }
+}
+
 /**
  * Сдать товар к ярмарке.
  *
@@ -2545,8 +2717,11 @@ function search(state: GameState): CommandResult {
     skillLevel(state.character, 'sleight'),
   )
   const odds = Math.max(0.05, Math.min(0.92, 0.25 + (skill - find.need) * 0.09))
-  const [found, afterRoll] = rollChance(draft.rng, odds)
+  // Зрение (этап 41): кто видел сквозь насыпь, тот не ищет вслепую.
+  const insight = state.character.insight === true
+  const [found, afterRoll] = insight ? [true, draft.rng] : rollChance(draft.rng, odds)
   draft.rng = afterRoll
+  if (insight) draft.character = { ...draft.character, insight: false }
   if (!found) {
     notice(draft, 'Обошёл кругом, обстучал, обшарил. Ничего.')
     return close(draft)
@@ -3340,6 +3515,7 @@ interface Draft {
   settlements: Readonly<Record<string, Settlement>>
   party: Party
   ship: Ship | null
+  cleansed: { readonly locationId: string; readonly untilDay: number } | null
   battle: Battle | null
   politics: Politics
   /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
@@ -3374,6 +3550,7 @@ function open(state: GameState): Draft {
     settlements: state.settlements,
     party: state.party,
     ship: state.ship,
+    cleansed: state.cleansed ?? null,
     battle: state.battle,
     politics: state.politics,
     world: state.world,
@@ -3448,7 +3625,13 @@ function close(draft: Draft): CommandResult {
     // Мор идёт своими сутками: он не ждёт, пока игрок что-то сделает.
     for (let i = 0; i < daysPassed; i += 1) {
       // Лекарь-спутник рядом — мор уносит на треть меньше там, где ты стоишь.
-      const healer = bestSkill(draft.companions, 'healing').level >= 4 ? draft.locationId : null
+      const healer =
+        bestSkill(draft.companions, 'healing').level >= 4 ||
+        (draft.cleansed !== null &&
+          draft.cleansed.untilDay >= dayOf(draft.time) &&
+          draft.cleansed.locationId === draft.locationId)
+          ? draft.locationId
+          : null
       const sick = tickPlague(draft.base.world, draft.settlements, draft.plagues, draft.rng, healer)
       draft.plagues = sick.plagues
       draft.settlements = sick.settlements
@@ -3564,6 +3747,7 @@ function close(draft: Draft): CommandResult {
     settlements: draft.settlements,
     party: draft.party,
     ship: draft.ship,
+    cleansed: draft.cleansed,
     battle: draft.battle,
     politics: draft.politics,
     bands: draft.bands,

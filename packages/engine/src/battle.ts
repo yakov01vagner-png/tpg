@@ -202,6 +202,14 @@ export interface RoundContext {
   readonly command: number
   /** Навык «Магия» героя: сам он тоже чего-то стоит на поле. */
   readonly magic: number
+  /**
+   * Что стоит за приказами кругу (этап 41): сильнейшее известное заклинание
+   * каждого рода, силой и именем. Единица — «огненный шар» подмастерья; нуля
+   * не бывает у того, кто дорос хотя бы до искры.
+   */
+  readonly spells?: Readonly<
+    Record<'fire' | 'curse' | 'ward', { readonly power: number; readonly label: string } | null>
+  >
   /** Снаряжение отряда как множитель силы. */
   readonly gear?: number
   /** Что герой прибавляет лично — своим железом. */
@@ -252,18 +260,29 @@ export function resolveRound(
       const mages = unitsSize(units)
       // Ранг самого героя добавляется к общей силе круга.
       const might = (mages + context.magic / 25) * strainFactor
+      // Заклинание берётся из содержимого: круг бьёт тем, что знает герой.
+      // Наёмные маги знают своё — огненный шар подмастерья, единицу, — и герой
+      // прибавляет к этому только то, что умеет лучше них.
+      const fire = context.spells?.fire ?? null
+      const curse = context.spells?.curse ?? null
+      const ward = context.spells?.ward ?? null
       if (order === 'fireball') {
-        extraEnemyLosses += 0.018 * might
-        strainAdded += 14
-        log.push(`Маги бьют огнём: ${mages} круга.`)
+        const power = Math.max(1, fire?.power ?? 1)
+        extraEnemyLosses += 0.018 * might * power
+        strainAdded += 10 + 4 * power
+        log.push(`${fire?.label ?? 'Маги бьют огнём'}: ${mages} круга.`)
       } else if (order === 'curse') {
-        enemyMoraleHit += 3.5 * might
-        strainAdded += 9
-        log.push('Над чужим строем поднимается вой: порча.')
+        const power = Math.max(1, curse?.power ?? 1)
+        enemyMoraleHit += 3.5 * might * power
+        strainAdded += 6 + 3 * power
+        log.push(
+          curse ? `${curse.label}: над чужим строем.` : 'Над чужим строем поднимается вой: порча.',
+        )
       } else if (order === 'ward') {
-        wardBonus += 0.07 * might
-        strainAdded += 6
-        log.push('Маги держат защиту над своими.')
+        const power = Math.max(1, ward?.power ?? 1)
+        wardBonus += 0.07 * might * power
+        strainAdded += 4 + 2 * power
+        log.push(ward ? `${ward.label}: над своими.` : 'Маги держат защиту над своими.')
       }
       defense += power.defense * effect.defense
       continue

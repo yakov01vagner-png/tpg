@@ -34,6 +34,8 @@ export interface Journey {
   readonly sea?: boolean
   /** Чьим судном идут: своим, нанятым или попутным. */
   readonly manner?: Passage
+  /** Тишь (этап 41): на этот переход шторма не будет. */
+  readonly calm?: boolean
 }
 
 /** Доля пройденного, 0..1: ею и заполняется полоса. */

@@ -10,10 +10,13 @@ import {
   SHIPS,
   SHIP_KINDS,
   SITES,
+  SPELL_FAMILY_LABELS,
   type Season,
+  type SpellWhere,
   TERRAIN_LABELS,
   addressOf,
   canApply,
+  castChance,
   companionsAt,
   coursesAt,
   dayOf,
@@ -48,6 +51,8 @@ import {
   seasonOf,
   shipCarries,
   shipDef,
+  skillLevel,
+  spellsFor,
   timeOfDay,
   waitHours,
 } from '@tpg/engine'
@@ -137,6 +142,8 @@ export function HomeScreen({ game }: { game: GameState }) {
   // Место без жителей: здесь не торгуют и не нанимаются, зато здесь можно
   // оказаться — и это надо сказать словами, а не пустыми плитками.
   const site = here && isSite(here.archetype) ? here.archetype : null
+  // Какие чары уместны: на месте без жителей — зрение, в городе — амбар (этап 41).
+  const placeKind: SpellWhere = site ? 'site' : 'place'
   const reasonFor = (command: Command): string | null => {
     const check = canApply(game, command)
     return check.ok ? null : check.message
@@ -424,6 +431,8 @@ export function HomeScreen({ game }: { game: GameState }) {
         </Tiles>
       ) : null}
 
+      <Spells game={game} dispatch={dispatch} where={placeKind} />
+
       <Section title="Отдых">
         <Chips>
           <Chip label="Передохнуть · 1 ч" onPress={() => dispatch({ type: 'rest', hours: 1 })} />
@@ -575,6 +584,46 @@ function ownerName(game: GameState, owner: string | null): string {
  * идёшь. Отсюда же два решения, которых у мгновенного перемещения быть не
  * могло: повернуть назад и встать лагерем прямо на дороге.
  */
+/**
+ * Чары (этап 41): что маг умеет здесь и сейчас.
+ *
+ * Список читается из содержимого по навыку: ни книги, ни выученного — всё, до
+ * чего дорос. У каждой чары своя цена в часах и усталости, и она стоит на
+ * карточке до нажатия.
+ */
+function Spells({
+  game,
+  dispatch,
+  where,
+}: {
+  game: GameState
+  dispatch: (command: Command) => void
+  where: SpellWhere
+}) {
+  const spells = spellsFor(game.character, where)
+  if (spells.length === 0) return null
+  const magic = skillLevel(game.character, 'magic')
+  return (
+    <Section title="Чары" aside={`${spells.length}`}>
+      {spells.map((spell) => {
+        const command: Command = { type: 'cast', spellId: spell.id }
+        const odds = Math.round(castChance(magic, spell) * 100)
+        return (
+          <Card
+            key={spell.id}
+            glyph={<Icon name="magic" size={20} color={palette.gold} />}
+            title={spell.label}
+            description={spell.description}
+            meta={`${formatDuration(spell.minutes)} · усталость ${spell.fatigue} · ${SPELL_FAMILY_LABELS[spell.family]} · удаётся ${odds}%`}
+            reason={reasonOf(canApply(game, command))}
+            onPress={() => dispatch(command)}
+          />
+        )
+      })}
+    </Section>
+  )
+}
+
 /**
  * Море отсюда (этап 35).
  *
@@ -780,6 +829,8 @@ function OnTheRoad({
         {atSea ? <Dim>Вокруг вода. Вахту стоят по очереди, берега не видно.</Dim> : null}
         <RoadState game={game} />
       </View>
+
+      <Spells game={game} dispatch={dispatch} where={atSea ? 'sea' : 'road'} />
 
       <Section title={atSea ? 'Что делают в море' : 'Что делают в пути'}>
         <Card

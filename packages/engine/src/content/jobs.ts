@@ -94,6 +94,41 @@ export const JOBS: readonly JobDef[] = [
     // Со стороны в школу не берут: нужен кто-то, кто тебя там уже знает.
     requires: { tags: ['school_known'] },
   },
+  // --- магия за плату (этап 41): маг зарабатывает ремеслом, а не рангом -------
+  {
+    id: 'charmCattle',
+    where: { archetypes: ['village', 'town'] },
+    label: 'Заговаривать скот',
+    description:
+      'Хозяева ведут коров и лошадей: от сглаза, от хромоты, от волка. Платят молоком и медью.',
+    durationMinutes: hours(4),
+    pay: 18,
+    practice: { magic: 16, concentration: 8 },
+    fatigue: 22,
+    requires: { skills: { magic: 12 } },
+  },
+  {
+    id: 'layHands',
+    where: { archetypes: TOWNS },
+    label: 'Лечить наложением рук',
+    description: 'Очередь с утра: зубы, спины, младенцы. Не всех вылечишь, но всем полегчает.',
+    durationMinutes: hours(5),
+    pay: 40,
+    practice: { magic: 24, healing: 12 },
+    fatigue: 35,
+    requires: { skills: { magic: 30 } },
+  },
+  {
+    id: 'wardGranary',
+    where: { archetypes: ['city', 'capital', 'port'] },
+    label: 'Ставить обереги на склады',
+    description: 'Купцы платят за то, чтобы не сырело, не горело и не воровалось. Дорого и на год.',
+    durationMinutes: hours(6),
+    pay: 90,
+    practice: { magic: 30, scholarship: 10 },
+    fatigue: 40,
+    requires: { skills: { magic: 50 } },
+  },
   {
     id: 'guardCaravan',
     where: { archetypes: TOWNS, minPopulation: 1500 },

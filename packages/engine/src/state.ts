@@ -81,6 +81,11 @@ export interface GameState {
    * снаряжение. Пустое почти всю игру: своё судно стоит как три каравана.
    */
   readonly ship: Ship | null
+  /**
+   * Отведённый мор (этап 41): где и до какого дня чары держат смерть вполовину.
+   * Необязательно — сейвы до 0.5 чар не знают.
+   */
+  readonly cleansed?: { readonly locationId: string; readonly untilDay: number } | null
   /** Идущий бой. Пока он есть, мир стоит: время боя своё (DESIGN.md, п.2). */
   readonly battle: Battle | null
   /** Кто с кем воюет. */
