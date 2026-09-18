@@ -18,8 +18,10 @@ import {
   troopCount,
 } from '@tpg/engine'
 import { ScrollView, StyleSheet } from 'react-native'
+import { Icon } from '../art/icons'
+import { COMPANION_FACES, Portrait } from '../art/portrait'
 import { dispatch } from '../game/store'
-import { spacing } from '../theme'
+import { palette, spacing } from '../theme'
 import { Badge, Button, Card, Dim, Empty, Panel, Row, Section, Stat, Stats } from '../ui/parts'
 
 /**
@@ -73,6 +75,13 @@ export function PeopleScreen({ game }: { game: GameState }) {
               return (
                 <Card
                   key={band.id}
+                  glyph={
+                    lord ? (
+                      <Portrait seed={lord.id} size={36} age={45} kingdomId={lord.kingdomId} />
+                    ) : (
+                      <Icon name="army" size={22} color={palette.danger} />
+                    )
+                  }
                   title={lord ? `${lord.title} ${lord.name}` : 'Рать короны'}
                   description={`${count} человек под знамёнами`}
                   meta="напасть"
@@ -93,6 +102,7 @@ export function PeopleScreen({ game }: { game: GameState }) {
             return (
               <Card
                 key={lord.id}
+                glyph={<Portrait seed={lord.id} size={36} age={48} kingdomId={lord.kingdomId} />}
                 title={`Посвататься к дому ${lord.name}`}
                 description="Брак — это союз и приданое. Дом смотрит на славу и на то, что о тебе помнят."
                 meta="сватовство"
@@ -112,6 +122,9 @@ export function PeopleScreen({ game }: { game: GameState }) {
           game.companions.map((companion) => (
             <Row
               key={companion.id}
+              glyph={
+                <Portrait seed={companion.id} size={36} overrides={COMPANION_FACES[companion.id]} />
+              }
               title={companion.name}
               subtitle={`${TEMPERS[companion.temper]?.label ?? ''} · ${roleWord(companion.role)}`}
               right={
@@ -156,6 +169,7 @@ export function PeopleScreen({ game }: { game: GameState }) {
             return (
               <Card
                 key={def.id}
+                glyph={<Portrait seed={def.id} size={36} overrides={COMPANION_FACES[def.id]} />}
                 title={def.name}
                 meta={`${def.fee} монет`}
                 description={`${def.story} Нрав: ${TEMPERS[def.temper]?.label ?? ''}.`}
@@ -172,6 +186,7 @@ export function PeopleScreen({ game }: { game: GameState }) {
           {TROOP_IDS.filter((troop) => troopCount(party, troop) > 0).map((troop: TroopId) => (
             <Row
               key={troop}
+              glyph={<Icon name={troop} size={22} color={palette.dim} />}
               title={TROOPS[troop].label}
               subtitle={`${troopCount(party, troop)} чел. · ${TROOPS[troop].wage} монет в сутки каждому`}
               right={
@@ -200,6 +215,7 @@ export function PeopleScreen({ game }: { game: GameState }) {
           return (
             <Card
               key={troop}
+              glyph={<Icon name={troop} size={20} color={palette.dim} />}
               title={def.label}
               description={def.description}
               meta={`${def.hireCost} монет · ${def.wage}/сут`}

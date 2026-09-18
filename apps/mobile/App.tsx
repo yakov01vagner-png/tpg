@@ -9,7 +9,9 @@ import { BattleScreen } from './src/screens/BattleScreen'
 import { CharacterScreen } from './src/screens/CharacterScreen'
 import { CreateCharacterScreen } from './src/screens/CreateCharacterScreen'
 import { EarnSheet } from './src/screens/EarnSheet'
+import { FaceGallery } from './src/screens/FaceGallery'
 import { HomeScreen } from './src/screens/HomeScreen'
+import { IconGallery } from './src/screens/IconGallery'
 import { JournalScreen } from './src/screens/JournalScreen'
 import { LearnSheet } from './src/screens/LearnSheet'
 import { MapScreen } from './src/screens/MapScreen'
@@ -46,6 +48,15 @@ function sheetBody(id: SheetId, game: GameState) {
   }
 }
 
+/** В вебе `#icons` открывает галерею знаков — для проверки стиля, не для игры. */
+const hash =
+  typeof globalThis !== 'undefined' &&
+  typeof (globalThis as { location?: { hash?: string } }).location?.hash === 'string'
+    ? (globalThis as { location: { hash: string } }).location.hash
+    : ''
+const wantsGallery = hash === '#icons'
+const wantsFaces = hash === '#faces'
+
 export default function App() {
   const state = useAppState()
   const nav = useNav()
@@ -54,6 +65,16 @@ export default function App() {
   useEffect(() => {
     void bootstrap()
   }, [])
+
+  if (wantsGallery || wantsFaces) {
+    return (
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.root}>
+          {wantsFaces ? <FaceGallery /> : <IconGallery />}
+        </SafeAreaView>
+      </SafeAreaProvider>
+    )
+  }
 
   return (
     <SafeAreaProvider>

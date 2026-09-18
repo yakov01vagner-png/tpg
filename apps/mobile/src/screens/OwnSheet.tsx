@@ -16,8 +16,9 @@ import {
   warsOf,
 } from '@tpg/engine'
 import { ScrollView, StyleSheet } from 'react-native'
+import { Icon } from '../art/icons'
 import { dispatch } from '../game/store'
-import { spacing } from '../theme'
+import { palette, spacing } from '../theme'
 import { Body, Card, Dim, Empty, Panel, Section } from '../ui/parts'
 
 /**
@@ -101,6 +102,7 @@ export function OwnSheet({ game }: { game: GameState }) {
                 return (
                   <Card
                     key={id}
+                    glyph={<Icon name={id} size={20} color={palette.dim} />}
                     title={BUILDINGS[id].label}
                     description={BUILDINGS[id].description}
                     meta={`${BUILDINGS[id].cost} монет · ${BUILDINGS[id].days} сут`}

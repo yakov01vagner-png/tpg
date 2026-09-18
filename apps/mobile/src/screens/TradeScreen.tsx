@@ -17,6 +17,7 @@ import {
 } from '@tpg/engine'
 import { useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Icon } from '../art/icons'
 import { dispatch } from '../game/store'
 import { font, palette, radii, spacing, touch } from '../theme'
 import { Card, Chip, Chips, Empty, Panel, Section, Stat, Stats } from '../ui/parts'
@@ -76,6 +77,7 @@ export function TradeScreen({ game }: { game: GameState }) {
           const word = verdict(buy, GOODS[good].basePrice)
           return (
             <View key={good} style={styles.row}>
+              <Icon name={good} size={22} color={palette.dim} />
               <View style={styles.info}>
                 <Text style={styles.name}>
                   {GOODS[good].label}
@@ -122,6 +124,7 @@ export function TradeScreen({ game }: { game: GameState }) {
           return (
             <Card
               key={item.id}
+              glyph={<Icon name={item.slot} size={20} color={palette.dim} />}
               title={`${item.label}${worn ? ' · надето' : ''}`}
               description={item.description}
               meta={`${item.price} · ${SLOT_LABELS[item.slot]}`}

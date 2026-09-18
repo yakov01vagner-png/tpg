@@ -2,6 +2,7 @@ import {
   CARAVAN_COST,
   type Command,
   type GameState,
+  type SkillId,
   WORKSHOP_COST,
   canApply,
   describeQuest,
@@ -12,8 +13,9 @@ import {
   offersAt,
 } from '@tpg/engine'
 import { ScrollView, StyleSheet } from 'react-native'
+import { Icon } from '../art/icons'
 import { dispatch } from '../game/store'
-import { spacing } from '../theme'
+import { palette, spacing } from '../theme'
 import { Card, Dim, Empty, Section } from '../ui/parts'
 
 /**
@@ -40,6 +42,7 @@ export function EarnSheet({ game }: { game: GameState }) {
           return (
             <Card
               key={job.id}
+              glyph={<Icon name={mainSkill(job.practice)} size={20} color={palette.dim} />}
               title={job.label}
               description={job.description}
               meta={`${formatDuration(job.durationMinutes)} · +${job.pay}${job.window ? ` · ${formatWindowShort(job.window)}` : ''}`}
@@ -103,6 +106,19 @@ export function EarnSheet({ game }: { game: GameState }) {
       </Section>
     </ScrollView>
   )
+}
+
+/** Знак работы — навык, который она качает сильнее всего. */
+function mainSkill(practice: Readonly<Partial<Record<SkillId, number>>>): SkillId {
+  let best: SkillId = 'hardLabour'
+  let most = -1
+  for (const [skill, amount] of Object.entries(practice)) {
+    if ((amount ?? 0) > most) {
+      most = amount ?? 0
+      best = skill as SkillId
+    }
+  }
+  return best
 }
 
 const styles = StyleSheet.create({

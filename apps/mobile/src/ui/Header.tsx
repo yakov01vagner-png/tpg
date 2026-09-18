@@ -10,6 +10,8 @@ import {
   timeOfDay,
 } from '@tpg/engine'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { Icon } from '../art/icons'
+import { Portrait, heroFace } from '../art/portrait'
 import { openSheet } from '../game/nav'
 import { setSpeed } from '../game/store'
 import { dayTint, font, lineHeight, palette, radii, spacing, touch } from '../theme'
@@ -48,7 +50,7 @@ export function Header({ game, speed }: { game: GameState; speed: ClockSpeed }) 
           style={styles.hero}
         >
           <View style={styles.face}>
-            <Text style={styles.faceLetter}>{hero.name.slice(0, 1)}</Text>
+            <Portrait seed={hero.name} age={hero.age} size={40} overrides={heroFace(hero.tags)} />
             {points > 0 ? <View style={styles.dot} /> : null}
           </View>
           <View>
@@ -75,6 +77,7 @@ export function Header({ game, speed }: { game: GameState; speed: ClockSpeed }) 
           onPress={() => openSheet('map')}
           style={styles.mapButton}
         >
+          <Icon name="map" size={20} color={palette.gold} />
           <Text style={styles.mapLabel}>Карта</Text>
         </Pressable>
       </View>
@@ -135,11 +138,11 @@ const styles = StyleSheet.create({
     borderColor: palette.gold,
     borderRadius: radii.pill,
     borderWidth: 1,
-    height: 36,
+    height: 40,
     justifyContent: 'center',
-    width: 36,
+    overflow: 'hidden',
+    width: 40,
   },
-  faceLetter: { color: palette.gold, fontSize: font.heading, fontWeight: '600' },
   dot: {
     backgroundColor: palette.good,
     borderRadius: 4,
@@ -166,7 +169,7 @@ const styles = StyleSheet.create({
     maxWidth: 72,
     minHeight: touch.min,
   },
-  mapLabel: { color: palette.gold, fontSize: font.small },
+  mapLabel: { color: palette.gold, fontSize: font.tiny },
   fatigueTrack: {
     backgroundColor: palette.line,
     borderRadius: 3,

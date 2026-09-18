@@ -18,8 +18,12 @@ import {
   offersAt,
   plagueAt,
   roadsFrom,
+  timeOfDay,
 } from '@tpg/engine'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { useWindowDimensions } from 'react-native'
+import { Icon } from '../art/icons'
+import { Scene } from '../art/scene'
 import { openSheet } from '../game/nav'
 import { dispatch } from '../game/store'
 import { font, lineHeight, palette, radii, spacing, touch } from '../theme'
@@ -35,6 +39,7 @@ import { Body, Chip, Chips, Dim, Faint, Section, Tile, Tiles, Title } from '../u
  * случилось только что: история под рукой, а не в пятой вкладке.
  */
 export function HomeScreen({ game }: { game: GameState }) {
+  const { width } = useWindowDimensions()
   const here = game.world.locations[game.locationId]
   const settlement = game.settlements[game.locationId]
   const people = settlement?.population ?? here?.population ?? 0
@@ -66,7 +71,19 @@ export function HomeScreen({ game }: { game: GameState }) {
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <View style={[styles.scene, sick ? styles.sceneSick : null]}>
-        <Faint>{`${ARCHETYPE_LABELS[here?.archetype ?? 'village'].toUpperCase()} · ${TERRAIN_LABELS[here?.terrain ?? 'plains']}`}</Faint>
+        <View style={styles.sceneArt}>
+          <Scene
+            archetype={here?.archetype ?? 'village'}
+            timeOfDay={timeOfDay(game.time)}
+            width={Math.max(200, width - spacing.lg * 2)}
+            height={96}
+          />
+        </View>
+        <View style={styles.sceneKind}>
+          <Icon name={here?.archetype ?? 'village'} size={18} color={palette.faint} />
+          <Icon name={here?.terrain ?? 'plains'} size={18} color={palette.faint} />
+          <Faint>{`${ARCHETYPE_LABELS[here?.archetype ?? 'village'].toUpperCase()} · ${TERRAIN_LABELS[here?.terrain ?? 'plains']}`}</Faint>
+        </View>
         <Title>{here?.name ?? '…'}</Title>
         <Dim>
           {`${people > 0 ? `${formatPopulation(people)} жителей` : 'заброшено'} · ${ownerName(game, settlement?.owner ?? null)}`}
@@ -98,6 +115,7 @@ export function HomeScreen({ game }: { game: GameState }) {
 
       <Tiles>
         <Tile
+          glyph={<Icon name="earn" size={22} color={palette.gold} />}
           title="Заработать"
           subtitle={`${jobs} ${plural(jobs, 'работа', 'работы', 'работ')}${offers > 0 ? ` · ${offers} ${plural(offers, 'поручение', 'поручения', 'поручений')}` : ''}`}
           count={jobs + offers}
@@ -105,6 +123,7 @@ export function HomeScreen({ game }: { game: GameState }) {
           tone="gold"
         />
         <Tile
+          glyph={<Icon name="learn" size={22} color={palette.good} />}
           title="Научиться"
           subtitle={lessons > 0 ? 'Наставники и испытания' : 'Учиться здесь не у кого'}
           count={lessons}
@@ -112,6 +131,7 @@ export function HomeScreen({ game }: { game: GameState }) {
           tone="good"
         />
         <Tile
+          glyph={<Icon name="market" size={22} color={palette.gold} />}
           title="Рынок"
           subtitle={people > 0 ? 'Товары, снаряжение, починка' : 'Торговать не с кем'}
           count={people > 0 ? 1 : 0}
@@ -119,6 +139,13 @@ export function HomeScreen({ game }: { game: GameState }) {
           tone="gold"
         />
         <Tile
+          glyph={
+            <Icon
+              name={hosts.length > 0 ? 'army' : 'people'}
+              size={22}
+              color={hosts.length > 0 ? palette.danger : palette.info}
+            />
+          }
           title="Люди"
           subtitle={
             hosts.length > 0
@@ -134,6 +161,13 @@ export function HomeScreen({ game }: { game: GameState }) {
           tone={hosts.length > 0 ? 'danger' : 'info'}
         />
         <Tile
+          glyph={
+            <Icon
+              name={mine ? 'home' : besieging ? 'siege' : 'own'}
+              size={22}
+              color={palette.info}
+            />
+          }
           title={ownTitle}
           subtitle={ownSubtitle}
           count={1}
@@ -262,10 +296,13 @@ const styles = StyleSheet.create({
     borderRadius: radii.lg,
     gap: spacing.xxs,
     marginBottom: spacing.lg,
-    minHeight: 120,
-    padding: spacing.lg,
+    overflow: 'hidden',
+    paddingBottom: spacing.lg,
+    paddingHorizontal: spacing.lg,
   },
+  sceneArt: { marginHorizontal: -spacing.lg, marginBottom: spacing.sm },
   sceneSick: { borderColor: palette.danger, borderWidth: 1 },
+  sceneKind: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
   state: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginTop: spacing.xs },
   stateWord: { fontSize: font.small },
   road: {

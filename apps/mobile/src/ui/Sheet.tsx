@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { Icon } from '../art/icons'
 import { font, lineHeight, palette, radii, spacing, touch } from '../theme'
 
 /**
@@ -26,7 +27,7 @@ export function Sheet({
           onPress={onClose}
           style={styles.back}
         >
-          <Text style={styles.backLabel}>‹</Text>
+          <Icon name="back" size={24} color={palette.gold} />
         </Pressable>
         <Text numberOfLines={1} style={styles.title}>
           {title}
@@ -59,7 +60,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: touch.min,
   },
-  backLabel: { color: palette.gold, fontSize: font.display, lineHeight: lineHeight.display },
   title: { color: palette.text, flex: 1, fontSize: font.heading, lineHeight: lineHeight.heading },
   body: { flex: 1 },
 })

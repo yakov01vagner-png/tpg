@@ -21,6 +21,8 @@ import {
   unrecognizedGap,
 } from '@tpg/engine'
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Icon } from '../art/icons'
+import { Portrait, heroFace } from '../art/portrait'
 import { abandonGame, dispatch } from '../game/store'
 import { font, palette, radii, spacing, touch } from '../theme'
 import { Button, Dim, Faint, Panel, Row, Section, Stat, Stats, Title } from '../ui/parts'
@@ -42,7 +44,13 @@ export function CharacterScreen({ game }: { game: GameState }) {
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <Panel>
-        <Title>{hero.name}</Title>
+        <View style={styles.portraitRow}>
+          <Portrait seed={hero.name} age={hero.age} size={72} overrides={heroFace(hero.tags)} />
+          <View style={styles.portraitText}>
+            <Title>{hero.name}</Title>
+            <Dim>{hero.family.house}</Dim>
+          </View>
+        </View>
         <Stats>
           <Stat label="Уровень" value={`${hero.level}`} />
           <Stat
@@ -67,6 +75,7 @@ export function CharacterScreen({ game }: { game: GameState }) {
         {ATTRIBUTE_IDS.map((id: AttributeId) => (
           <Row
             key={id}
+            glyph={<Icon name={id} size={22} color={palette.gold} />}
             title={ATTRIBUTE_LABELS[id]}
             right={
               <>
@@ -95,6 +104,7 @@ export function CharacterScreen({ game }: { game: GameState }) {
               return (
                 <Row
                   key={skill.id}
+                  glyph={<Icon name={skill.id as SkillId} size={20} color={palette.dim} />}
                   title={skill.label}
                   subtitle={`${Math.round(progress.xp)} из ${skillXpToNext(progress.level)} до следующего`}
                   right={
@@ -122,6 +132,7 @@ export function CharacterScreen({ game }: { game: GameState }) {
           return (
             <Row
               key={slot}
+              glyph={<Icon name={slot} size={20} color={item ? palette.gold : palette.faint} />}
               title={SLOT_LABELS[slot]}
               subtitle={item ? `${item.label} · ${worn?.condition}%` : 'пусто'}
             />
@@ -204,6 +215,13 @@ function Plus({ label, onPress }: { label: string; onPress: () => void }) {
 
 const styles = StyleSheet.create({
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  portraitRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  portraitText: { flex: 1 },
   group: { marginBottom: spacing.md },
   value: { color: palette.text, fontSize: font.body, minWidth: 24, textAlign: 'right' },
   plus: {

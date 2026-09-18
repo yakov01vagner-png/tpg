@@ -12,8 +12,9 @@ import {
   unrecognizedGap,
 } from '@tpg/engine'
 import { ScrollView, StyleSheet } from 'react-native'
+import { Icon } from '../art/icons'
 import { dispatch } from '../game/store'
-import { spacing } from '../theme'
+import { palette, spacing } from '../theme'
 import { Card, Dim, Empty, Panel, Section } from '../ui/parts'
 
 /** Научиться: наставники и испытания этого места. */
@@ -45,6 +46,7 @@ export function LearnSheet({ game }: { game: GameState }) {
           return (
             <Card
               key={course.id}
+              glyph={<Icon name={course.skill} size={20} color={palette.good} />}
               title={course.label}
               description={course.description}
               meta={`${formatDuration(course.durationMinutes)} · −${course.cost} · ${SKILLS[course.skill].label}${course.window ? ` · ${formatWindowShort(course.window)}` : ''}`}
@@ -65,6 +67,7 @@ export function LearnSheet({ game }: { game: GameState }) {
           return (
             <Card
               key={exam.id}
+              glyph={<Icon name="magic" size={20} color={palette.gold} />}
               title={exam.label}
               description={exam.description}
               meta={`${formatDuration(exam.durationMinutes)} · −${exam.cost} · ${MAGIC_RANKS[exam.rank].label}`}

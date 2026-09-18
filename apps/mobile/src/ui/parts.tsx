@@ -307,12 +307,14 @@ export function Card({
  * гасит, но не прячет: пусть видно, чего здесь нет.
  */
 export function Tile({
+  glyph,
   title,
   subtitle,
   count,
   onPress,
   tone = 'neutral',
 }: {
+  glyph?: ReactNode
   title: string
   subtitle?: string
   count?: number
@@ -332,6 +334,7 @@ export function Tile({
       ]}
     >
       <View style={styles.tileHead}>
+        {glyph ? <View style={styles.tileGlyph}>{glyph}</View> : null}
         <Text style={styles.tileTitle}>{title}</Text>
         {count !== undefined && count > 0 ? (
           <Text style={[styles.tileCount, { color: toneColor[tone] }]}>{count}</Text>
@@ -517,8 +520,14 @@ const styles = StyleSheet.create({
     minHeight: 76,
     padding: spacing.md,
   },
-  tileHead: { alignItems: 'baseline', flexDirection: 'row', justifyContent: 'space-between' },
-  tileTitle: { color: palette.text, fontSize: font.heading, lineHeight: lineHeight.heading },
+  tileHead: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
+  tileGlyph: { alignItems: 'center', justifyContent: 'center' },
+  tileTitle: {
+    color: palette.text,
+    flex: 1,
+    fontSize: font.heading,
+    lineHeight: lineHeight.heading,
+  },
   tileCount: { fontSize: font.small },
   tileSubtitle: {
     color: palette.dim,
