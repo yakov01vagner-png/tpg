@@ -14,6 +14,7 @@ import { landCapacityOf } from '../life'
 import type { Rng } from '../rng'
 import { createRng, nextFloat, nextInt } from '../rng'
 import { hopsBetween } from './queries'
+import { isSite } from './types'
 import type {
   Kingdom,
   Location,
@@ -177,33 +178,49 @@ function buildRoads(roll: Roller, world: Omit<World, 'roads'>): Record<string, r
         const province = world.provinces[provinceId]
         if (!province) continue
 
-        // Внутри провинции — цепочка: соседняя деревня в нескольких часах ходу.
-        for (let i = 1; i < province.locationIds.length; i += 1) {
-          const from = province.locationIds[i - 1]
-          const to = province.locationIds[i]
-          if (from && to) connect(from, to, roll.int(3, 7))
+        // Внутри провинции — цепочка, и места без жителей стоят прямо в ней:
+        // деревня, брод, городок. Прямой дороги в обход брода нет, потому что
+        // брод и есть эта дорога. Пока дорога была одним числом часов, всё
+        // между двумя деревнями было пустотой; теперь путь складывается из
+        // отрезков, и у каждого своя земля.
+        const spare = [...province.siteIds]
+        const chain: string[] = []
+        province.locationIds.forEach((locationId, index) => {
+          chain.push(locationId)
+          const between = index < province.locationIds.length - 1 ? spare.shift() : undefined
+          if (between) chain.push(between)
+        })
+        for (let i = 1; i < chain.length; i += 1) {
+          const from = chain[i - 1]
+          const to = chain[i]
+          if (from && to) connect(from, to, legHours(roll, world.locations, from, to))
         }
 
-        // Кольцо внутри провинции: из глухого угла есть обходной путь.
+        // Кольцо внутри провинции: из глухого угла есть обходной путь. Если
+        // осталось незанятое место без жителей, оно ложится на этот объезд.
         const ends = province.locationIds
         const firstInProvince = ends[0]
         const lastInProvince = ends[ends.length - 1]
         if (ends.length >= 3 && firstInProvince && lastInProvince && roll.chance(0.6)) {
-          connect(lastInProvince, firstInProvince, roll.int(4, 9))
+          const detour = spare.shift()
+          if (detour) {
+            connect(lastInProvince, detour, legHours(roll, world.locations, lastInProvince, detour))
+            connect(
+              detour,
+              firstInProvince,
+              legHours(roll, world.locations, detour, firstInProvince),
+            )
+          } else {
+            connect(lastInProvince, firstInProvince, roll.int(4, 9))
+          }
         }
 
-        // Места без жителей встают на дорогу между своими же поселениями:
-        // иначе перевал на карте есть, а дойти до него нельзя. Дорога через
-        // такое место длиннее прямой — это его свойство, не дороги.
-        const kin = province.locationIds
-        province.siteIds.forEach((siteId, siteIndex) => {
-          if (kin.length === 0) return
-          const first = kin[siteIndex % kin.length]
-          const second = kin[(siteIndex + 1) % kin.length]
-          const hours = roll.int(2, 5)
-          if (first) connect(first, siteId, hours)
-          if (second && second !== first) connect(siteId, second, roll.int(2, 5))
-        })
+        // Что не легло в цепочку, становится тупиком при ближайшем поселении:
+        // к кургану в стороне от дороги ходят нарочно, а не по пути.
+        for (const [index, siteId] of spare.entries()) {
+          const host = ends[index % Math.max(1, ends.length)]
+          if (host) connect(host, siteId, legHours(roll, world.locations, host, siteId))
+        }
 
         const hub = firstLocation(provinceId)
         if (!hub) continue
@@ -410,6 +427,28 @@ function makeNamer(roll: Roller): Namer {
 }
 
 /** Что уместно на такой земле. Если ничего — святилище бывает везде. */
+/**
+ * Часы одного отрезка.
+ *
+ * Отрезок берёт свою цену у земли, через которую идёт: гать вдвое дольше
+ * прямой дороги, перевал почти вдвое, святилище не замедляет вовсе. Это
+ * свойство места, а не дороги, поэтому и считается по месту.
+ */
+function legHours(
+  roll: Roller,
+  locations: Readonly<Record<string, Location>>,
+  from: string,
+  to: string,
+): number {
+  const base = roll.int(3, 7)
+  const slowest = [from, to].reduce((worst, id) => {
+    const kind = locations[id]?.archetype
+    if (!kind || !isSite(kind)) return worst
+    return Math.max(worst, SITES[kind].slow)
+  }, 1)
+  return Math.max(2, Math.round(base * slowest))
+}
+
 function pickSite(roll: Roller, terrain: Terrain): SiteKind {
   const fitting = sitesFor(terrain)
   return fitting.length > 0 ? roll.pick(fitting).id : 'shrine'

@@ -3,6 +3,7 @@ import {
   type Command,
   type GameState,
   PLACE_LABELS,
+  type PlaceKind,
   SITES,
   TERRAIN_LABELS,
   addressOf,
@@ -258,12 +259,17 @@ export function HomeScreen({ game }: { game: GameState }) {
             const danger = (game.settlements[road.to]?.banditry ?? 0) > 0.4
             const plagueThere = plagueAt(game.plagues, road.to) !== null
             const dead = (game.settlements[road.to]?.population ?? 1) <= 0
+            // Отрезок пути показывает, куда он ведёт и чем пахнет: у места без
+            // жителей это его собственная дурная слава, а не разбой округи.
+            const wild = isSite(target.archetype) ? SITES[target.archetype] : null
+            const grim = (wild?.danger ?? 0) >= 0.35
             return (
               <Road
                 key={road.to}
                 name={target.name}
-                meta={`${formatDuration(hours(dead ? road.hours * 2 : road.hours))}${danger ? ' · разбой' : ''}${plagueThere ? ' · мор' : ''}${dead ? ' · заросла' : ''}`}
-                warn={danger || plagueThere}
+                kind={target.archetype}
+                meta={`${formatDuration(hours(dead ? road.hours * 2 : road.hours))}${danger ? ' · разбой' : ''}${grim ? ' · недоброе место' : ''}${plagueThere ? ' · мор' : ''}${dead ? ' · заросла' : ''}`}
+                warn={danger || plagueThere || grim}
                 blocked={!canApply(game, command).ok}
                 onPress={() => dispatch(command)}
               />
@@ -369,12 +375,14 @@ export function HomeScreen({ game }: { game: GameState }) {
 /** Дорога фишкой: имя, часы и знак опасности, всё одним взглядом. */
 function Road({
   name,
+  kind,
   meta,
   warn,
   blocked,
   onPress,
 }: {
   name: string
+  kind: PlaceKind
   meta: string
   warn: boolean
   blocked: boolean
@@ -391,7 +399,10 @@ function Road({
         pressed && styles.pressed,
       ]}
     >
-      <Text style={styles.roadName}>{name}</Text>
+      <View style={styles.roadHead}>
+        <Icon name={kind} size={16} color={warn ? palette.warn : palette.faint} />
+        <Text style={styles.roadName}>{name}</Text>
+      </View>
       <Text style={[styles.roadMeta, warn && styles.roadMetaWarn]}>{meta}</Text>
     </Pressable>
   )
@@ -482,6 +493,7 @@ const styles = StyleSheet.create({
   },
   captiveActions: { gap: spacing.sm, marginTop: spacing.sm },
   built: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginTop: spacing.sm },
+  roadHead: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
   builtOne: { alignItems: 'center', minWidth: 48 },
   builtLabel: { color: palette.faint, fontSize: 9 },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },

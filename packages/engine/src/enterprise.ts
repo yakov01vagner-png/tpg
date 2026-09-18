@@ -1,12 +1,14 @@
 import { nextHop } from './band'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
+import { SITES } from './content/sites'
 import type { Settlement } from './economy'
 import { priceOf } from './economy'
 import { foodSecurity } from './life'
 import { type Rng, rollChance } from './rng'
 import { roadsFrom } from './world/queries'
 import type { World } from './world/types'
+import { isSite } from './world/types'
 
 /**
  * Дело, которое кормит.
@@ -124,8 +126,13 @@ export function tickEnterprises(
       }
       const arrived = enterprise.travel.toLocationId
       const place = settlements[arrived]
-      // Разбой на дорогах: обоз доходит не всегда.
-      const danger = (place?.banditry ?? 0) * 0.5
+      // Разбой на дорогах: обоз доходит не всегда. Опасность берётся у земли,
+      // как и для самого героя: в урочище грабят и там, где нет ни души, —
+      // иначе обоз, идущий через глушь, был неуязвим просто потому, что в
+      // глуши некому держать разбой.
+      const kind = world.locations[arrived]?.archetype
+      const wild = kind && isSite(kind) ? SITES[kind].danger : 0
+      const danger = Math.max((place?.banditry ?? 0) * 0.5, wild * 0.5)
       const [robbed, afterRoll] = rollChance(generator, danger)
       generator = afterRoll
       if (robbed) {

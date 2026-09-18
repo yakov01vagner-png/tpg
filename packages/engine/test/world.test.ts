@@ -105,15 +105,19 @@ describe('дороги', () => {
 
   it('делают соседние места ближе далёких', () => {
     // Внутри провинции ходьба занимает часы, между королевствами — сутки.
+    // Соседом деревни теперь бывает брод или перевал: дорога идёт через землю,
+    // и отрезок берёт часы у неё — гать вдвое дольше прямой дороги.
     const withinProvince: number[] = []
     for (const province of Object.values(world.provinces)) {
-      const [first, second] = province.locationIds
-      if (!first || !second) continue
-      const road = roadsFrom(world, first).find((candidate) => candidate.to === second)
-      if (road) withinProvince.push(road.hours)
+      const [first] = province.locationIds
+      if (!first) continue
+      for (const road of roadsFrom(world, first)) {
+        if (world.locations[road.to]?.provinceId !== province.id) continue
+        withinProvince.push(road.hours)
+      }
     }
     expect(withinProvince.length).toBeGreaterThan(0)
-    expect(Math.max(...withinProvince)).toBeLessThanOrEqual(7)
+    expect(Math.max(...withinProvince)).toBeLessThanOrEqual(13)
 
     const capitals = Object.values(world.kingdoms).map((kingdom) => kingdom.capitalId)
     const between = roadsFrom(world, capitals[0] ?? '').find((road) => road.to === capitals[1])

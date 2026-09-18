@@ -39,6 +39,7 @@ import { ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import { TEMPER_LINES } from './content/lines'
+import { SITES } from './content/sites'
 import type { TroopId } from './content/troops'
 import { TROOPS, TROOP_FOOD_PER_DAY } from './content/troops'
 import { tickDiplomacy } from './diplomacy'
@@ -123,7 +124,7 @@ import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
 import { kingdomOf, regionOf, roadsFrom } from './world/queries'
 import type { World } from './world/types'
-import { isSettlement } from './world/types'
+import { isSettlement, isSite } from './world/types'
 import { bedridden, defeatOutcome, healWound } from './wounds'
 
 /**
@@ -451,6 +452,9 @@ function travel(state: GameState, toLocationId: string): CommandResult {
   return close(draft)
 }
 
+/** Сколько народу «водится» в глуши: у места без жителей своего населения нет. */
+const WILD_PARTY = 500
+
 /**
  * Встреча на дороге.
  *
@@ -459,15 +463,24 @@ function travel(state: GameState, toLocationId: string): CommandResult {
  * а обирают: драться с ним незачем.
  */
 function ambush(draft: Draft, locationId: string): void {
+  const here = draft.base.world.locations[locationId]
+  if (!here) return
   const settlement = draft.settlements[locationId]
-  if (!settlement) return
-  const [meets, afterMeet] = rollChance(draft.rng, Math.min(0.45, 0.02 + settlement.banditry * 0.5))
+  // Опасность пути — свойство земли, а не только разбойной округи. Пока она
+  // считалась по разбою места назначения, в урочище и на перевале не могло
+  // случиться ничего: поселения там нет, а значит нет и разбоя.
+  const banditry = settlement?.banditry ?? 0
+  const wild = isSite(here.archetype) ? SITES[here.archetype].danger : 0
+  const risk = Math.min(0.45, 0.02 + banditry * 0.5 + wild * 0.3)
+  const [meets, afterMeet] = rollChance(draft.rng, risk)
   draft.rng = afterMeet
   if (!meets) return
 
-  const terrain = draft.base.world.locations[locationId]?.terrain ?? 'plains'
+  const terrain = here.terrain
+  const lurking = Math.max(banditry, wild)
+  const around = settlement?.population ?? WILD_PARTY
   if (partySize(draft.party) >= 3) {
-    const [band, afterBand] = banditBand(settlement.banditry, settlement.population, draft.rng)
+    const [band, afterBand] = banditBand(lurking, around, draft.rng)
     draft.rng = afterBand
     draft.battle = startBattle(draft.party, band, terrain, { foeId: 'bandits' })
     notice(draft, 'На дороге ждали: разбойники.')
