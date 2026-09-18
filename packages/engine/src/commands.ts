@@ -1,9 +1,17 @@
 import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
 import type { Band, BandEvent } from './band'
-import { bandSize, nextHop, roadHours, tickBands } from './band'
+import { bandSize, clash, nextHop, roadHours, tickBands } from './band'
 import type { Battle, BattleSide, GroupId, OrderId } from './battle'
-import { fleeBattle, resolveRound, startBattle, unformUp } from './battle'
+import {
+  ROUT_MORALE,
+  fleeBattle,
+  resolveDuel,
+  resolveRound,
+  startBattle,
+  unformUp,
+  unitsSize,
+} from './battle'
 import type { Character } from './character'
 import {
   FATIGUE_MAX,
@@ -103,12 +111,13 @@ import {
   nextTimeOfDay,
 } from './time'
 import type { Lord } from './war'
-import { pairOf } from './war'
+import { allied, pairOf } from './war'
 import type { Politics } from './war'
 import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
 import { kingdomOf, regionOf, roadsFrom } from './world/queries'
 import type { World } from './world/types'
+import { bedridden, defeatOutcome, healWound } from './wounds'
 
 /**
  * Команды — единственный способ изменить состояние (п.2 дизайн-документа).
@@ -123,6 +132,10 @@ export type Command =
   | { readonly type: 'battleOrders'; readonly orders: Readonly<Record<GroupId, OrderId>> }
   | { readonly type: 'battleFlee' }
   | { readonly type: 'battleEnd'; readonly prisoners: 'ransom' | 'recruit' | 'release' }
+  /** Поединок: герой лично против лучшего из чужих. Один на бой. */
+  | { readonly type: 'duel' }
+  /** Выкупиться из плена сейчас, не дожидаясь, пока отпустят. */
+  | { readonly type: 'payRansom' }
   | { readonly type: 'takeService'; readonly kingdomId: string }
   | { readonly type: 'leaveService' }
   | { readonly type: 'seekEnemy' }
@@ -186,6 +199,8 @@ export type FailureCode =
   | 'noRoom'
   | 'noGoods'
   | 'overloaded'
+  | 'captive'
+  | 'wounded'
   | 'invalid'
 
 export type CommandResult =
@@ -206,10 +221,26 @@ export function applyCommand(
   // Пока идёт бой, мир стоит: ничем, кроме боя, заняться нельзя.
   const fighting = state.battle !== null
   const isBattleCommand =
-    command.type === 'battleOrders' || command.type === 'battleFlee' || command.type === 'battleEnd'
+    command.type === 'battleOrders' ||
+    command.type === 'battleFlee' ||
+    command.type === 'battleEnd' ||
+    command.type === 'duel'
   if (state.over) return fail('invalid', 'Эта история закончена.')
   if (fighting && !isBattleCommand) return fail('inBattle', 'Сейчас не до того — идёт бой.')
   if (!fighting && isBattleCommand) return fail('invalid', 'Боя нет.')
+  // В плену можно только ждать, спать и платить: остальное решает тот, кто держит.
+  const captivity = state.character.captivity
+  if (captivity && !CAPTIVE_COMMANDS.has(command.type)) {
+    return fail(
+      'captive',
+      `Ты в плену, держит ${foeName(state, captivity.captorId)}: жди или плати.`,
+    )
+  }
+  // Рана тяжелее половины — постель: ни дороги, ни работы, ни боя.
+  const wound = state.character.wound
+  if (wound && bedridden(wound) && BEDRIDDEN_BLOCKS.has(command.type)) {
+    return fail('wounded', `Рана не пускает: ещё ${wound.daysLeft} суток в постели.`)
+  }
 
   switch (command.type) {
     case 'tick':
@@ -226,6 +257,10 @@ export function applyCommand(
       return battleFlee(state)
     case 'battleEnd':
       return battleEnd(state, command.prisoners)
+    case 'duel':
+      return duel(state)
+    case 'payRansom':
+      return payRansom(state)
     case 'takeService':
       return takeService(state, command.kingdomId)
     case 'leaveService':
@@ -326,6 +361,39 @@ export function canApply(
   return result.ok ? { ok: true } : { ok: false, code: result.code, message: result.message }
 }
 
+/** Что доступно в плену. */
+const CAPTIVE_COMMANDS: ReadonlySet<Command['type']> = new Set<Command['type']>([
+  'tick',
+  'rest',
+  'sleep',
+  'payRansom',
+  'spendSkillPoint',
+  'spendAttributePoint',
+])
+
+/** Чего не сделать с постели. */
+const BEDRIDDEN_BLOCKS: ReadonlySet<Command['type']> = new Set<Command['type']>([
+  'travel',
+  'work',
+  'study',
+  'takeExam',
+  'seekEnemy',
+  'attackBand',
+  'besiege',
+  'siegeAssault',
+  'foundCaravan',
+])
+
+/** Как зовут того, кто стоит напротив: лорд, корона или просто разбойники. */
+export function foeName(state: GameState, foeId: string | null): string {
+  if (!foeId || foeId === 'bandits') return 'разбойники'
+  if (foeId.startsWith('crown:')) {
+    return state.world.kingdoms[foeId.slice('crown:'.length)]?.name ?? 'короны'
+  }
+  const lord = lordById(state.politics, foeId)
+  return lord ? `${lord.title} ${lord.name}` : 'чужих'
+}
+
 // --- команды ---------------------------------------------------------------
 
 /**
@@ -385,7 +453,7 @@ function ambush(draft: Draft, locationId: string): void {
   if (partySize(draft.party) >= 3) {
     const [band, afterBand] = banditBand(settlement.banditry, settlement.population, draft.rng)
     draft.rng = afterBand
-    draft.battle = startBattle(draft.party, band, terrain)
+    draft.battle = startBattle(draft.party, band, terrain, { foeId: 'bandits' })
     notice(draft, 'На дороге ждали: разбойники.')
     return
   }
@@ -481,6 +549,8 @@ function battleOrders(state: GameState, orders: Readonly<Record<GroupId, OrderId
 
   const draft = open(state)
   const hero = gearBonus(state.character)
+  // Раненый герой стоит в строю вполсилы.
+  const woundFactor = 1 - (state.character.wound?.severity ?? 0) * 0.5
   const result = resolveRound(
     battle,
     orders,
@@ -489,8 +559,8 @@ function battleOrders(state: GameState, orders: Readonly<Record<GroupId, OrderId
       magic: skillLevel(state.character, 'magic'),
       // Снаряжение отряда множит силу строя, железо героя прибавляет своё.
       gear: gearFactor(state.party),
-      heroAttack: hero.attack,
-      heroDefense: hero.defense,
+      heroAttack: hero.attack * woundFactor,
+      heroDefense: hero.defense * woundFactor,
     },
     draft.rng,
   )
@@ -529,6 +599,80 @@ function battleFlee(state: GameState): CommandResult {
   advance(draft, 30)
   addFatigue(draft, 12)
   notice(draft, 'Отход.')
+  return close(draft)
+}
+
+/**
+ * Поединок.
+ *
+ * Клинок мастера должен быть виден в бою, а не только в цифре навыка: герой
+ * выходит один против лучшего из чужих. Выигрыш ломает чужой дух и может
+ * кончить бой без сечи, проигрыш — расстраивает своих и оставляет рану.
+ */
+function duel(state: GameState): CommandResult {
+  const battle = state.battle
+  if (!battle) return fail('invalid', 'Боя нет.')
+  if (battle.outcome !== 'ongoing') return fail('invalid', 'Бой окончен.')
+  if (battle.duel !== 'none') return fail('invalid', 'Второго поединка не принимают.')
+  if (state.character.wound) return fail('wounded', 'С раной на поединок не выходят.')
+
+  const draft = open(state)
+  const gear = gearBonus(state.character)
+  const skill = Math.max(
+    skillLevel(state.character, 'lightWeapons'),
+    skillLevel(state.character, 'heavyWeapons'),
+  )
+  const result = resolveDuel(
+    battle,
+    {
+      skill,
+      strength: state.character.attributes.strength,
+      agility: state.character.attributes.agility,
+      attack: gear.attack,
+      defense: gear.defense,
+    },
+    draft.rng,
+  )
+  draft.rng = result.rng
+  draft.battle = result.battle
+  draft.party = { ...draft.party, morale: result.battle.morale }
+  advance(draft, 15)
+  addFatigue(draft, 10)
+  const weapon: SkillId =
+    skillLevel(state.character, 'heavyWeapons') > skillLevel(state.character, 'lightWeapons')
+      ? 'heavyWeapons'
+      : 'lightWeapons'
+  practice(draft, weapon, 30)
+  wearGear(draft)
+  if (result.won) {
+    draft.renown += 1
+    notice(draft, `Поединок выигран: их ${TROOPS[result.champion].label.toLowerCase()} пал.`, 'war')
+  } else {
+    // Проигранный поединок — не смерть, но и не царапина: неделя вполсилы.
+    patch(draft, { wound: { daysLeft: 7, severity: 0.25 } })
+    notice(draft, 'Поединок проигран: тебя оттащили к своим с раной.', 'war')
+  }
+  if (result.battle.outcome !== 'ongoing') {
+    notice(draft, result.battle.outcome === 'won' ? 'Бой выигран.' : 'Бой проигран.')
+  }
+  return close(draft)
+}
+
+/** Выкуп: заплатить сейчас и выйти на волю, не дожидаясь, пока отпустят сами. */
+function payRansom(state: GameState): CommandResult {
+  const captivity = state.character.captivity
+  if (!captivity) return fail('invalid', 'Ты на воле.')
+  if (state.character.money < captivity.ransom) {
+    return fail(
+      'noMoney',
+      `Просят ${captivity.ransom}, а у тебя ${state.character.money}. Остаётся ждать.`,
+    )
+  }
+  const draft = open(state)
+  addMoney(draft, -captivity.ransom)
+  patch(draft, { captivity: null })
+  notice(draft, `Выкуп уплачен: ${captivity.ransom}. Ты на воле.`, 'war')
+  advance(draft, hours(2))
   return close(draft)
 }
 
@@ -581,6 +725,15 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
       }
       draft.siege = null
     }
+    // Стены устояли: уцелевшие из гарнизона возвращаются на них, ополчение
+    // расходится по домам, место это помнит.
+    if (battle.stake?.type === 'defense') {
+      restoreGarrison(draft, battle.stake)
+      const name = state.world.locations[battle.stake.locationId]?.name ?? 'место'
+      draft.reputation = withPlaceRep(draft.reputation, battle.stake.locationId, 10)
+      draft.renown += 1
+      notice(draft, `${name}: стены устояли.`, 'war')
+    }
     const captured = battle.spoils.prisoners
     if (captured > 0) {
       if (prisoners === 'ransom') {
@@ -597,18 +750,103 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
     }
     draft.party = { ...draft.party, morale: Math.min(100, draft.party.morale + 10) }
   } else if (battle.outcome === 'lost') {
-    const lost = Math.round(draft.character.money * 0.5)
-    addMoney(draft, -lost)
-    addFatigue(draft, 40)
-    notice(draft, `Разбитых обобрали: потеряно ${lost}.`)
-    const [dies, afterDeath] = rollChance(draft.rng, 0.015)
-    draft.rng = afterDeath
-    if (dies) {
-      draft.over = true
-      notice(draft, 'Этот бой стал последним.')
+    // Своё место пало: оно уходит тому, кто взял его.
+    if (battle.stake?.type === 'defense') {
+      const fallen = draft.settlements[battle.stake.locationId]
+      const name = state.world.locations[battle.stake.locationId]?.name ?? 'место'
+      if (fallen && battle.foeId) {
+        draft.settlements = {
+          ...draft.settlements,
+          [battle.stake.locationId]: {
+            ...fallen,
+            owner: battle.foeId === 'bandits' ? null : battle.foeId,
+            garrison: {},
+            population: Math.round(fallen.population * 0.93),
+          },
+        }
+        notice(draft, `${name} взят: стены не удержали.`, 'war')
+      }
     }
+    defeat(draft, battle.foeId)
+  } else if (battle.stake?.type === 'defense') {
+    // Отошли со стен: гарнизон уцелевших держит их дальше, но осада не снята.
+    restoreGarrison(draft, battle.stake)
   }
   return close(draft)
+}
+
+/** Уцелевшие из гарнизона — обратно на стены, ополчение — по домам. */
+function restoreGarrison(
+  draft: Draft,
+  stake: Extract<NonNullable<Battle['stake']>, { type: 'defense' }>,
+): void {
+  const settlement = draft.settlements[stake.locationId]
+  if (!settlement) return
+  let units = draft.party.units
+  const garrison: Partial<Record<TroopId, number>> = {}
+  for (const [troop, count] of Object.entries(stake.garrison)) {
+    const back = Math.min(count ?? 0, units[troop as TroopId] ?? 0)
+    if (back <= 0) continue
+    garrison[troop as TroopId] = back
+    units = withUnits({ ...draft.party, units }, troop as TroopId, -back).units
+  }
+  const levyLeft = Math.min(stake.levy, units.militia ?? 0)
+  if (levyLeft > 0) units = withUnits({ ...draft.party, units }, 'militia', -levyLeft).units
+  draft.party = { ...draft.party, units }
+  draft.settlements = { ...draft.settlements, [stake.locationId]: { ...settlement, garrison } }
+}
+
+/**
+ * Поражение.
+ *
+ * Раньше проигранный бой значил обобранный кошель и полтора процента смерти —
+ * то есть ничего. Теперь его выносят с поля раненым, реже берут в плен и лишь
+ * иногда он не встаёт; смерть — настоящая, дальше играет наследник.
+ */
+function defeat(draft: Draft, foeId: string | null): void {
+  const lost = Math.round(draft.character.money * 0.5)
+  addMoney(draft, -lost)
+  addFatigue(draft, 40)
+  if (lost > 0) notice(draft, `Разбитых обобрали: потеряно ${lost}.`)
+
+  const captor = foeId ?? 'bandits'
+  const [outcome, afterOutcome] = defeatOutcome(
+    draft.rng,
+    captor,
+    draft.character.money,
+    skillLevel(draft.character, 'fortitude'),
+  )
+  draft.rng = afterOutcome
+  if (outcome.type === 'wounded') {
+    patch(draft, { wound: outcome.wound })
+    notice(draft, `Тебя вынесли с поля раненым: ${outcome.wound.daysLeft} суток в постели.`, 'war')
+    return
+  }
+  if (outcome.type === 'captured') {
+    patch(draft, { captivity: outcome.captivity })
+    // Отряд разбежался, спутники — кто как: часть попадает в плен вместе с тобой.
+    const scattered: Partial<Record<TroopId, number>> = {}
+    for (const [troop, count] of Object.entries(draft.party.units)) {
+      const left = Math.floor((count ?? 0) / 2)
+      if (left > 0) scattered[troop as TroopId] = left
+    }
+    draft.party = { ...draft.party, units: scattered, morale: 30 }
+    draft.companions = draft.companions.map((companion) => {
+      if (companion.captive || companion.role.type !== 'party') return companion
+      const [taken, next] = rollChance(draft.rng, 0.3)
+      draft.rng = next
+      if (taken) notice(draft, `${companion.name} тоже в плену.`, 'people')
+      return taken ? { ...companion, captive: true } : companion
+    })
+    notice(
+      draft,
+      `Ты в плену, держит ${foeName(draft.base, captor)}. Выкуп — ${outcome.captivity.ransom}, иначе ждать ${outcome.captivity.daysLeft} суток.`,
+      'war',
+    )
+    return
+  }
+  notice(draft, 'Этот бой стал последним.', 'war')
+  succeed(draft, dayOf(draft.time))
 }
 
 /**
@@ -763,9 +1001,19 @@ function siegeAssault(state: GameState): CommandResult {
     morale: Math.round(45 + starving * 35 - siege.days * 2),
     fatigue: 0,
   }
-  draft.battle = startBattle(draft.party, defenders, here.terrain, {
+  const walls = wallsFor(settlement)
+  // Союзное войско под теми же стенами идёт на приступ первым.
+  const softened = allyStrikesFirst(draft, defenders, siege.locationId, walls, 1)
+  if (!softened) {
+    draft.siege = null
+    notice(draft, `${here.name} взяли союзники: тебе остались стены без ворот.`, 'war')
+    advance(draft, hours(2))
+    return close(draft)
+  }
+  draft.battle = startBattle(draft.party, softened, here.terrain, {
     stake: { type: 'siege', locationId: siege.locationId },
-    wallBonus: hasBuilding(settlement, 'walls') ? 2.1 : 1.35,
+    wallBonus: walls,
+    foeId: settlement.owner,
   })
   notice(draft, `Штурм: ${here.name}.`)
   advance(draft, hours(2))
@@ -1126,7 +1374,11 @@ function seekEnemy(state: GameState): CommandResult {
   const draft = open(state)
   const [enemy, afterEnemy] = warband(partyStrength(state.party) / 24, draft.rng)
   draft.rng = afterEnemy
-  draft.battle = startBattle(draft.party, enemy, here?.terrain ?? 'plains')
+  const war = warsOf(state.politics, state.service)[0]
+  const foe = war ? (war.a === state.service ? war.b : war.a) : null
+  draft.battle = startBattle(draft.party, enemy, here?.terrain ?? 'plains', {
+    foeId: foe ? (state.world.kingdoms[foe] ? `crown:${foe}` : foe) : null,
+  })
   notice(draft, 'Впереди чужие знамёна.')
   advance(draft, hours(4))
   addFatigue(draft, 10)
@@ -1158,18 +1410,118 @@ function attackBand(state: GameState, bandId: string): CommandResult {
   const lord = lordById(state.politics, band.lordId)
   const name = lord ? `${lord.title} ${lord.name}` : 'Королевская рать'
   const draft = open(state)
-  draft.battle = startBattle(
-    draft.party,
-    { name, units: band.units, morale: band.morale, fatigue: 0 },
-    here?.terrain ?? 'plains',
-  )
   // Разбитое войско снимается с карты сразу: исход боя решит, что с ним стало,
   // но стоять рядом целым, пока его бьют, оно не может.
   draft.bands = draft.bands.filter((candidate) => candidate.id !== bandId)
-  notice(draft, `${name} принимает бой.`)
+
+  // Оборона своих стен: войско стоит под твоим местом — гарнизон и ополчение
+  // встают в строй рядом с отрядом, камень помогает тебе.
+  const settlement = state.settlements[state.locationId]
+  const defending =
+    settlement &&
+    isOwnedByPlayer(settlement) &&
+    band.goal.type === 'siege' &&
+    band.goal.targetId === state.locationId
+  let stake: Battle['stake'] = null
+  let ownWalls = 1
+  if (defending) {
+    const levy = Math.floor(settlement.population / 260)
+    let party = draft.party
+    for (const [troop, count] of Object.entries(settlement.garrison)) {
+      if (count) party = withUnits(party, troop as TroopId, count)
+    }
+    if (levy > 0) party = withUnits(party, 'militia', levy)
+    draft.party = party
+    draft.settlements = {
+      ...draft.settlements,
+      [state.locationId]: { ...settlement, garrison: {} },
+    }
+    stake = { type: 'defense', locationId: state.locationId, garrison: settlement.garrison, levy }
+    ownWalls = wallsFor(settlement)
+  }
+
+  const enemy: BattleSide = { name, units: band.units, morale: band.morale, fatigue: 0 }
+  const softened = allyStrikesFirst(draft, enemy, state.locationId, 1, ownWalls)
+  if (!softened) {
+    notice(draft, `${name} разбит союзниками: тебе досталось только поле.`, 'war')
+    if (stake) restoreGarrison(draft, stake)
+    advance(draft, hours(2))
+    return close(draft)
+  }
+  draft.battle = startBattle(draft.party, softened, here?.terrain ?? 'plains', {
+    ...(stake ? { stake } : {}),
+    ownWalls,
+    foeId: band.lordId,
+  })
+  notice(draft, defending ? `${name} идёт на приступ. Ты на стенах.` : `${name} принимает бой.`)
   advance(draft, hours(2))
   addFatigue(draft, 8)
   return close(draft)
+}
+
+function wallsFor(settlement: Settlement): number {
+  return hasBuilding(settlement, 'walls') ? 2.1 : 1.35
+}
+
+/** Своё ли это войско: своей короны, союзной или своего владения. */
+function friendlyBand(state: GameState, band: Band): boolean {
+  if (band.kingdomId === PLAYER) return true
+  if (!band.kingdomId || !state.service) return false
+  return band.kingdomId === state.service || allied(state.politics, state.service, band.kingdomId)
+}
+
+/**
+ * Союзники бьют первыми.
+ *
+ * Своё войско, стоящее там же, не смотрит со стороны: оно сходится с врагом
+ * до тебя, теми же правилами боя, что и дружины между собой. Тебе достаётся
+ * то, что осталось; если не осталось ничего — пусто, и боя нет.
+ */
+function allyStrikesFirst(
+  draft: Draft,
+  enemy: BattleSide,
+  locationId: string,
+  enemyWalls: number,
+  ownWalls: number,
+): BattleSide | null {
+  const ally = draft.bands.find(
+    (band) =>
+      band.locationId === locationId &&
+      !band.travel &&
+      bandSize(band) > 0 &&
+      friendlyBand(draft.base, band),
+  )
+  if (!ally) return enemy
+  const terrain = draft.base.world.locations[locationId]?.terrain ?? 'plains'
+  const foe: Band = {
+    ...ally,
+    id: 'foe',
+    lordId: 'foe',
+    units: enemy.units,
+    morale: enemy.morale,
+  }
+  // Кто за стенами, того стены и берегут: при обороне враг штурмует союзника.
+  const behindWalls = ownWalls > 1
+  const fight = behindWalls
+    ? clash(foe, ally, terrain, ownWalls, draft.rng)
+    : clash(ally, foe, terrain, enemyWalls, draft.rng)
+  draft.rng = fight.rng
+  const allyUnits = behindWalls ? fight.defender : fight.attacker
+  const enemyUnits = behindWalls ? fight.attacker : fight.defender
+  const allyWon = behindWalls ? !fight.attackerWon : fight.attackerWon
+
+  draft.bands = draft.bands
+    .map((band) => (band.id === ally.id ? { ...band, units: allyUnits } : band))
+    .filter((band) => bandSize(band) > 0)
+  const lord = lordById(draft.base.politics, ally.lordId)
+  const allyName = lord ? `${lord.title} ${lord.name}` : 'Союзное войско'
+  notice(draft, `${allyName} ударил первым: пало ${fight.fallen}.`, 'war')
+  if (unitsSize(enemyUnits) === 0) return null
+  return {
+    ...enemy,
+    units: enemyUnits,
+    morale: Math.max(ROUT_MORALE + 5, enemy.morale - (allyWon ? 15 : 0)),
+  }
 }
 
 // --- спутники ---------------------------------------------------------------
@@ -1908,6 +2260,7 @@ function close(draft: Draft): CommandResult {
     payUpkeep(draft, daysPassed)
     expireQuests(draft)
     growOlder(draft, daysPassed)
+    healAndFree(draft, daysPassed)
   }
 
   const state: GameState = {
@@ -2256,6 +2609,57 @@ function patch(draft: Draft, changes: Partial<Character>): void {
  * состоянии он нужен постоянно, и лишний счёт на телефоне ни к чему. Когда
  * приходит срок, игра не кончается — её продолжает наследник, если он есть.
  */
+/**
+ * Раны заживают, плен кончается, пленные спутники возвращаются.
+ *
+ * Лекарь-спутник рядом лечит вдвое быстрее. Плен кончается сам: спросят, что
+ * есть в кошеле, и отпустят. Пленный спутник возвращается сам, понемногу — за
+ * него никто не платит.
+ */
+function healAndFree(draft: Draft, daysPassed: number): void {
+  const wound = draft.character.wound
+  if (wound) {
+    const healer = bestSkill(draft.companions, 'healing').level >= 3
+    const healed = healWound(wound, daysPassed, healer)
+    patch(draft, { wound: healed })
+    if (!healed) notice(draft, 'Рана зажила. Можно вставать.', 'people')
+    else if (bedridden(wound) && !bedridden(healed)) {
+      notice(draft, 'Рана затягивается: с постели уже можно подняться.', 'people')
+    }
+  }
+
+  const captivity = draft.character.captivity
+  if (captivity) {
+    const daysLeft = captivity.daysLeft - daysPassed
+    if (daysLeft <= 0) {
+      const taken = Math.min(draft.character.money, captivity.ransom)
+      if (taken > 0) addMoney(draft, -taken)
+      patch(draft, { captivity: null })
+      notice(
+        draft,
+        taken > 0
+          ? `Отпустили: с тебя взяли ${taken} и вытолкали за ворота.`
+          : 'Отпустили: держать тебя дальше никому не нужно.',
+        'war',
+      )
+    } else {
+      patch(draft, { captivity: { ...captivity, daysLeft } })
+    }
+  }
+
+  // Пленные спутники: три шанса из ста в сутки выбраться.
+  for (let i = 0; i < daysPassed; i += 1) {
+    draft.companions = draft.companions.map((companion) => {
+      if (!companion.captive) return companion
+      const [back, next] = rollChance(draft.rng, 0.03)
+      draft.rng = next
+      if (!back) return companion
+      notice(draft, `${companion.name} вернулся из плена.`, 'people')
+      return { ...companion, captive: false }
+    })
+  }
+}
+
 function growOlder(draft: Draft, daysPassed: number): void {
   if (daysPassed <= 0) return
   const day = dayOf(draft.time)

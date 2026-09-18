@@ -2,6 +2,7 @@ import {
   type Command,
   type Companion,
   type GameState,
+  PLAYER,
   TEMPERS,
   TROOPS,
   TROOP_IDS,
@@ -72,6 +73,11 @@ export function PeopleScreen({ game }: { game: GameState }) {
               const count = Object.values(band.units).reduce((sum, n) => sum + (n ?? 0), 0)
               const command: Command = { type: 'attackBand', bandId: band.id }
               const check = canApply(game, command)
+              const here = game.settlements[game.locationId]
+              const atOurWalls =
+                here?.owner === PLAYER &&
+                band.goal.type === 'siege' &&
+                band.goal.targetId === game.locationId
               return (
                 <Card
                   key={band.id}
@@ -83,8 +89,12 @@ export function PeopleScreen({ game }: { game: GameState }) {
                     )
                   }
                   title={lord ? `${lord.title} ${lord.name}` : 'Рать короны'}
-                  description={`${count} человек под знамёнами`}
-                  meta="напасть"
+                  description={
+                    atOurWalls
+                      ? `${count} человек под твоими стенами — гарнизон встанет с тобой`
+                      : `${count} человек под знамёнами`
+                  }
+                  meta={atOurWalls ? 'оборонять стены' : 'напасть'}
                   reason={check.ok ? null : check.message}
                   onPress={() => dispatch(command)}
                   tone="danger"

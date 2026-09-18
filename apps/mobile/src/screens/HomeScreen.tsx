@@ -7,6 +7,7 @@ import {
   companionsAt,
   coursesAt,
   examsAt,
+  foeName,
   foodSecurity,
   formatDuration,
   hours,
@@ -28,7 +29,19 @@ import { Scene } from '../art/scene'
 import { openSheet } from '../game/nav'
 import { dispatch } from '../game/store'
 import { font, lineHeight, palette, radii, spacing, touch } from '../theme'
-import { Body, Chip, Chips, Dim, Faint, Section, Tile, Tiles, Title } from '../ui/parts'
+import {
+  Body,
+  Button,
+  Chip,
+  Chips,
+  Dim,
+  Faint,
+  Panel,
+  Section,
+  Tile,
+  Tiles,
+  Title,
+} from '../ui/parts'
 
 /**
  * Дом: место, где ты стоишь.
@@ -86,6 +99,17 @@ export function HomeScreen({ game }: { game: GameState }) {
   if (settlement?.building) {
     happening.push({ text: `Стройка: осталось ${settlement.building.daysLeft} сут.`, tone: 'info' })
   }
+  const wound = game.character.wound
+  if (wound) {
+    happening.push({
+      text:
+        wound.severity >= 0.5
+          ? `Ты ранен: ${wound.daysLeft} сут. в постели`
+          : `Рана затягивается: ещё ${wound.daysLeft} сут.`,
+      tone: wound.severity >= 0.5 ? 'danger' : 'warn',
+    })
+  }
+  const captivity = game.character.captivity
 
   const ownTitle = mine ? 'Твоя земля' : besieging ? 'Осада' : game.service ? 'Служба' : 'Своё'
   const ownSubtitle = mine
@@ -120,6 +144,27 @@ export function HomeScreen({ game }: { game: GameState }) {
         </Dim>
         <StateLine game={game} />
       </View>
+
+      {captivity ? (
+        <Panel tone="danger">
+          <Body tone="danger">{`Ты в плену. Держит ${foeName(game, captivity.captorId)}.`}</Body>
+          <Dim>
+            {`Отпустят через ${captivity.daysLeft} сут., взяв что найдут в кошеле. Выкуп сейчас — ${captivity.ransom}.`}
+          </Dim>
+          <View style={styles.captiveActions}>
+            <Button
+              label={`Заплатить ${captivity.ransom}`}
+              tone="primary"
+              onPress={() => dispatch({ type: 'payRansom' })}
+            />
+            <Button
+              label="Ждать сутки"
+              tone="quiet"
+              onPress={() => dispatch({ type: 'tick', minutes: 24 * 60 })}
+            />
+          </View>
+        </Panel>
+      ) : null}
 
       {happening.length > 0 ? (
         <Section title="Что происходит">
@@ -358,6 +403,7 @@ function plural(n: number, one: string, few: string, many: string): string {
 }
 
 const styles = StyleSheet.create({
+  captiveActions: { gap: spacing.sm, marginTop: spacing.sm },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
   scene: {
     backgroundColor: palette.surface,

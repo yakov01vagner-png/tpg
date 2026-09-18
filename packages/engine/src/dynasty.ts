@@ -142,5 +142,8 @@ export function heirCharacter(parent: Character, heir: Child, day: number): Char
     fatigue: 0,
     magicRank: null,
     family: { ...parent.family, spouse: null, children: [] },
+    // Наследник здоров и на воле: раны и плен отца с ним не наследуются.
+    wound: null,
+    captivity: null,
   }
 }

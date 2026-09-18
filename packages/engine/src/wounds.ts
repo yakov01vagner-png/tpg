@@ -68,6 +68,13 @@ export function defeatOutcome(
   return [{ type: 'killed' }, afterCapture]
 }
 
+/** Тяжелее этого — постель: ни дороги, ни работы, ни боя. */
+export const BEDRIDDEN = 0.5
+
+export function bedridden(wound: Wound | null): boolean {
+  return wound !== null && wound.severity >= BEDRIDDEN
+}
+
 /** Что рана делает с телом: сила и ловкость просаживаются, пока не заживёт. */
 export function woundedAttributes(attributes: Attributes, wound: Wound | null): Attributes {
   if (!wound) return attributes

@@ -9,6 +9,7 @@ import {
   TROOPS,
   type TroopId,
   type Units,
+  canApply,
   unitsSize,
 } from '@tpg/engine'
 import { useState } from 'react'
@@ -75,7 +76,13 @@ export function BattleScreen({ game }: { game: GameState }) {
       <View style={styles.field}>
         <Icon name={battle.terrain} size={18} color={palette.faint} />
         <Text style={styles.fieldText}>
-          {`${TERRAIN_LABELS[battle.terrain]}${battle.wallBonus > 1 ? ` · стены ×${battle.wallBonus.toFixed(1)}` : ''} · раунд ${battle.round}`}
+          {`${TERRAIN_LABELS[battle.terrain]}${
+            battle.wallBonus > 1
+              ? ` · их стены ×${battle.wallBonus.toFixed(1)}`
+              : battle.ownWalls > 1
+                ? ` · твои стены ×${battle.ownWalls.toFixed(1)}`
+                : ''
+          } · раунд ${battle.round}`}
         </Text>
         {battle.strain > 0 ? (
           <Text style={[styles.fieldText, battle.strain > 70 && { color: palette.danger }]}>
@@ -124,6 +131,18 @@ export function BattleScreen({ game }: { game: GameState }) {
             tone="primary"
             onPress={() => dispatch({ type: 'battleOrders', orders })}
           />
+          {battle.duel === 'none' ? (
+            <>
+              <Button
+                label="Вызвать на поединок"
+                onPress={() => dispatch({ type: 'duel' })}
+                disabled={duelReason(game) !== null}
+              />
+              {duelReason(game) ? <Faint>{duelReason(game)}</Faint> : null}
+            </>
+          ) : (
+            <Dim>{battle.duel === 'won' ? 'Поединок выигран.' : 'Поединок проигран.'}</Dim>
+          )}
           <Button label="Отойти" tone="quiet" onPress={() => dispatch({ type: 'battleFlee' })} />
         </View>
       )}
@@ -169,7 +188,9 @@ export function BattleScreen({ game }: { game: GameState }) {
             <View style={styles.actions}>
               <Dim>
                 {battle.outcome === 'lost'
-                  ? 'Поле осталось за ними. Что стало с тобой — узнаешь, когда откроешь глаза.'
+                  ? battle.stake?.type === 'defense'
+                    ? 'Стены не удержали. Что стало с тобой — узнаешь, когда откроешь глаза.'
+                    : 'Поле осталось за ними. Что стало с тобой — узнаешь, когда откроешь глаза.'
                   : 'Отступили. Не победа, но и не конец.'}
               </Dim>
               <Button
@@ -209,6 +230,11 @@ function UnitsRow({ units, color }: { units: Units; color: string }) {
       ))}
     </View>
   )
+}
+
+function duelReason(game: GameState): string | null {
+  const check = canApply(game, { type: 'duel' })
+  return check.ok ? null : check.message
 }
 
 function outcomeWord(outcome: string): string {

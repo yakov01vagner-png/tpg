@@ -141,6 +141,25 @@ export function CharacterScreen({ game }: { game: GameState }) {
         <Dim>{`От железа: +${gearBonus(hero).attack} к удару, +${gearBonus(hero).defense} к обороне`}</Dim>
       </Section>
 
+      {hero.wound || hero.captivity ? (
+        <Section title="Тело и воля">
+          {hero.wound ? (
+            <Row
+              glyph={<Icon name="wound" size={20} color={palette.danger} />}
+              title={hero.wound.severity >= 0.5 ? 'Тяжёлая рана' : 'Рана заживает'}
+              subtitle={`${hero.wound.daysLeft} сут. · сила, ловкость и выносливость −${Math.round(hero.wound.severity * 3)}`}
+            />
+          ) : null}
+          {hero.captivity ? (
+            <Row
+              glyph={<Icon name="captive" size={20} color={palette.danger} />}
+              title="В плену"
+              subtitle={`${hero.captivity.daysLeft} сут. · выкуп ${hero.captivity.ransom}`}
+            />
+          ) : null}
+        </Section>
+      ) : null}
+
       <Section title="Дом и род">
         <Dim>{`${hero.family.house}${hero.age > PRIME_AGE ? ' · годы берут своё' : ''}`}</Dim>
         <Dim>

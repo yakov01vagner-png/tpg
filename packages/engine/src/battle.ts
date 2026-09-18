@@ -72,13 +72,33 @@ export interface Battle {
   readonly log: readonly string[]
   /** Заполняется, когда бой окончен. */
   readonly spoils: { readonly money: number; readonly prisoners: number }
-  /** Что стоит на кону: для штурма — место, которое переходит победителю. */
-  readonly stake: { readonly type: 'siege'; readonly locationId: string } | null
-  /** Во сколько раз стены усиливают оборону. Единица — стен нет. */
+  /**
+   * Что стоит на кону: для штурма — место, которое переходит победителю; для
+   * обороны — своё место и гарнизон, который встал в строй рядом с отрядом.
+   */
+  readonly stake: BattleStake | null
+  /** Во сколько раз стены усиливают оборону врага. Единица — стен нет. */
   readonly wallBonus: number
+  /** Во сколько раз свои стены усиливают собственную оборону. */
+  readonly ownWalls: number
   /** Магическое истощение: чем выше, тем слабее и опаснее колдовство. */
   readonly strain: number
+  /** Кто стоит напротив: лорд, корона или разбойники. Решает, чей будет плен. */
+  readonly foeId: string | null
+  /** Поединок: один на бой. */
+  readonly duel: 'none' | 'won' | 'lost'
 }
+
+export type BattleStake =
+  | { readonly type: 'siege'; readonly locationId: string }
+  | {
+      readonly type: 'defense'
+      readonly locationId: string
+      /** Что стояло в гарнизоне до боя: уцелевших вернём на стены. */
+      readonly garrison: Units
+      /** Сколько ополчения подняли с улиц: после боя они разойдутся по домам. */
+      readonly levy: number
+    }
 
 /** Ниже этого рубежа отряд перестаёт драться и бежит. */
 export const ROUT_MORALE = 20
@@ -129,15 +149,25 @@ export function unformUp(groups: Readonly<Record<GroupId, Units>>): Units {
   return units
 }
 
+export interface BattleOptions {
+  readonly stake?: BattleStake
+  readonly wallBonus?: number
+  readonly ownWalls?: number
+  readonly foeId?: string | null
+}
+
 export function startBattle(
   party: Party,
   enemy: BattleSide,
   terrain: Terrain,
-  options: { readonly stake?: Battle['stake']; readonly wallBonus?: number } = {},
+  options: BattleOptions = {},
 ): Battle {
   return {
     stake: options.stake ?? null,
     wallBonus: options.wallBonus ?? 1,
+    ownWalls: options.ownWalls ?? 1,
+    foeId: options.foeId ?? null,
+    duel: 'none',
     strain: 0,
     enemy,
     enemyStart: unitsSize(enemy.units),
@@ -258,12 +288,15 @@ export function resolveRound(
   const gear = context.gear ?? 1
   attack =
     (attack * gear + (context.heroAttack ?? 0)) * commandBonus * fatiguePenalty * moraleFactor
+  // Свои стены считаются так же, как чужие при штурме: камень помогает тому,
+  // кто за ним стоит.
   defense =
     (defense * gear + (context.heroDefense ?? 0)) *
     commandBonus *
     fatiguePenalty *
     moraleFactor *
-    wardBonus
+    wardBonus *
+    (battle.ownWalls ?? 1)
 
   // Враг: простой выбор — сильный лезет вперёд, слабый держится, разбитый пятится.
   const enemyOrder = chooseEnemyOrder(battle)
@@ -394,6 +427,106 @@ export function resolveRound(
     },
     rng: generator,
   }
+}
+
+// --- поединок ---------------------------------------------------------------
+
+export interface DuelHero {
+  /** Лучший из навыков оружия. */
+  readonly skill: number
+  readonly strength: number
+  readonly agility: number
+  /** Что даёт железо. */
+  readonly attack: number
+  readonly defense: number
+}
+
+export interface DuelResult {
+  readonly battle: Battle
+  readonly won: boolean
+  readonly rng: Rng
+  /** Кто вышел против героя. */
+  readonly champion: TroopId
+}
+
+/** Насколько поединок ломает дух проигравшей стороны. */
+export const DUEL_MORALE = { win: 22, lose: 12, ownWin: 8 } as const
+
+/**
+ * Поединок: герой лично, своим железом и навыком, против лучшего из чужих.
+ *
+ * Строй остаётся на месте, меняется дух. Выигранный поединок может кончить
+ * бой без общей сечи, проигранный — расстроить своих. Один на бой: второго
+ * вызова не принимают.
+ */
+export function resolveDuel(battle: Battle, hero: DuelHero, rng: Rng): DuelResult {
+  const champion = strongestOf(battle.enemy.units)
+  const def = TROOPS[champion]
+  // Навык весит как тело и железо вместе: мастер без доспеха бьёт ополченца,
+  // но против латника нужны и навык, и сталь.
+  const heroPower = hero.skill + hero.strength + hero.agility + hero.attack + hero.defense
+  const championPower = (def.attack + def.defense) * 0.9 + def.tier * 2 + battle.enemy.morale / 25
+
+  const [heroSwing, afterHero] = variance(rng, 0.3)
+  const [championSwing, afterChampion] = variance(afterHero, 0.3)
+  const won = heroPower * heroSwing > championPower * championSwing
+  let generator = afterChampion
+
+  const champLabel = def.label.toLowerCase()
+  const log: string[] = []
+  let morale = battle.morale
+  let enemyMorale = battle.enemy.morale
+  if (won) {
+    morale = clampMorale(morale + DUEL_MORALE.ownWin)
+    enemyMorale = clampMorale(enemyMorale - DUEL_MORALE.win)
+    log.push(`Поединок: их ${champLabel} пал. Чужой строй дрогнул.`)
+  } else {
+    morale = clampMorale(morale - DUEL_MORALE.lose)
+    log.push(`Поединок: их ${champLabel} оказался сильнее. Тебя оттащили к своим.`)
+  }
+
+  let outcome: BattleOutcome = battle.outcome
+  let spoils = battle.spoils
+  const enemy: BattleSide = { ...battle.enemy, morale: enemyMorale }
+  if (enemyMorale < ROUT_MORALE) {
+    outcome = 'won'
+    const [captured, afterCapture] = capture(enemy, battle.enemyStart, generator)
+    generator = afterCapture
+    spoils = captured
+    log.push(`Они бегут, не приняв боя. Добычи на ${spoils.money}.`)
+  } else if (morale < ROUT_MORALE) {
+    outcome = 'lost'
+    log.push('Свои этого не выдержали: строй рассыпался.')
+  }
+
+  return {
+    battle: {
+      ...battle,
+      enemy,
+      morale,
+      outcome,
+      spoils,
+      duel: won ? 'won' : 'lost',
+      log: [...battle.log, ...log],
+    },
+    won,
+    rng: generator,
+    champion,
+  }
+}
+
+function strongestOf(units: Units): TroopId {
+  let best: TroopId = 'militia'
+  let power = -1
+  for (const [troop, count] of Object.entries(units)) {
+    if (!count) continue
+    const def = TROOPS[troop as TroopId]
+    if (def.attack + def.defense > power) {
+      power = def.attack + def.defense
+      best = troop as TroopId
+    }
+  }
+  return best
 }
 
 /** Попытка выйти из боя. Конные уходят, пешие теряют людей. */

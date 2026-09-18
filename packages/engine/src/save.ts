@@ -62,6 +62,30 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
       quests: data.quests ?? [],
     }
   },
+  /**
+   * v11 → v12: у героя появились рана и плен, у боя — поединок, свои стены и
+   * тот, кто стоит напротив. Старый герой здоров и на воле.
+   */
+  11: (data) => {
+    const character = (data.character ?? {}) as Record<string, unknown>
+    const battle = (data.battle ?? null) as Record<string, unknown> | null
+    return {
+      ...data,
+      character: {
+        ...character,
+        wound: character.wound ?? null,
+        captivity: character.captivity ?? null,
+      },
+      battle: battle
+        ? {
+            ...battle,
+            ownWalls: battle.ownWalls ?? 1,
+            foeId: battle.foeId ?? null,
+            duel: battle.duel ?? 'none',
+          }
+        : null,
+    }
+  },
   /** v10 → v11: у мест появились ворота, которые можно закрыть от мора. */
   10: (data) => {
     const settlements = (data.settlements ?? {}) as Record<string, Record<string, unknown>>

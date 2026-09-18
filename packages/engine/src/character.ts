@@ -10,6 +10,7 @@ import type { SkillProgress } from './progression'
 import { EMPTY_SKILL } from './progression'
 import type { SkillId } from './skills'
 import { SKILLS, SKILL_IDS } from './skills'
+import type { Captivity, Wound } from './wounds'
 
 export interface Character {
   readonly name: string
@@ -36,6 +37,10 @@ export interface Character {
   readonly age: number
   /** Жена или муж, дети, имя рода. */
   readonly family: Family
+  /** Рана: сколько лежать и насколько слаб. Пусто — здоров. */
+  readonly wound: Wound | null
+  /** Плен: у кого, надолго ли и почём. Пусто — на воле. */
+  readonly captivity: Captivity | null
 }
 
 export const FATIGUE_MAX = 100
@@ -86,6 +91,8 @@ export function createCharacter(draft: CharacterDraft): Character {
     bornDay: birthDayFor(1, draft.age ?? START_AGE),
     age: draft.age ?? START_AGE,
     family: { ...NO_FAMILY, house: houseOf(draft.name) },
+    wound: null,
+    captivity: null,
   }
 }
 
