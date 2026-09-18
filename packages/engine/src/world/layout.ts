@@ -20,7 +20,7 @@ export interface Point {
   readonly y: number
 }
 
-export const MAP_SIZE = 2100
+export const MAP_SIZE = 3600
 
 /**
  * Полотно мира.
@@ -35,6 +35,20 @@ export const MAP_SIZE = 2100
 
 /** Насколько далеко половины марки расходятся вдоль границы. */
 const MARCH_SPAN = 93
+
+/**
+ * Как далеко от престола ложатся провинции: ближнее кольцо — на шаг от
+ * престола, дальнее — на два с лишним. Короны на материке стоят в
+ * тысяче единиц друг от друга (этап 44), и при прежнем шаге в девяносто три
+ * единицы каждая была пятном в три сотни посреди пустой земли, а марки —
+ * точками в никуда. С шагом в сто тридцать земля короны доходит до пяти сотен,
+ * и соседи сходятся краями там, где между ними лежит марка, — но не дальше
+ * середины между престолами: всякое место ближе к своему престолу, чем к
+ * чужому, с запасом на разброс и на распорядителя, который отводит тесно
+ * стоящих в сторону.
+ */
+const PROVINCE_NEAR = 110
+const PROVINCE_STEP = 130
 
 /** Устойчивый разброс: одно и то же место всегда оказывается в одной точке. */
 function jitter(seed: string, spread: number): Point {
@@ -78,12 +92,15 @@ export function provinceCentersOf(world: World): Readonly<Record<string, Point>>
       const count = Math.max(1, region.provinceIds.length)
 
       region.provinceIds.forEach((provinceId, provinceIndex) => {
-        // Провинции уходят от столицы вглубь области: первая лежит у самого
-        // престола, дальние — на окраине. Вбок они расходятся не больше, чем
-        // на пятую часть клина, иначе область перестаёт быть куском.
-        const radius = 87 + provinceIndex * 93
-        const sway = count === 1 ? 0 : ((provinceIndex % 2 === 0 ? -1 : 1) * spread) / 5
-        const angle = regionAngle + sway
+        // Провинции заполняют клин веером, а не уходят от престола цепочкой:
+        // чётные — ближним кольцом, нечётные — дальним, и вбок они расходятся
+        // по всему клину. Пока провинции шли цепочкой по оси клина, корона
+        // была не кругом, а четырёхлучевой звездой, и между лучами оставались
+        // пустые углы — ровно там, где стоит соседняя корона и марка между
+        // ними: вольное село марки оказывалось в двенадцати переходах от
+        // ближайшей деревни (этап 44).
+        const radius = PROVINCE_NEAR + (provinceIndex % 2 === 0 ? 1 : 1.75) * PROVINCE_STEP
+        const angle = regionAngle - spread / 2 + (spread * (provinceIndex + 0.5)) / count
         centers[provinceId] = {
           x: center.x + Math.cos(angle) * radius,
           y: center.y + Math.sin(angle) * radius,
@@ -163,8 +180,11 @@ export function placeLocations(
     // оказалось в списке. Пока положение считалось от номера в провинции,
     // основание одной деревни двигало на карте все соседние: мир нельзя было
     // пополнить, не перерисовав его целиком (DESIGN.md, п.3.1).
+    // Разброс в семьдесят с небольшим, а не шестьдесят: с материка (этап 44) в
+    // провинции до пяти поселений, и в прежнем круге пятому не хватало места —
+    // распорядитель уносил его на полтораста единиц, в чужую землю.
     for (const locationId of province.locationIds) {
-      const spot = jitter(locationId, 60)
+      const spot = jitter(locationId, 74)
       points[locationId] = spacer.place(
         { x: provinceCenter.x + spot.x, y: provinceCenter.y + spot.y },
         SETTLEMENT_GAP,
@@ -221,13 +241,19 @@ export const MIN_GAP = 16
  * единицах друг от друга, поставить между ними что-либо было нельзя — тридцать
  * отрезков из четырёхсот так и оставались прямыми «деревня — деревня».
  */
-export const SETTLEMENT_GAP = 48
+export const SETTLEMENT_GAP = 42
 
 /** А место без жителей — самую малость: оно и есть то, что стоит вплотную. */
 export const SITE_GAP = 12
 
+/** Клетка распорядителя: не меньше самого широкого зазора. */
+const SPACER_CELL = 64
+
 export class Spacer {
-  private readonly taken: { point: Point; gap: number }[] = []
+  // Занятые точки по клеткам: зазор не больше клетки, и тесноту проверяют по
+  // соседним девяти, а не по всем полутора тысячам (этап 44).
+  private readonly cells = new Map<number, { point: Point; gap: number }[]>()
+  private readonly columns = Math.ceil(MAP_SIZE / SPACER_CELL) + 2
 
   place(wanted: Point, gap: number = MIN_GAP): Point {
     const target = { x: clamp(wanted.x), y: clamp(wanted.y) }
@@ -240,7 +266,7 @@ export class Spacer {
         y: clamp(target.y + Math.sin(angle) * radius),
       }
     }
-    this.taken.push({ point, gap })
+    this.add(point, gap)
     return point
   }
 
@@ -259,8 +285,19 @@ export class Spacer {
   /** Занять точку, не двигая её. */
   take(point: Point, gap: number = MIN_GAP): Point {
     const at = { x: clamp(point.x), y: clamp(point.y) }
-    this.taken.push({ point: at, gap })
+    this.add(at, gap)
     return at
+  }
+
+  private add(point: Point, gap: number): void {
+    const key = this.key(point.x, point.y)
+    const cell = this.cells.get(key)
+    if (cell) cell.push({ point, gap })
+    else this.cells.set(key, [{ point, gap }])
+  }
+
+  private key(x: number, y: number): number {
+    return Math.floor(x / SPACER_CELL) * this.columns + Math.floor(y / SPACER_CELL)
   }
 
   /**
@@ -268,11 +305,21 @@ export class Spacer {
    * жителей встаёт у самой околицы, а два поселения расходятся широко.
    */
   private crowded(point: Point, gap: number, strict = false): boolean {
-    return this.taken.some(
-      (other) =>
-        Math.hypot(other.point.x - point.x, other.point.y - point.y) <
-        (strict ? gap : Math.min(gap, other.gap)),
-    )
+    const cx = Math.floor(point.x / SPACER_CELL)
+    const cy = Math.floor(point.y / SPACER_CELL)
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        const cell = this.cells.get((cx + dx) * this.columns + (cy + dy))
+        if (!cell) continue
+        for (const other of cell) {
+          const ox = other.point.x - point.x
+          const oy = other.point.y - point.y
+          const limit = strict ? gap : Math.min(gap, other.gap)
+          if (ox * ox + oy * oy < limit * limit) return true
+        }
+      }
+    }
+    return false
   }
 }
 
@@ -287,4 +334,7 @@ export const KINGDOM_COLORS: Record<string, string> = {
   boharut: '#a86a6a',
   durHazad: '#7e7f8c',
   tribes: '#7f9a63',
+  hlad: '#9fb3c8',
+  rahim: '#c48a4a',
+  league: '#5f9a97',
 }

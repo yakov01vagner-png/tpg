@@ -146,10 +146,16 @@ describe('земля живёт годом', () => {
 
 describe('дорога знает время года', () => {
   it('осенью тот же переход дольше, чем летом', () => {
-    const game = createGame(createCharacter({ name: 'Т' }), 1, world)
-    const road = roadsFrom(world, game.locationId)[0]
+    const base = createGame(createCharacter({ name: 'Т' }), 1, world)
+    // Отрезок подлиннее: на двухчасовом переходе сезонная надбавка тонет в
+    // округлении, и весна с летом выходят поровну.
+    const long = Object.entries(world.roads).find(([, roads]) =>
+      roads.some((one) => one.hours >= 4),
+    )
+    const road = long?.[1].find((one) => one.hours >= 4)
     expect(road).toBeDefined()
-    if (!road) return
+    if (!road || !long) return
+    const game: GameState = { ...base, locationId: long[0] }
     const at = (day: number) => {
       const state: GameState = { ...game, time: (day - 1) * MINUTES_PER_DAY + 6 * 60 }
       const result = applyCommand(state, { type: 'travel', toLocationId: road.to })

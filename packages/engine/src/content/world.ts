@@ -32,10 +32,10 @@ export const KINGDOM_BLUEPRINTS: readonly KingdomBlueprint[] = [
     flavor: 'Обычное средневековое королевство: король, герцоги, графы и вечные тяжбы между ними.',
     capitalName: 'Ре-Эстиз',
     regions: [
-      { name: 'Северная область', terrain: 'forest', provinces: [2, 3] },
-      { name: 'Южная область', terrain: 'plains', provinces: [2, 3] },
-      { name: 'Западный Край', terrain: 'hills', provinces: [2, 3] },
-      { name: 'Заречный Удел', terrain: 'marsh', provinces: [2, 3] },
+      { name: 'Северная область', terrain: 'forest', provinces: [3, 4] },
+      { name: 'Южная область', terrain: 'plains', provinces: [3, 4] },
+      { name: 'Западный Край', terrain: 'hills', provinces: [3, 4] },
+      { name: 'Заречный Удел', terrain: 'marsh', provinces: [3, 4] },
     ],
     terrains: ['plains', 'forest', 'hills', 'marsh'],
   },
@@ -46,10 +46,10 @@ export const KINGDOM_BLUEPRINTS: readonly KingdomBlueprint[] = [
       'Светская власть и церковная иерархия делят королевство пополам, и обе считают себя главной.',
     capitalName: 'Престол Робла',
     regions: [
-      { name: 'Пресвятая область', terrain: 'plains', provinces: [2, 3] },
-      { name: 'Западный Предел', terrain: 'coast', provinces: [2, 2] },
-      { name: 'Полуденные Земли', terrain: 'hills', provinces: [2, 3] },
-      { name: 'Северный Удел', terrain: 'plains', provinces: [2, 3] },
+      { name: 'Пресвятая область', terrain: 'plains', provinces: [3, 4] },
+      { name: 'Западный Предел', terrain: 'coast', provinces: [2, 3] },
+      { name: 'Полуденные Земли', terrain: 'hills', provinces: [3, 4] },
+      { name: 'Северный Удел', terrain: 'plains', provinces: [3, 4] },
     ],
     terrains: ['plains', 'coast', 'hills'],
   },
@@ -60,10 +60,10 @@ export const KINGDOM_BLUEPRINTS: readonly KingdomBlueprint[] = [
       'Наместники вместо наследной знати: меньше феодальной вольницы, больше бумаг и доносов.',
     capitalName: 'Бохарут',
     regions: [
-      { name: 'Внутренние земли', terrain: 'plains', provinces: [2, 3] },
-      { name: 'Восточные провинции', terrain: 'steppe', provinces: [2, 3] },
-      { name: 'Приморские Владения', terrain: 'coast', provinces: [2, 2] },
-      { name: 'Закатные Сатрапии', terrain: 'hills', provinces: [2, 3] },
+      { name: 'Внутренние земли', terrain: 'plains', provinces: [3, 4] },
+      { name: 'Восточные провинции', terrain: 'steppe', provinces: [3, 4] },
+      { name: 'Приморские Владения', terrain: 'coast', provinces: [2, 3] },
+      { name: 'Закатные Сатрапии', terrain: 'hills', provinces: [3, 4] },
     ],
     terrains: ['plains', 'steppe', 'hills', 'coast'],
   },
@@ -73,10 +73,10 @@ export const KINGDOM_BLUEPRINTS: readonly KingdomBlueprint[] = [
     flavor: 'Кланы держат чертоги и штольни. Земля здесь мерится не полями, а жилами руды.',
     capitalName: 'Дор-Хазад',
     regions: [
-      { name: 'Верхние чертоги', terrain: 'mountains', provinces: [2, 2] },
-      { name: 'Нижние штольни', terrain: 'mountains', provinces: [2, 2] },
-      { name: 'Внешние Отроги', terrain: 'hills', provinces: [2, 3] },
-      { name: 'Глубокие Копи', terrain: 'mountains', provinces: [2, 3] },
+      { name: 'Верхние чертоги', terrain: 'mountains', provinces: [2, 3] },
+      { name: 'Нижние штольни', terrain: 'mountains', provinces: [2, 3] },
+      { name: 'Внешние Отроги', terrain: 'hills', provinces: [3, 4] },
+      { name: 'Глубокие Копи', terrain: 'mountains', provinces: [3, 4] },
     ],
     terrains: ['mountains', 'hills'],
   },
@@ -86,12 +86,55 @@ export const KINGDOM_BLUEPRINTS: readonly KingdomBlueprint[] = [
     flavor: 'Конфедерация вождеств полулюдей. Границы здесь меняются вместе с пастбищами.',
     capitalName: 'Стойбище Совета',
     regions: [
-      { name: 'Великая степь', terrain: 'steppe', provinces: [2, 3] },
-      { name: 'Дальние кочевья', terrain: 'forest', provinces: [2, 2] },
-      { name: 'Речные Кочевья', terrain: 'marsh', provinces: [2, 3] },
-      { name: 'Полуденные Кочевья', terrain: 'steppe', provinces: [2, 3] },
+      { name: 'Великая степь', terrain: 'steppe', provinces: [3, 4] },
+      { name: 'Дальние кочевья', terrain: 'forest', provinces: [2, 3] },
+      { name: 'Речные Кочевья', terrain: 'marsh', provinces: [3, 4] },
+      { name: 'Полуденные Кочевья', terrain: 'steppe', provinces: [3, 4] },
     ],
     terrains: ['steppe', 'forest', 'marsh', 'hills'],
+  },
+  // --- три короны дальних земель (этап 44): не три копии, а три уклада ---------
+  {
+    id: 'hlad',
+    name: 'Княжество Хладь',
+    flavor:
+      'Север: князь в детинце, бояре по погостам, а кормит всех не поле, а лес и мех. Зима здесь не время года, а половина жизни.',
+    capitalName: 'Хладень',
+    regions: [
+      { name: 'Княжий Погост', terrain: 'forest', provinces: [3, 4] },
+      { name: 'Мёрзлые Увалы', terrain: 'hills', provinces: [3, 4] },
+      { name: 'Студёное Поморье', terrain: 'coast', provinces: [2, 3] },
+      { name: 'Заволочье', terrain: 'mountains', provinces: [3, 4] },
+    ],
+    terrains: ['forest', 'hills', 'mountains', 'coast'],
+  },
+  {
+    id: 'rahim',
+    name: 'Султанат Рахим',
+    flavor:
+      'Юг: султан в белом городе, эмиры по оазисам, а власть меряется водой — кто держит колодцы, тот держит всё.',
+    capitalName: 'Аль-Рахим',
+    regions: [
+      { name: 'Белогородье', terrain: 'plains', provinces: [3, 4] },
+      { name: 'Великие Пески', terrain: 'desert', provinces: [3, 4] },
+      { name: 'Караванные Холмы', terrain: 'hills', provinces: [2, 3] },
+      { name: 'Полуденный Берег', terrain: 'coast', provinces: [3, 4] },
+    ],
+    terrains: ['desert', 'steppe', 'hills', 'coast'],
+  },
+  {
+    id: 'league',
+    name: 'Лига Вольных Городов',
+    flavor:
+      'Восточное побережье: не корона, а хартия. Бургомистры судят, гильдии платят, а флот стоит больше, чем войско.',
+    capitalName: 'Гавань Хартии',
+    regions: [
+      { name: 'Города Хартии', terrain: 'coast', provinces: [3, 4] },
+      { name: 'Пригородные Поля', terrain: 'plains', provinces: [3, 4] },
+      { name: 'Лесная Сторона', terrain: 'forest', provinces: [2, 3] },
+      { name: 'Дальний Берег', terrain: 'coast', provinces: [3, 4] },
+    ],
+    terrains: ['coast', 'plains', 'forest', 'hills'],
   },
 ]
 
@@ -104,6 +147,7 @@ export const PROVINCE_PREFIXES: Record<Terrain, readonly string[]> = {
   marsh: ['Топи', 'Гати'],
   coast: ['Побережье', 'Берег'],
   steppe: ['Степь', 'Пустоши'],
+  desert: ['Пески', 'Пустошь'],
 }
 
 export const PROVINCE_NAMES: readonly string[] = [
@@ -215,14 +259,27 @@ export const ARCHETYPE_NAMES: Partial<Record<LocationArchetype, readonly string[
 }
 
 /** Приставки на случай, если имена в пуле закончились. */
-export const NAME_QUALIFIERS: readonly string[] = [
-  'Малый',
-  'Новый',
-  'Старый',
-  'Дальний',
-  'Верхний',
-  'Нижний',
+export const NAME_QUALIFIERS: readonly Readonly<Record<'m' | 'f' | 'n' | 'p', string>>[] = [
+  { m: 'Малый', f: 'Малая', n: 'Малое', p: 'Малые' },
+  { m: 'Новый', f: 'Новая', n: 'Новое', p: 'Новые' },
+  { m: 'Старый', f: 'Старая', n: 'Старое', p: 'Старые' },
+  { m: 'Дальний', f: 'Дальняя', n: 'Дальнее', p: 'Дальние' },
+  { m: 'Верхний', f: 'Верхняя', n: 'Верхнее', p: 'Верхние' },
+  { m: 'Нижний', f: 'Нижняя', n: 'Нижнее', p: 'Нижние' },
 ]
+
+/**
+ * Род имени по окончанию: «Белая Гать» — она, «Перекатное» — оно, «Ветряки» —
+ * они. Приставка согласуется с ним: «Новая Белая Гать», а не «Новый Белая
+ * Гать» — на материке (этап 44) пул имён кончается, и приставки видны.
+ */
+export function nameGender(name: string): 'm' | 'f' | 'n' | 'p' {
+  const last = name.trim().split(' ').pop() ?? ''
+  if (last.endsWith('а') || last.endsWith('я') || last.endsWith('ь')) return 'f'
+  if (last.endsWith('о') || last.endsWith('е') || last.endsWith('ё')) return 'n'
+  if (last.endsWith('ы') || last.endsWith('и')) return 'p'
+  return 'm'
+}
 
 /**
  * Имена рек (версия 0.5).
@@ -266,7 +323,8 @@ export const IMPORT_RELIANCE: Record<LocationArchetype, readonly [number, number
   village: [0.28, 0.44],
   town: [0.54, 0.74],
   city: [0.9, 1.05],
-  capital: [0.95, 1.1],
+  // Столица всегда живёт привозом: своей земли на её людей не хватает.
+  capital: [1, 1.15],
   port: [0.8, 1],
   mine: [1.5, 3],
   fortress: [1.2, 2.2],
@@ -289,6 +347,7 @@ export const TERRAIN_TRAVEL: Record<Terrain, number> = {
   hills: 1.4,
   marsh: 1.7,
   mountains: 2,
+  desert: 1.25,
 }
 
 /** Плодородие местности: сколько еды земля способна дать. */
@@ -300,6 +359,7 @@ export const TERRAIN_FERTILITY: Record<Terrain, readonly [number, number]> = {
   marsh: [0.1, 0.3],
   coast: [0.4, 0.7],
   steppe: [0.3, 0.6],
+  desert: [0.05, 0.2],
 }
 
 /**
@@ -315,6 +375,9 @@ export const LORD_TITLES: Record<string, readonly string[]> = {
   boharut: ['наместник', 'префект', 'легат'],
   durHazad: ['старейшина клана', 'тан', 'хранитель штолен'],
   tribes: ['вождь', 'старший вождь', 'хранитель кочевий'],
+  hlad: ['посадник', 'боярин', 'князь-наместник'],
+  rahim: ['бей', 'эмир', 'визирь'],
+  league: ['ратман', 'бургомистр', 'гроссмейстер лиги'],
 }
 
 /** Имена держателей. Пул общий: имена в этом мире не разделены по границам. */
@@ -421,6 +484,31 @@ export const MARCHES: readonly MarchBlueprint[] = [
     terrain: 'steppe',
     freeTown: 'Колодезь',
   },
+  // --- пограничья дальних земель (этап 44) ---
+  {
+    id: 'iceline',
+    name: 'Ледяная Межа',
+    provinceNames: ['Мёрзлый Волок', 'Снежный Кряж'],
+    between: ['durHazad', 'hlad'],
+    terrain: 'mountains',
+    freeTown: 'Волок',
+  },
+  {
+    id: 'noonline',
+    name: 'Полуденная Межа',
+    provinceNames: ['Сухое Русло', 'Соляные Ворота'],
+    between: ['robl', 'rahim'],
+    terrain: 'steppe',
+    freeTown: 'Перекрёсток',
+  },
+  {
+    id: 'charterline',
+    name: 'Гостиная Межа',
+    provinceNames: ['Таможенный Луг', 'Пристанище'],
+    between: ['boharut', 'league'],
+    terrain: 'plains',
+    freeTown: 'Мытница',
+  },
 ]
 
 /**
@@ -455,7 +543,7 @@ export const ISLANDS: readonly IslandBlueprint[] = [
     flavor: 'Меловые обрывы, тюлени и десяток родов, которые помнят всех своих утопленников.',
     provinceName: 'Меловой Берег',
     terrain: 'coast',
-    at: { x: 320, y: 320 },
+    at: { x: 340, y: 340 },
     places: [
       { name: 'Гавань Белого Камня', archetype: 'port' },
       { name: 'Тюленья', archetype: 'village' },
@@ -468,7 +556,7 @@ export const ISLANDS: readonly IslandBlueprint[] = [
     flavor: 'Голый камень, овцы и ветер, который не стихает и в затишье.',
     provinceName: 'Овечья Коса',
     terrain: 'coast',
-    at: { x: 1790, y: 320 },
+    at: { x: 3260, y: 340 },
     places: [
       { name: 'Ветреная Пристань', archetype: 'port' },
       { name: 'Рыбий Хвост', archetype: 'village' },
@@ -481,7 +569,7 @@ export const ISLANDS: readonly IslandBlueprint[] = [
     flavor: 'Бухты, в которые заходят не спрашивая позволения, и берег, который об этом молчит.',
     provinceName: 'Смоляная Бухта',
     terrain: 'coast',
-    at: { x: 320, y: 1790 },
+    at: { x: 340, y: 3260 },
     places: [
       { name: 'Кривая Гавань', archetype: 'port' },
       { name: 'Смоляная', archetype: 'village' },
@@ -500,12 +588,47 @@ export const KINGDOM_SHORT: Readonly<Record<string, string>> = {
   boharut: 'Бохарут',
   durHazad: 'Дор-Хазад',
   tribes: 'Племена',
+  hlad: 'Хладь',
+  rahim: 'Рахим',
+  league: 'Лига',
 }
 
+/**
+ * Хребет материка (этап 44).
+ *
+ * Суша — не сумма кругов вокруг корон: между двумя соседними коронами лежит
+ * земля, пусть и ничья, и море не заходит в неё языком. Хребет — это пары
+ * корон, между которыми материк сплошной; всё, что дальше от него и от мест,
+ * чем предел суши, — вода. Пары марок сюда входят сами собой: марка и есть
+ * земля между. Остальные — соседи без марки: между Роблом и гномами, между
+ * Бохарутом и Хладью, между племенами и Лигой земля есть, а спорной полосы
+ * нет.
+ */
+export const CONTINENT: readonly (readonly [string, string])[] = [
+  ['reEstiz', 'robl'],
+  ['reEstiz', 'boharut'],
+  ['reEstiz', 'durHazad'],
+  ['reEstiz', 'tribes'],
+  ['boharut', 'tribes'],
+  ['durHazad', 'hlad'],
+  ['robl', 'rahim'],
+  ['boharut', 'league'],
+  ['robl', 'durHazad'],
+  ['boharut', 'hlad'],
+  ['tribes', 'league'],
+  ['tribes', 'rahim'],
+]
+
 export const KINGDOM_CENTERS: Record<string, { readonly x: number; readonly y: number }> = {
-  reEstiz: { x: 1050, y: 1050 },
-  robl: { x: 405, y: 930 },
-  boharut: { x: 1695, y: 930 },
-  durHazad: { x: 930, y: 375 },
-  tribes: { x: 1500, y: 1710 },
+  // Пять корон середины стоят там же, где стояли, — в полтора раза дальше друг
+  // от друга: полотно выросло до материка (этап 44), а не сжалось.
+  reEstiz: { x: 1575, y: 1575 },
+  robl: { x: 610, y: 1395 },
+  boharut: { x: 2540, y: 1395 },
+  durHazad: { x: 1395, y: 560 },
+  tribes: { x: 2210, y: 2500 },
+  // Три короны дальних земель: север, юг и восточный берег.
+  hlad: { x: 2350, y: 480 },
+  rahim: { x: 900, y: 2700 },
+  league: { x: 3110, y: 2180 },
 }

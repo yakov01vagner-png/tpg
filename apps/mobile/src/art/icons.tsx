@@ -100,6 +100,7 @@ export type IconName =
   | 'marsh'
   | 'coast'
   | 'steppe'
+  | 'desert'
   // нравы
   | 'honest'
   | 'greedy'
@@ -113,6 +114,9 @@ export type IconName =
   | 'crestBoharut'
   | 'crestDurHazad'
   | 'crestTribes'
+  | 'crestHlad'
+  | 'crestRahim'
+  | 'crestLeague'
   | 'crestPlayer'
   // знаки на карте и состояния
   | 'army'
@@ -144,6 +148,8 @@ export type IconName =
   | 'ford'
   | 'crossing'
   | 'bridge'
+  | 'oasis'
+  | 'lodge'
   | 'grove'
   | 'wilds'
   | 'barrow'
@@ -655,6 +661,13 @@ const GLYPHS: Record<IconName, Glyph> = {
       <Path d="M3 17h18M6 17c0-3 1-5 3-6M12 17c0-4 1-7 3-9M17 17c0-3 1-4 2-5" {...s(c)} />
     </>
   ),
+  // Пустыня: барханы и солнце.
+  desert: (c) => (
+    <>
+      <Path d="M3 17c3-3 6-3 9 0s6 3 9 0" {...s(c)} />
+      <Circle cx="17" cy="8" r="2.5" {...s(c)} />
+    </>
+  ),
   // --- нравы ----------------------------------------------------------------
   honest: (c) => (
     <>
@@ -723,6 +736,25 @@ const GLYPHS: Record<IconName, Glyph> = {
       <Path d="M8 8l4 3 4-3M8 12l4 3 4-3" {...s(c)} />
     </>
   ),
+  // Хладь: ель под звездой. Рахим: полумесяц над колодцем. Лига: башня и волна.
+  crestHlad: (c, f) => (
+    <>
+      <Path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z" {...s(c)} fill={f} />
+      <Path d="M12 7l-3 5h2l-2 3h6l-2-3h2z" {...s(c)} />
+    </>
+  ),
+  crestRahim: (c, f) => (
+    <>
+      <Path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z" {...s(c)} fill={f} />
+      <Path d="M14 8a3 3 0 1 0 0 6 4 4 0 0 1 0-6zM9 16h6" {...s(c)} />
+    </>
+  ),
+  crestLeague: (c, f) => (
+    <>
+      <Path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z" {...s(c)} fill={f} />
+      <Path d="M10 7h4v6h-4zM7 16c2-2 3 1 5 0s3-2 5 0" {...s(c)} />
+    </>
+  ),
   crestPlayer: (c, f) => (
     <>
       <Path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z" {...s(c)} fill={f} />
@@ -778,6 +810,22 @@ const GLYPHS: Record<IconName, Glyph> = {
       <Path d="M2 16h20" {...s(c)} />
       <Path d="M6 16l1-4h10l1 4z" {...s(c)} fill={f} />
       <Path d="M12 12V4M12 6h6" {...s(c)} />
+    </>
+  ),
+  // Оазис: пальма над колодцем. Зимовье: изба под снегом.
+  oasis: (c, f) => (
+    <>
+      <Path
+        d="M8 20h8M12 20V10M12 10c-3 0-5-2-5-4 3 0 5 1 5 4zM12 10c3 0 5-2 5-4-3 0-5 1-5 4z"
+        {...s(c)}
+      />
+      <Path d="M5 20c2-2 4-2 7 0s5 2 7 0" {...s(c)} fill={f} />
+    </>
+  ),
+  lodge: (c, f) => (
+    <>
+      <Path d="M4 12l8-7 8 7v8H4z" {...s(c)} fill={f} />
+      <Path d="M10 20v-5h4v5M3 12h18" {...s(c)} />
     </>
   ),
   // Мост: быки из камня и настил поверх воды.
@@ -987,6 +1035,12 @@ export function crestOf(kingdomId: string | null | undefined): IconName {
       return 'crestDurHazad'
     case 'tribes':
       return 'crestTribes'
+    case 'hlad':
+      return 'crestHlad'
+    case 'rahim':
+      return 'crestRahim'
+    case 'league':
+      return 'crestLeague'
     default:
       return 'crestPlayer'
   }

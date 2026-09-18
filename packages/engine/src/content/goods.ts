@@ -167,4 +167,5 @@ export const TERRAIN_SUPPLY: Record<Terrain, Partial<Record<GoodId, number>>> = 
   marsh: { herbs: 1.4, grain: 0.5, fish: 1.2, honey: 1.2 },
   coast: { fish: 1.8, salt: 1.6, grain: 0.9, spices: 1.3 },
   steppe: { grain: 0.8, cloth: 1.3, fish: 0.5, leather: 2, furs: 0.7 },
+  desert: { grain: 0.3, fish: 0.3, timber: 0.3, salt: 2, spices: 2.2, leather: 1.2, silver: 1.3 },
 }

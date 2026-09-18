@@ -72,7 +72,9 @@ describe('школа — место в мире', () => {
         expect(kind === 'capital' || kind === 'city', school.locationId).toBe(true)
       }
       expect(schools.length).toBeGreaterThanOrEqual(capitals.length)
-      expect(schools.length).toBeLessThan(14)
+      // Школ немного — меньше четырёх на корону: при престоле и в самых
+      // больших городах (на материке корон восемь, этап 44).
+      expect(schools.length).toBeLessThan(capitals.length * 4)
       // Архон один на весь свет.
       expect(schools.filter((school) => school.topRank === 'archon')).toHaveLength(1)
       if (seed === 1) {

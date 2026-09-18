@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { ISLANDS, KINGDOM_BLUEPRINTS, MARCHES } from '../src/content/world'
 import { generateWorld } from '../src/world/generate'
 import { MAP_SIZE } from '../src/world/layout'
 import { neighbourSettlements, roadsFrom } from '../src/world/queries'
@@ -39,7 +40,10 @@ describe('между поселениями лежит земля', () => {
       const hops: number[] = []
       for (const one of Object.values(world.locations)) {
         if (!isSettlement(one.archetype)) continue
-        const near = neighbourSettlements(world, one.id)
+        // Десять переходов, а не восемь по умолчанию: вольное село марки стоит
+        // в ничьей земле между коронами, и до ближайшей деревни оттуда бывает
+        // девять (этап 44).
+        const near = neighbourSettlements(world, one.id, 10)
         expect(near.length, `${one.name} без соседей`).toBeGreaterThan(0)
         hops.push(Math.min(...near.map((step) => step.hops)))
         for (const step of near) {
@@ -89,11 +93,16 @@ describe('мир стал гуще', () => {
       )
       // В 0.3 было 20 областей, 44 провинции, 213 мест, 102 из них с жителями.
       // Двадцать пять областей стали двадцатью восемью: с версии 0.5 к пяти
-      // маркам прибавились три острова (этап 35).
-      expect(counts.regions).toBe(28)
-      expect(counts.provinces).toBeGreaterThanOrEqual(50)
-      expect(counts.places).toBeGreaterThan(450)
-      expect(counts.settlements).toBeGreaterThan(120)
+      // маркам прибавились три острова (этап 35). На материке (этап 44) корон
+      // восемь, марок восемь, а провинций и мест — втрое против 0.4.
+      expect(counts.regions).toBe(
+        KINGDOM_BLUEPRINTS.reduce((sum, one) => sum + one.regions.length, 0) +
+          MARCHES.length +
+          ISLANDS.length,
+      )
+      expect(counts.provinces).toBeGreaterThanOrEqual(100)
+      expect(counts.places).toBeGreaterThan(1400)
+      expect(counts.settlements).toBeGreaterThan(350)
     }
   })
 

@@ -90,6 +90,31 @@ export function faceFor(seed: string, kingdomId: string | null = null): Face {
     face = { ...face, skin: pick([2, 3, 3, 4], h, 7) }
   } else if (kingdomId === 'robl') {
     face = { ...face, hood: (h >>> 8) % 3 === 0 }
+  } else if (kingdomId === 'hlad') {
+    // Север: светлее, бородатее, волосы длинные — их не стригут в мороз.
+    face = {
+      ...face,
+      skin: pick([0, 0, 1, 1], h, 7),
+      hairColor: pick([3, 3, 4, 0], h, 9),
+      beard: pick(['short', 'full', 'full', 'long'], h, 2),
+      hair: pick(['long', 'short', 'cropped'], h, 4),
+    }
+  } else if (kingdomId === 'rahim') {
+    // Юг: темнее, узкие глаза от солнца, борода коротка и ухожена.
+    face = {
+      ...face,
+      skin: pick([3, 3, 4, 4], h, 7),
+      hairColor: pick([0, 0, 1], h, 9),
+      eyes: pick(['narrow', 'narrow', 'calm'], h, 15),
+      beard: pick(['stubble', 'short', 'short', 'none'], h, 2),
+    }
+  } else if (kingdomId === 'league') {
+    // Вольные города: бритые, стриженые, без капюшонов — купец, а не монах.
+    face = {
+      ...face,
+      beard: pick(['none', 'none', 'stubble', 'short'], h, 2),
+      hair: pick(['cropped', 'short', 'curly'], h, 4),
+    }
   }
   return face
 }

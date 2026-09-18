@@ -86,6 +86,8 @@ describe('полотно выдерживает рост', () => {
     const game = createGame(createCharacter({ name: 'Т' }), 1)
     const size = JSON.stringify(game).length
     console.log(`сейв большого мира: ${(size / 1024).toFixed(0)} КБ`)
-    expect(size).toBeLessThan(400 * 1024)
+    // Граница поднята с четырёхсот килобайт до мегабайта на материке (этап
+    // 44): мест втрое больше, чем было в 0.3, — см. perf.test.ts.
+    expect(size).toBeLessThan(1024 * 1024)
   })
 })

@@ -1,3 +1,4 @@
+import type { Climate } from '../world/climate'
 import type { SiteKind, Terrain } from '../world/types'
 import type { GoodId } from './goods'
 
@@ -15,6 +16,8 @@ export interface SiteDef {
   readonly description: string
   /** Где такое встречается. Пусто — везде. */
   readonly terrains?: readonly Terrain[]
+  /** В каком климате (этап 44). Пусто — в любом. */
+  readonly climates?: readonly Climate[]
   /** Насколько здесь опаснее обычной дороги, 0..1. */
   readonly danger: number
   /** Во сколько раз дольше идти через это место. */
@@ -59,7 +62,7 @@ export const SITES: Record<SiteKind, SiteDef> = {
     noun: 'Брод',
     gender: 'm',
     description: 'Мелкое место, где реку переходят вброд. В половодье его нет вовсе.',
-    terrains: ['plains', 'forest', 'marsh', 'steppe', 'hills'],
+    terrains: ['plains', 'forest', 'marsh', 'steppe', 'hills', 'desert'],
     danger: 0.3,
     slow: 1.3,
     find: {
@@ -213,6 +216,40 @@ export const SITES: Record<SiteKind, SiteDef> = {
       text: 'У воды растёт то, за чем лекари посылают учеников за десять вёрст.',
     },
   },
+  // --- дальние земли (этап 44): по одному виду места понятно, где ты ---
+  oasis: {
+    id: 'oasis',
+    noun: 'Оазис',
+    gender: 'm',
+    description: 'Пальмы, колодец и десяток шатров вокруг. Кто держит воду, тот берёт за неё.',
+    terrains: ['desert', 'steppe'],
+    climates: ['dry'],
+    danger: 0.25,
+    slow: 1,
+    find: {
+      need: 4,
+      good: 'spices',
+      amount: [3, 8],
+      text: 'В песке у колодца — тюк, оброненный караваном. Пряности целы.',
+    },
+  },
+  lodge: {
+    id: 'lodge',
+    noun: 'Зимовье',
+    gender: 'n',
+    description:
+      'Изба в лесу, дрова под навесом и лыжи у двери. Кто пришёл — тот и хозяин до утра.',
+    terrains: ['forest', 'hills', 'mountains'],
+    climates: ['cold'],
+    danger: 0.2,
+    slow: 1.1,
+    find: {
+      need: 3,
+      good: 'furs',
+      amount: [4, 10],
+      text: 'Под нарами — связка шкурок: промысловик не вернулся за ними.',
+    },
+  },
   causeway: {
     id: 'causeway',
     noun: 'Гать',
@@ -249,9 +286,33 @@ export const SITE_EPITHETS: readonly Readonly<Record<'m' | 'f' | 'n' | 'p', stri
   { m: 'Печальный', f: 'Печальная', n: 'Печальное', p: 'Печальные' },
   { m: 'Старый', f: 'Старая', n: 'Старое', p: 'Старые' },
   { m: 'Заячий', f: 'Заячья', n: 'Заячье', p: 'Заячьи' },
+  // Материк (этап 44): мест без жителей стало вдвое больше, и на четырнадцати
+  // прозвищах застав не хватало — раздатчик доходил до «Застава 1008».
+  { m: 'Лисий', f: 'Лисья', n: 'Лисье', p: 'Лисьи' },
+  { m: 'Совиный', f: 'Совиная', n: 'Совиное', p: 'Совиные' },
+  { m: 'Змеиный', f: 'Змеиная', n: 'Змеиное', p: 'Змеиные' },
+  { m: 'Дубовый', f: 'Дубовая', n: 'Дубовое', p: 'Дубовые' },
+  { m: 'Сосновый', f: 'Сосновая', n: 'Сосновое', p: 'Сосновые' },
+  { m: 'Берёзовый', f: 'Берёзовая', n: 'Берёзовое', p: 'Берёзовые' },
+  { m: 'Мшистый', f: 'Мшистая', n: 'Мшистое', p: 'Мшистые' },
+  { m: 'Туманный', f: 'Туманная', n: 'Туманное', p: 'Туманные' },
+  { m: 'Ветреный', f: 'Ветреная', n: 'Ветреное', p: 'Ветреные' },
+  { m: 'Крутой', f: 'Крутая', n: 'Крутое', p: 'Крутые' },
+  { m: 'Глухой', f: 'Глухая', n: 'Глухое', p: 'Глухие' },
+  { m: 'Белый', f: 'Белая', n: 'Белое', p: 'Белые' },
+  { m: 'Красный', f: 'Красная', n: 'Красное', p: 'Красные' },
+  { m: 'Ржавый', f: 'Ржавая', n: 'Ржавое', p: 'Ржавые' },
+  { m: 'Горелый', f: 'Горелая', n: 'Горелое', p: 'Горелые' },
+  { m: 'Соляной', f: 'Соляная', n: 'Соляное', p: 'Соляные' },
+  { m: 'Козий', f: 'Козья', n: 'Козье', p: 'Козьи' },
+  { m: 'Журавлиный', f: 'Журавлиная', n: 'Журавлиное', p: 'Журавлиные' },
 ]
 
 /** Какие места без жителей уместны на такой земле. */
-export function sitesFor(terrain: Terrain): readonly SiteDef[] {
-  return Object.values(SITES).filter((site) => !site.terrains || site.terrains.includes(terrain))
+export function sitesFor(terrain: Terrain, climate: Climate = 'temperate'): readonly SiteDef[] {
+  return Object.values(SITES).filter(
+    (site) =>
+      (!site.terrains || site.terrains.includes(terrain)) &&
+      (!site.climates || site.climates.includes(climate)),
+  )
 }

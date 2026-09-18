@@ -29,7 +29,7 @@ import { isSettlement } from './types'
  * две тысячи с лишним, и на прежней сетке провинция пограничья умещалась в
  * восемь клеток — то есть переставала читаться землёй.
  */
-export const GRID_SIZE = 84
+export const GRID_SIZE = 144
 
 export interface GridCell {
   /**
@@ -74,6 +74,9 @@ const REACH = 225
  */
 const SETTLED_REACH = 55
 
+/** Клетка, по которым разложены якоря провинций: половина предела досягаемости. */
+const ANCHOR_BUCKET = 125
+
 /** Неровность границы: без неё округа выходят циркулем, а не землёй. */
 function wobble(x: number, y: number): number {
   let hash = 2166136261
@@ -104,6 +107,23 @@ export function worldGrid(world: World, mapSize: number, reach: number = REACH):
     const provinceId = world.locations[locationId]?.provinceId
     if (provinceId) pushAnchor(point, provinceId)
   }
+
+  // Якоря по клеткам: на полутора тысячах мест и двадцати тысячах клеток
+  // перебор всех якорей на каждую клетку стоил вдвое больше всего бюджета
+  // открытия карты (этап 44). Клетка якорей крупнее клетки карты, и обход
+  // идёт по тем, что могут оказаться ближе предела.
+  const bucket = ANCHOR_BUCKET
+  const bucketColumns = Math.ceil(mapSize / bucket) + 1
+  const buckets = new Map<number, number[]>()
+  for (let i = 0; i < anchorX.length; i += 1) {
+    const at =
+      Math.floor((anchorX[i] ?? 0) / bucket) * bucketColumns +
+      Math.floor((anchorY[i] ?? 0) / bucket)
+    const list = buckets.get(at)
+    if (list) list.push(i)
+    else buckets.set(at, [i])
+  }
+  const bucketSteps = Math.ceil((reach * 1.12) / bucket) + 1
 
   // Река — рубеж (этап 34). Земля делится руслами и морем на куски, и клетка
   // достаётся тому якорю, до которого от неё можно дойти, не переплывая: иначе
@@ -156,18 +176,26 @@ export function worldGrid(world: World, mapSize: number, reach: number = REACH):
       // Ближайший якорь вообще — на случай, если на своём берегу якорей нет.
       let anyBest = -1
       let anyDistance = limit * limit
-      for (let i = 0; i < anchorX.length; i += 1) {
-        const dx = (anchorX[i] ?? 0) - cx
-        const dy = (anchorY[i] ?? 0) - cy
-        const distance = dx * dx + dy * dy
-        if (distance < anyDistance) {
-          anyDistance = distance
-          anyBest = i
-        }
-        if (mine >= 0 && anchorPiece && anchorPiece[i] !== mine) continue
-        if (distance < bestDistance) {
-          bestDistance = distance
-          best = i
+      const bx = Math.floor(cx / bucket)
+      const by = Math.floor(cy / bucket)
+      for (let ox = -bucketSteps; ox <= bucketSteps; ox += 1) {
+        for (let oy = -bucketSteps; oy <= bucketSteps; oy += 1) {
+          const list = buckets.get((bx + ox) * bucketColumns + (by + oy))
+          if (!list) continue
+          for (const i of list) {
+            const dx = (anchorX[i] ?? 0) - cx
+            const dy = (anchorY[i] ?? 0) - cy
+            const distance = dx * dx + dy * dy
+            if (distance < anyDistance) {
+              anyDistance = distance
+              anyBest = i
+            }
+            if (mine >= 0 && anchorPiece && anchorPiece[i] !== mine) continue
+            if (distance < bestDistance) {
+              bestDistance = distance
+              best = i
+            }
+          }
         }
       }
       if (best < 0) best = anyBest
@@ -232,6 +260,7 @@ export const TERRAIN_COLORS: Record<Terrain, string> = {
   marsh: '#4d5748',
   coast: '#4a6675',
   steppe: '#8a7c50',
+  desert: '#a8955a',
 }
 
 /** Палитра для областей: цвета различимы между собой, а не оттенки одного. */

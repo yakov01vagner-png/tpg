@@ -82,7 +82,7 @@ export function courtCase(state: GameState): CourtCase | null {
       id: `case:${seed}`,
       kind: 'complaint',
       title: 'Жалоба на лорда',
-      text: `Крестьяне из ${place.name} жалуются на ${lord.title.toLowerCase()} ${lord.name}: берёт лишнее и судит по-своему. Он стоит тут же и ждёт, чью сторону ты возьмёшь.`,
+      text: `Крестьяне из ${place.name} жалуются на ${accusative(lord.title)} ${lord.name}: берёт лишнее и судит по-своему. Он стоит тут же и ждёт, чью сторону ты возьмёшь.`,
       lords: [lord],
       locationId: holding?.locationId ?? null,
       choices: [
@@ -117,4 +117,26 @@ export function loyaltyWord(loyalty: number): string {
   if (loyalty < 55) return 'служит'
   if (loyalty < 80) return 'верен'
   return 'предан'
+}
+
+/**
+ * «На герцога», «на старейшину клана», «на князя-наместника»: титул в
+ * винительном падеже. Склоняется первое слово (и обе половины, если оно через
+ * дефис), остальное — «клана», «ордена», «лиги» — уже стоит в нужном.
+ */
+export function accusative(title: string): string {
+  const [head = '', second = '', ...rest] = title.toLowerCase().split(' ')
+  const word = (one: string): string => {
+    if (one.endsWith('ий')) return `${one.slice(0, -2)}его`
+    if (one.endsWith('а')) return `${one.slice(0, -1)}у`
+    if (one.endsWith('ь') || one.endsWith('й')) return `${one.slice(0, -1)}я`
+    return `${one}а`
+  }
+  // «Старший вождь»: прилагательное впереди — склоняются оба слова.
+  const adjective = head.endsWith('ий') || head.endsWith('ый')
+  return [
+    head.split('-').map(word).join('-'),
+    ...(second ? [adjective ? word(second) : second] : []),
+    ...rest,
+  ].join(' ')
 }

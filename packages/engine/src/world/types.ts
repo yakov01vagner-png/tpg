@@ -1,3 +1,4 @@
+import type { Climate } from './climate'
 import type { Lane } from './lanes'
 import type { River } from './rivers'
 import type { Sea } from './sea'
@@ -12,7 +13,15 @@ import type { Sea } from './sea'
  * Всё здесь — простые сериализуемые данные: мир целиком уходит в сейв.
  */
 
-export type Terrain = 'plains' | 'forest' | 'hills' | 'mountains' | 'marsh' | 'coast' | 'steppe'
+export type Terrain =
+  | 'plains'
+  | 'forest'
+  | 'hills'
+  | 'mountains'
+  | 'marsh'
+  | 'coast'
+  | 'steppe'
+  | 'desert'
 
 export const TERRAIN_LABELS: Record<Terrain, string> = {
   plains: 'равнины',
@@ -22,6 +31,7 @@ export const TERRAIN_LABELS: Record<Terrain, string> = {
   marsh: 'топи',
   coast: 'побережье',
   steppe: 'степь',
+  desert: 'пустыня',
 }
 
 export type LocationArchetype =
@@ -68,6 +78,8 @@ export const SITE_KINDS = [
   'shrine',
   'spring',
   'causeway',
+  'oasis',
+  'lodge',
 ] as const
 
 export type SiteKind = (typeof SITE_KINDS)[number]
@@ -86,6 +98,8 @@ export const SITE_LABELS: Record<SiteKind, string> = {
   shrine: 'святилище',
   spring: 'ключ',
   causeway: 'гать',
+  oasis: 'оазис',
+  lodge: 'зимовье',
 }
 
 /** Что вообще может стоять на карте: поселение либо место без жителей. */
@@ -147,6 +161,14 @@ export interface Province {
    * по нему и цены, и власть, и то, что сюда нельзя привести обоз.
    */
   readonly island?: boolean
+  /**
+   * Климатический пояс (этап 44): север, средние земли или юг.
+   *
+   * Лежит в скелете, потому что от него родилась местность: у провинции, которую
+   * чертёж назвал равниной, на севере лес, а на юге степь. По нему же видно,
+   * где ты: по виду мест, по еде, по тому, что растёт.
+   */
+  readonly climate?: Climate
 }
 
 export interface Location {

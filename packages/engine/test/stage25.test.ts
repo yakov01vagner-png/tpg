@@ -173,6 +173,7 @@ function slowOf(from: Location, to: Location): number {
     hills: 1.4,
     marsh: 1.7,
     mountains: 2,
+    desert: 1.25,
   }
   const ground = (travel[from.terrain] + travel[to.terrain]) / 2
   const site = (one: Location) => (isSite(one.archetype) ? SITES[one.archetype].slow : 1)

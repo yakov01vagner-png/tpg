@@ -29,7 +29,7 @@ export interface Sea {
  * между мысом и заливом. Сто двадцать восемь клеток на две тысячи единиц — это
  * шестнадцать единиц на клетку, вдвое меньше зазора между местами.
  */
-export const SEA_GRID = 128
+export const SEA_GRID = 224
 
 /**
  * Докуда от места тянется суша.
@@ -55,6 +55,16 @@ const PROVINCE_REACH = 118
 /** Насколько рвано идёт берег: доля радиуса, которую отъедает или добавляет шум. */
 const RAGGED = 0.42
 
+/**
+ * Докуда от хребта материка тянется суша.
+ *
+ * Короны стоят в тысяче единиц друг от друга; земля каждой доходит примерно до
+ * пяти сотен. Три сотни от линии между столицами закрывают промежуток и
+ * оставляют море там, где хребта нет: у внешнего края и в углах полотна, где
+ * стоят острова.
+ */
+const SPINE_REACH = 300
+
 /** Устойчивый шум: один и тот же берег при каждом запуске. */
 function noise(x: number, y: number, salt: number): number {
   let hash = 2166136261 ^ salt
@@ -68,6 +78,10 @@ function noise(x: number, y: number, salt: number): number {
  * Мягкий шум: соседние клетки похожи, иначе берег выходит не изрезанным, а
  * пилой в одну клетку. Считается по четырём углам крупной ячейки.
  */
+function ease(t: number): number {
+  return t * t * (3 - 2 * t)
+}
+
 function smoothNoise(x: number, y: number, step: number, salt: number): number {
   const cx = Math.floor(x / step)
   const cy = Math.floor(y / step)
@@ -77,7 +91,6 @@ function smoothNoise(x: number, y: number, step: number, salt: number): number {
   const b = noise(cx + 1, cy, salt)
   const c = noise(cx, cy + 1, salt)
   const d = noise(cx + 1, cy + 1, salt)
-  const ease = (t: number) => t * t * (3 - 2 * t)
   const ex = ease(fx)
   const ey = ease(fy)
   return (a * (1 - ex) + b * ex) * (1 - ey) + (c * (1 - ex) + d * ex) * ey
@@ -96,6 +109,7 @@ export function buildSea(
   provinces: readonly Point[],
   seed: number,
   size: number = SEA_GRID,
+  spine: readonly (readonly [Point, Point])[] = [],
 ): Sea {
   const cell = MAP_SIZE / size
   const step = LAND_REACH * 2
@@ -125,24 +139,63 @@ export function buildSea(
     }
   }
 
+  // Середины провинций тоже по клеткам: на сотне провинций и полусотне тысяч
+  // клеток перебор всех против всех стоил больше, чем всё остальное море.
+  const wide = PROVINCE_REACH * (1 + RAGGED)
+  const wideColumns = Math.ceil(MAP_SIZE / wide) + 2
+  const middles = new Map<number, Point[]>()
+  for (const point of provinces) {
+    const at = Math.floor(point.x / wide) * wideColumns + Math.floor(point.y / wide)
+    const bucket = middles.get(at)
+    if (bucket) bucket.push(point)
+    else middles.set(at, [point])
+  }
+
+  // Хребет с запасом по краям: точка дальше рамки отрезка и дальше предела —
+  // не проверяется вовсе, а таких девять из десяти.
+  const margin = SPINE_REACH * (1 + RAGGED)
+  const bones = spine.map(([from, to]) => ({
+    from,
+    to,
+    left: Math.min(from.x, to.x) - margin,
+    right: Math.max(from.x, to.x) + margin,
+    top: Math.min(from.y, to.y) - margin,
+    bottom: Math.max(from.y, to.y) + margin,
+  }))
+
   const mask: string[] = []
   for (let row = 0; row < size; row += 1) {
     const y = (row + 0.5) * cell
     for (let column = 0; column < size; column += 1) {
       const x = (column + 0.5) * cell
       // Берег рвётся крупными зубцами (заливы) и мелкими (бухты).
-      const wide = smoothNoise(x, y, 260, seed)
+      const coarse = smoothNoise(x, y, 260, seed)
       const fine = smoothNoise(x, y, 90, seed + 7)
-      const ragged = 1 + (wide * 0.7 + fine * 0.3 - 0.5) * RAGGED
+      const ragged = 1 + (coarse * 0.7 + fine * 0.3 - 0.5) * RAGGED
       const reach = LAND_REACH * ragged
       const along = ROAD_REACH * ragged
       let land = false
-      // Середина провинции держит вокруг себя землю: провинция — это земля, а
-      // не список мест.
-      for (const middle of provinces) {
-        if (Math.hypot(middle.x - x, middle.y - y) <= PROVINCE_REACH * ragged) {
+      // Хребет материка держит землю между коронами: без него восемь корон на
+      // полотне — восемь островов, а между ними пролив (этап 44).
+      for (const bone of bones) {
+        if (x < bone.left || x > bone.right || y < bone.top || y > bone.bottom) continue
+        if (nearSegment(x, y, bone.from, bone.to) <= SPINE_REACH * ragged) {
           land = true
           break
+        }
+      }
+      // Середина провинции держит вокруг себя землю: провинция — это земля, а
+      // не список мест.
+      const wx = Math.floor(x / wide)
+      const wy = Math.floor(y / wide)
+      for (let dx = -1; dx <= 1 && !land; dx += 1) {
+        for (let dy = -1; dy <= 1 && !land; dy += 1) {
+          for (const middle of middles.get((wx + dx) * wideColumns + (wy + dy)) ?? []) {
+            if (Math.hypot(middle.x - x, middle.y - y) <= PROVINCE_REACH * ragged) {
+              land = true
+              break
+            }
+          }
         }
       }
       const cx = Math.floor(x / step)
@@ -198,12 +251,18 @@ export function isWater(sea: Sea, x: number, y: number): boolean {
  */
 export function crossesWater(sea: Sea, from: Point, to: Point): boolean {
   const span = Math.hypot(to.x - from.x, to.y - from.y)
-  const steps = Math.max(2, Math.ceil(span / (MAP_SIZE / sea.size / 2)))
+  const cell = MAP_SIZE / sea.size
+  const steps = Math.max(2, Math.ceil(span / (cell / 2)))
+  const size = sea.size
+  const mask = sea.mask
+  // Маска читается впрямую, без вызова на каждый шаг: отрезков проверяются
+  // сотни тысяч, и по шагу на клетку в каждом.
   for (let i = 0; i <= steps; i += 1) {
     const share = i / steps
-    if (isWater(sea, from.x + (to.x - from.x) * share, from.y + (to.y - from.y) * share)) {
-      return true
-    }
+    const column = Math.floor((from.x + (to.x - from.x) * share) / cell)
+    const row = Math.floor((from.y + (to.y - from.y) * share) / cell)
+    if (column < 0 || row < 0 || column >= size || row >= size) return true
+    if (mask.charCodeAt(row * size + column) === 49) return true
   }
   return false
 }

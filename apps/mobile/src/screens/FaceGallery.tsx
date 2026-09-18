@@ -4,7 +4,7 @@ import { font, palette, spacing } from '../theme'
 
 /** Галерея лиц — для проверки стиля, в игре не показывается. */
 export function FaceGallery() {
-  const kingdoms = ['reEstiz', 'robl', 'boharut', 'durHazad', 'tribes']
+  const kingdoms = ['reEstiz', 'robl', 'boharut', 'durHazad', 'tribes', 'hlad', 'rahim', 'league']
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={styles.title}>Спутники</Text>

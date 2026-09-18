@@ -44,7 +44,7 @@ export const RIVER_WIDTH = 14
  * шестнадцать единиц ширина русла пропадала в одной клетке вместе с разницей
  * между «у реки» и «за рекой».
  */
-export const RIVER_GRID = 256
+export const RIVER_GRID = 448
 
 /**
  * Докуда от конца отрезка дорога считается стоящей в броде, а не идущей через
@@ -91,10 +91,31 @@ export function buildRivers(
     rivers.push({
       id: `river.${rivers.length}`,
       name: names[rivers.length % names.length] ?? 'Река',
-      points,
+      points: smoothed(smoothed(points)),
     })
   }
   return rivers
+}
+
+/**
+ * Сглаженное русло: каждая точка — среднее с соседями, концы на месте.
+ *
+ * Спуск идёт по шестнадцати направлениям, и самый пологий из них то и дело
+ * меняется на соседний: без сглаживания река шла лесенкой, и на карте это
+ * читалось не рекой, а швом (этап 44). Число точек не меняется: маска и броды
+ * считаются по тому же руслу, которое рисуют.
+ */
+function smoothed(points: readonly Point[]): Point[] {
+  if (points.length < 3) return [...points]
+  return points.map((point, index) => {
+    const before = points[index - 1]
+    const after = points[index + 1]
+    if (!before || !after) return point
+    return {
+      x: Math.round((before.x + point.x * 2 + after.x) / 4),
+      y: Math.round((before.y + point.y * 2 + after.y) / 4),
+    }
+  })
 }
 
 /**
@@ -229,7 +250,27 @@ export function riverMask(rivers: readonly River[], size: number = RIVER_GRID): 
       }
     }
   }
-  return { size, mask: Array.from(marks, (one) => (one === 1 ? '1' : '0')).join('') }
+  return { size, mask: maskString(marks) }
+}
+
+/**
+ * Строка из нулей и единиц по массиву отметок.
+ *
+ * Не через массив строк и `join`: на двухстах тысячах клеток это стоило двадцать
+ * миллисекунд на каждое рождение мира, а кусками по коду символа — одну.
+ */
+export function maskString(marks: Uint8Array): string {
+  const codes = new Uint8Array(marks.length)
+  for (let i = 0; i < marks.length; i += 1) codes[i] = marks[i] === 1 ? 49 : 48
+  let out = ''
+  const chunk = 8192
+  for (let i = 0; i < codes.length; i += chunk) {
+    out += String.fromCharCode.apply(
+      null,
+      codes.subarray(i, Math.min(codes.length, i + chunk)) as unknown as number[],
+    )
+  }
+  return out
 }
 
 /**
@@ -282,13 +323,23 @@ export function riverCrossing(mask: RiverMask, from: Point, to: Point): Point | 
   const span = Math.hypot(to.x - from.x, to.y - from.y)
   if (span <= 0) return null
   const steps = Math.max(2, Math.ceil(span / (cell / 2)))
+  const wet = (step: number): boolean => {
+    const share = step / steps
+    return onRiver(mask, from.x + (to.x - from.x) * share, from.y + (to.y - from.y) * share)
+  }
+  // Конец, стоящий на русле, — это брод: русло, идущее от него без разрыва,
+  // не переход, а сам брод. На излучине оно тянется дальше `FORD_REACH`, и
+  // без этого брод на излучине оставался без единой дороги (этап 44).
+  let low = 0
+  while (low <= steps && (span * low) / steps < FORD_REACH) low += 1
+  if (wet(0)) while (low <= steps && wet(low)) low += 1
+  let high = steps
+  while (high >= 0 && (span * (steps - high)) / steps < FORD_REACH) high -= 1
+  if (wet(steps)) while (high >= 0 && wet(high)) high -= 1
   let first = -1
   let last = -1
-  for (let step = 0; step <= steps; step += 1) {
-    const along = (span * step) / steps
-    if (along < FORD_REACH || span - along < FORD_REACH) continue
-    const share = step / steps
-    if (!onRiver(mask, from.x + (to.x - from.x) * share, from.y + (to.y - from.y) * share)) continue
+  for (let step = low; step <= high; step += 1) {
+    if (!wet(step)) continue
     if (first < 0) first = step
     last = step
   }

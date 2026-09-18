@@ -1,9 +1,11 @@
 import { SITES, SITE_EPITHETS, sitesFor } from '../content/sites'
 import {
   ARCHETYPE_NAMES,
+  CONTINENT,
   IMPORT_RELIANCE,
   ISLANDS,
   KINGDOM_BLUEPRINTS,
+  KINGDOM_CENTERS,
   type KingdomBlueprint,
   MARCHES,
   NAME_QUALIFIERS,
@@ -12,20 +14,30 @@ import {
   RIVER_NAMES,
   SETTLEMENT_NAMES,
   TERRAIN_FERTILITY,
+  nameGender,
 } from '../content/world'
 import { landCapacityOf, seaCatch } from '../life'
 import type { Rng } from '../rng'
 import { createRng, nextFloat, nextInt } from '../rng'
+import type { Climate } from './climate'
+import { CLIMATE_FERTILITY, climateAt, climateTerrain } from './climate'
 import { buildLanes } from './lanes'
 import type { Point } from './layout'
 import { MAP_SIZE, MIN_GAP, SITE_GAP, Spacer, placeLocations, provinceCentersOf } from './layout'
 import { hopsBetween } from './queries'
 import type { River, RiverMask } from './rivers'
-import { buildRivers, onRiver, riverCrossing, riverMask } from './rivers'
+import { NO_RIVERS, buildRivers, onRiver, riverCrossing, riverMask } from './rivers'
 import type { Spot } from './roads'
-import { buildRoads, hoursBetweenPlaces, neighbourPairs, spotOf } from './roads'
+import {
+  Union,
+  buildRoads,
+  hoursBetweenPlaces,
+  neighbourPairs,
+  shortestLandLink,
+  spotOf,
+} from './roads'
 import type { Sea } from './sea'
-import { buildSea, crossesWater, onShore } from './sea'
+import { buildSea, crossesWater, isWater, onShore } from './sea'
 import { FRONTIER, isSettlement, isSite } from './types'
 import type {
   Kingdom,
@@ -64,6 +76,11 @@ export function generateWorld(
   // всех, когда скелет собран (`placeLocations`).
   const locations: Record<string, Unplaced> = {}
 
+  // Сперва скелет без мест: короны, области, провинции. Местность у провинции
+  // пока та, что просил чертёж, — настоящую даст климат, а климат читается по
+  // положению на карте, которого у провинции нет, пока скелет не собран
+  // (этап 44).
+  const planned: Record<string, Terrain> = {}
   for (const blueprint of blueprints) {
     const regionIds: string[] = []
     let capitalId = ''
@@ -78,46 +95,16 @@ export function generateWorld(
         // Провинция обычно повторяет местность своей области, но не всегда:
         // иначе области выходят однородными до скуки.
         const terrain = roll.chance(0.7) ? regionPlan.terrain : roll.pick(blueprint.terrains)
-        const fertility = round2(roll.betweenFloat(TERRAIN_FERTILITY[terrain]))
-        const locationIds: string[] = []
-        const locationCount = roll.int(2, 4)
-
-        for (let locationIndex = 0; locationIndex < locationCount; locationIndex += 1) {
-          const isCapital = regionIndex === 0 && provinceIndex === 0 && locationIndex === 0
-          const archetype: LocationArchetype = isCapital ? 'capital' : pickArchetype(roll, terrain)
-          const id = `${provinceId}.l${locationIndex}`
-          if (isCapital) capitalId = id
-          locations[id] = {
-            id,
-            provinceId,
-            name: isCapital ? blueprint.capitalName : names.forArchetype(archetype),
-            archetype,
-            terrain,
-            // Население считается от того, сколько кормит земля: мир начинается
-            // в равновесии, а не в состоянии неизбежного голода.
-            population: Math.max(
-              20,
-              Math.round(
-                landCapacityOf(archetype, terrain, fertility) *
-                  roll.betweenFloat(IMPORT_RELIANCE[archetype]),
-              ),
-            ),
-          }
-          locationIds.push(id)
-        }
-
-        // Места без жителей здесь не заводятся: они лягут после того, как
-        // поселения встанут на карту, — ровно между соседями (этап 26).
-        const siteIds: string[] = []
-
+        planned[provinceId] = terrain
+        if (regionIndex === 0 && provinceIndex === 0) capitalId = `${provinceId}.l0`
         provinces[provinceId] = {
           id: provinceId,
           regionId,
-          name: names.forProvince(terrain),
+          name: '',
           terrain,
-          fertility,
-          locationIds,
-          siteIds,
+          fertility: 0,
+          locationIds: [],
+          siteIds: [],
         }
         provinceIds.push(provinceId)
       }
@@ -141,6 +128,66 @@ export function generateWorld(
     }
   }
 
+  // Теперь у провинции есть место на карте — и есть климат. Север делает из
+  // равнины лес, юг — степь и песок; чертёж просит, а земля решает. Люди
+  // заводятся уже на той земле, что вышла: гном под горой, степняк в степи, а
+  // северянин — в лесу, даже если по чертежу область звалась полем.
+  const crownCentres = provinceCentersOf({ kingdoms, regions, provinces } as World)
+  for (const blueprint of blueprints) {
+    for (const regionId of kingdoms[blueprint.id]?.regionIds ?? []) {
+      for (const provinceId of regions[regionId]?.provinceIds ?? []) {
+        const province = provinces[provinceId]
+        const centre = crownCentres[provinceId]
+        if (!province || !centre) continue
+        const climate = climateAt(centre)
+        const terrain = climateTerrain(
+          planned[provinceId] ?? province.terrain,
+          climate,
+          roll.float(),
+        )
+        const fertility = round2(
+          roll.betweenFloat(TERRAIN_FERTILITY[terrain]) * CLIMATE_FERTILITY[climate],
+        )
+        const locationIds: string[] = []
+        const locationCount = roll.int(PLACES_PER_PROVINCE[0], PLACES_PER_PROVINCE[1])
+
+        for (let locationIndex = 0; locationIndex < locationCount; locationIndex += 1) {
+          const id = `${provinceId}.l${locationIndex}`
+          const isCapital = id === kingdoms[blueprint.id]?.capitalId
+          const archetype: LocationArchetype = isCapital ? 'capital' : pickArchetype(roll, terrain)
+          locations[id] = {
+            id,
+            provinceId,
+            name: isCapital ? blueprint.capitalName : names.forArchetype(archetype),
+            archetype,
+            terrain,
+            // Население считается от того, сколько кормит земля: мир начинается
+            // в равновесии, а не в состоянии неизбежного голода.
+            population: Math.max(
+              20,
+              Math.round(
+                landCapacityOf(archetype, terrain, fertility) *
+                  roll.betweenFloat(IMPORT_RELIANCE[archetype]),
+              ),
+            ),
+          }
+          locationIds.push(id)
+        }
+
+        // Места без жителей здесь не заводятся: они лягут после того, как
+        // поселения встанут на карту, — ровно между соседями (этап 26).
+        provinces[provinceId] = {
+          ...province,
+          name: names.forProvince(terrain),
+          terrain,
+          fertility,
+          locationIds,
+          climate,
+        }
+      }
+    }
+  }
+
   // Пограничье кладётся после корон: ему нужны обе столицы, между которыми оно
   // лежит, и оно нарочно не попадает ни в один `regionIds` — марку не держит
   // никто (DESIGN.md, п.3.1.1).
@@ -148,7 +195,12 @@ export function generateWorld(
     const [first, second] = march.between
     if (!kingdoms[first] || !kingdoms[second]) continue
     const regionId = `march.${march.id}`
-    const fertility = round2(roll.betweenFloat(TERRAIN_FERTILITY[march.terrain]))
+    // Марка написана руками и местность держит свою, но климат у неё тот, что
+    // на её широте: Волок между гномами и Хладью — северный перевал.
+    const climate = climateAt(marchCentre(first, second))
+    const fertility = round2(
+      roll.betweenFloat(TERRAIN_FERTILITY[march.terrain]) * CLIMATE_FERTILITY[climate],
+    )
     const provinceIds: string[] = []
 
     // Марка — полоса поперёк границы, а не точка на ней: две провинции, и в
@@ -178,8 +230,12 @@ export function generateWorld(
       const siteIds: string[] = []
       const kinds: SiteKind[] =
         side === 0
-          ? ['outpost', pickSite(roll, march.terrain)]
-          : [pickSite(roll, march.terrain), pickSite(roll, march.terrain), 'ruins']
+          ? ['outpost', pickSite(roll, march.terrain, climate)]
+          : [
+              pickSite(roll, march.terrain, climate),
+              pickSite(roll, march.terrain, climate),
+              'ruins',
+            ]
       for (const [index, kind] of kinds.entries()) {
         const id = `${provinceId}.s${index}`
         locations[id] = {
@@ -201,6 +257,7 @@ export function generateWorld(
         fertility,
         locationIds,
         siteIds,
+        climate,
       }
       provinceIds.push(provinceId)
     }
@@ -220,7 +277,10 @@ export function generateWorld(
   for (const island of ISLANDS) {
     const regionId = `island.${island.id}`
     const provinceId = `${regionId}.p0`
-    const fertility = round2(roll.betweenFloat(TERRAIN_FERTILITY[island.terrain]))
+    const climate = climateAt(island.at)
+    const fertility = round2(
+      roll.betweenFloat(TERRAIN_FERTILITY[island.terrain]) * CLIMATE_FERTILITY[climate],
+    )
     const locationIds: string[] = []
     for (const [index, place] of island.places.entries()) {
       const id = `${provinceId}.l${index}`
@@ -263,6 +323,7 @@ export function generateWorld(
       locationIds,
       siteIds,
       island: true,
+      climate,
     }
     regions[regionId] = {
       id: regionId,
@@ -290,7 +351,7 @@ export function generateWorld(
   // Вода кладётся после мест и до дорог: суша — это то, что вокруг людей и
   // вдоль дорог между ними, а дорога по морю не идёт (sea.ts). Соседство
   // считается заранее и тем же правилом, каким его потом посчитают дороги.
-  const pairs = neighbourPairs(Object.values(placed).map(spotOf))
+  const pairs = neighbourPairs(Object.values(placed).map((one) => spotOf(one)))
   const links = pairs.map((pair) => [pair.from, pair.to] as const)
   const centres = provinceCentersOf({ kingdoms, regions, provinces } as World)
   // Середина острова землю вокруг себя не держит: её держат только сами места.
@@ -300,7 +361,26 @@ export function generateWorld(
   const mainland = Object.entries(centres)
     .filter(([provinceId]) => !provinces[provinceId]?.island)
     .map(([, point]) => point)
-  const sea = buildSea(Object.values(placed), links, mainland, seed)
+  const spine = CONTINENT.flatMap(([first, second]) => {
+    const a = KINGDOM_CENTERS[first]
+    const b = KINGDOM_CENTERS[second]
+    return a && b && kingdoms[first] && kingdoms[second] ? [[a, b] as const] : []
+  })
+  const sea = buildSea(Object.values(placed), links, mainland, seed, undefined, spine)
+
+  // Глушь между коронами: земля, где никто не живёт, но через которую ходят.
+  // Пока хребет материка не держал сушу, короны были островами; теперь между
+  // ними земля, и по ней надо идти — а идти сутками одним шагом нельзя.
+  // Поэтому там, где куски дороги не сходятся, кладётся цепочка мест без
+  // жителей, и следующий подсчёт соседства сшивает их сам (этап 44).
+  fillWildLegs(
+    roll,
+    names,
+    spacer,
+    { provinces, locations: placed },
+    sea,
+    pairs.filter((pair) => !crossesWater(sea, pair.from, pair.to)),
+  )
 
   // Реки текут по уже готовой суше к уже готовому морю, а броды встают там,
   // где их переходит дорога: иначе переправа оказывается местом с дурной
@@ -308,7 +388,12 @@ export function generateWorld(
   // его не меняет, а только отнимает у него переходы через воду.
   const rivers = buildRivers(sea, riverSources(sea, centres, provinces), RIVER_NAMES)
   const currents = riverMask(rivers)
-  const dry = pairs.filter((pair) => !crossesWater(sea, pair.from, pair.to))
+  // Соседство считается заново: глушь между коронами добавила мест, и броды
+  // должны встать и на дорогах через неё.
+  const dry = neighbourPairs(
+    Object.values(placed).map((one) => spotOf(one)),
+    sea,
+  )
   fillFords(names, spacer, { provinces, locations: placed }, dry, currents)
 
   settlePorts(placed, provinces, regions, sea)
@@ -348,7 +433,7 @@ export function generateWorld(
  */
 const SOURCE_GAP = 260
 const INLAND = 220
-const MAX_RIVERS = 12
+const MAX_RIVERS = 24
 
 function riverSources(
   sea: Sea,
@@ -460,8 +545,13 @@ function fillFords(
  * доля занятой земли падала с 70% до 68%, а мир переставал голодать вовсе (за
  * двадцать лет ни одного случая против дюжины тысяч умерших). Полтора — это то,
  * при чём берег живёт гуще суши, но всё ещё проваливается в недород.
+ *
+ * На материке (этап 44) берег длинный: на нём живёт четверть людей, а не
+ * десятая часть, и при полутора мир голодал впятеро против прежнего — сто
+ * сорок тысяч умерших за двадцать лет на четыре сотни мест против сорока на
+ * полторы сотни. Четверть с небольшим держит и голод, и берег гуще суши.
  */
-const SEA_CROWD = 1.45
+const SEA_CROWD = 1.25
 
 /**
  * Порты ставятся по воде, а не по названию местности.
@@ -572,7 +662,7 @@ function fillLongLegs(
   spacer: Spacer,
   world: { provinces: Record<string, Province>; locations: Record<string, Location> },
 ): void {
-  const pairs = neighbourPairs(Object.values(world.locations).map(spotOf))
+  const pairs = neighbourPairs(Object.values(world.locations).map((one) => spotOf(one)))
   const counters = new Map<string, number>()
   for (const province of Object.values(world.provinces)) {
     counters.set(province.id, province.siteIds.length)
@@ -594,7 +684,7 @@ function fillLongLegs(
       const next = (counters.get(province.id) ?? 0) + 1
       counters.set(province.id, next)
       const id = `${province.id}.s${next - 1}`
-      const kind = pickSite(roll, province.terrain)
+      const kind = pickSite(roll, province.terrain, province.climate)
       const point = spacer.place(
         {
           x: from.x + (to.x - from.x) * share,
@@ -621,6 +711,103 @@ function fillLongLegs(
 }
 
 /**
+ * Глушь между коронами.
+ *
+ * Куски дорожной сети, между которыми есть земля, но нет мест, соединяются
+ * цепочкой мест без жителей по кратчайшему переходу посуху — примерно по
+ * одному на дневной переход. Кусок, до которого посуху не дойти, остаётся
+ * островом: туда плывут (этап 35). Тем же правилом, каким потом сошьёт дороги
+ * `bridgeIslands`, — только здесь между концами появляется земля, а там
+ * только отрезок.
+ */
+function fillWildLegs(
+  roll: Roller,
+  names: Namer,
+  spacer: Spacer,
+  world: { provinces: Record<string, Province>; locations: Record<string, Location> },
+  sea: Sea,
+  dry: readonly { from: Spot; to: Spot }[],
+): void {
+  const spots = Object.values(world.locations).map((one) =>
+    spotOf(one, world.provinces[one.provinceId]?.island === true),
+  )
+  const union = new Union(spots.map((spot) => spot.id))
+  for (const pair of dry) union.join(pair.from.id, pair.to.id)
+  const counters = new Map<string, number>()
+  for (const province of Object.values(world.provinces)) {
+    counters.set(province.id, province.siteIds.length)
+  }
+
+  const stranded = new Set<string>()
+  for (let guard = 0; guard < 64; guard += 1) {
+    const pieces = new Map<string, Spot[]>()
+    for (const spot of spots) {
+      const root = union.root(spot.id)
+      const piece = pieces.get(root) ?? []
+      piece.push(spot)
+      pieces.set(root, piece)
+    }
+    if (pieces.size <= 1) return
+    const sorted = [...pieces.entries()].sort((one, other) => one[1].length - other[1].length)
+    let joined = false
+    for (const [root, piece] of sorted) {
+      if (stranded.has(root)) continue
+      if (piece.every((spot) => spot.island)) {
+        stranded.add(root)
+        continue
+      }
+      if (sorted.filter(([other]) => !stranded.has(other)).length < 2) return
+      const link = shortestLandLink(piece, spots, sea, NO_RIVERS)
+      if (!link) {
+        stranded.add(root)
+        continue
+      }
+      const from = world.locations[link.from.id]
+      const to = world.locations[link.to.id]
+      if (from && to) {
+        const count = Math.min(6, Math.max(1, Math.round(link.span / WILD_STEP)))
+        for (let index = 0; index < count; index += 1) {
+          const share = (index + 1) / (count + 1)
+          const host = share < 0.5 ? from : to
+          const province = world.provinces[host.provinceId]
+          if (!province) continue
+          const wanted = {
+            x: from.x + (to.x - from.x) * share,
+            y: from.y + (to.y - from.y) * share,
+          }
+          const point = spacer.place(wanted, SITE_GAP)
+          // В воду место не ставят: если распорядитель отвёл точку в море,
+          // здесь останется пустой переход.
+          if (isWater(sea, point.x, point.y)) continue
+          const next = (counters.get(province.id) ?? 0) + 1
+          counters.set(province.id, next)
+          const id = `${province.id}.s${next - 1}`
+          const kind = pickSite(roll, province.terrain, province.climate)
+          world.locations[id] = {
+            id,
+            provinceId: province.id,
+            name: names.forSite(kind),
+            archetype: kind,
+            terrain: province.terrain,
+            population: 0,
+            x: point.x,
+            y: point.y,
+          }
+          world.provinces[province.id] = { ...province, siteIds: [...province.siteIds, id] }
+        }
+      }
+      union.join(link.from.id, link.to.id)
+      joined = true
+      break
+    }
+    if (!joined) return
+  }
+}
+
+/** Шаг глуши между коронами: примерно дневной переход по ровному. */
+const WILD_STEP = 110
+
+/**
  * Земля между поселениями.
  *
  * Правило версии 0.4: прямой дороги из деревни в деревню не бывает — между ними
@@ -642,7 +829,7 @@ function fillBetween(
   world: { provinces: Record<string, Province>; locations: Record<string, Location> },
 ): void {
   const settlements = Object.values(world.locations).filter((one) => isSettlement(one.archetype))
-  const pairs = neighbourPairs(settlements.map(spotOf))
+  const pairs = neighbourPairs(settlements.map((one) => spotOf(one)))
   const counters = new Map<string, number>()
   for (const province of Object.values(world.provinces)) {
     counters.set(province.id, province.siteIds.length)
@@ -671,7 +858,7 @@ function fillBetween(
       const next = (counters.get(province.id) ?? 0) + 1
       counters.set(province.id, next)
       const id = `${province.id}.s${next - 1}`
-      const kind = pickSite(roll, province.terrain)
+      const kind = pickSite(roll, province.terrain, province.climate)
       const point = spacer.place(wanted, SITE_GAP)
       world.locations[id] = {
         id,
@@ -840,7 +1027,8 @@ function makeNamer(roll: Roller): Namer {
       }
     }
     for (let attempt = 0; attempt < 50; attempt += 1) {
-      const candidate = `${roll.pick(NAME_QUALIFIERS)} ${roll.pick(source)}`
+      const base = roll.pick(source)
+      const candidate = `${roll.pick(NAME_QUALIFIERS)[nameGender(base)]} ${base}`
       if (!used.has(candidate)) {
         used.add(candidate)
         return candidate
@@ -890,10 +1078,26 @@ function legHours(
   return Math.max(2, Math.round(base * slowest))
 }
 
-function pickSite(roll: Roller, terrain: Terrain): SiteKind {
-  const fitting = sitesFor(terrain)
+function pickSite(roll: Roller, terrain: Terrain, climate: Climate = 'temperate'): SiteKind {
+  const fitting = sitesFor(terrain, climate)
   return fitting.length > 0 ? roll.pick(fitting).id : 'shrine'
 }
+
+/** Середина марки: ровно между столицами тех корон, между которыми она лежит. */
+function marchCentre(first: string, second: string): Point {
+  const a = KINGDOM_CENTERS[first] ?? { x: MAP_SIZE / 2, y: MAP_SIZE / 2 }
+  const b = KINGDOM_CENTERS[second] ?? { x: MAP_SIZE / 2, y: MAP_SIZE / 2 }
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+}
+
+/**
+ * Сколько поселений в провинции.
+ *
+ * Три-пять вместо двух-четырёх: с восемью коронами мир должен вырасти втрое, а
+ * не на три пятых, и растёт он не числом провинций, а тем, что каждая земля
+ * гуще заселена (этап 44).
+ */
+const PLACES_PER_PROVINCE: readonly [number, number] = [3, 5]
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100

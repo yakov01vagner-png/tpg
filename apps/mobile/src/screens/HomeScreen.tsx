@@ -1,6 +1,7 @@
 import {
   BUILDINGS,
   CAMP_HOURS,
+  CLIMATE_LABELS,
   type Command,
   type GameState,
   PLACE_LABELS,
@@ -100,6 +101,9 @@ import {
 export function HomeScreen({ game }: { game: GameState }) {
   const { width } = useWindowDimensions()
   const here = game.world.locations[game.locationId]
+  // Север и юг подписаны словом: по одному виду места понятно, где ты (этап 44).
+  const climate = here ? game.world.provinces[here.provinceId]?.climate : undefined
+  const climateHere = climate && climate !== 'temperate' ? ` · ${CLIMATE_LABELS[climate]}` : ''
   const settlement = game.settlements[game.locationId]
   const people = settlement?.population ?? here?.population ?? 0
   const kingdom = kingdomOf(game.world, game.locationId)
@@ -212,7 +216,7 @@ export function HomeScreen({ game }: { game: GameState }) {
         <View style={styles.sceneKind}>
           <Icon name={here?.archetype ?? 'village'} size={18} color={palette.faint} />
           <Icon name={here?.terrain ?? 'plains'} size={18} color={palette.faint} />
-          <Faint>{`${PLACE_LABELS[here?.archetype ?? 'village'].toUpperCase()} · ${TERRAIN_LABELS[here?.terrain ?? 'plains']}`}</Faint>
+          <Faint>{`${PLACE_LABELS[here?.archetype ?? 'village'].toUpperCase()} · ${TERRAIN_LABELS[here?.terrain ?? 'plains']}${climateHere}`}</Faint>
         </View>
         <Title>{here?.name ?? '…'}</Title>
         <Dim>

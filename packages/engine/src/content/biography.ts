@@ -60,6 +60,37 @@ const STAGES: readonly BiographyStage[] = [
           tags: ['home_robl', 'temple_raised'],
         },
       },
+      // Три короны дальних земель (этап 44): север, юг и восточный берег.
+      {
+        id: 'homeHlad',
+        label: 'На севере, в Хлади',
+        text: 'Лес, снег и погост. Зиму здесь не пережидают — в ней живут, и она не прощает тех, кто не запасся.',
+        effects: {
+          attributes: { endurance: 1 },
+          skills: { survival: 2, fortitude: 1 },
+          tags: ['home_hlad', 'northern'],
+        },
+      },
+      {
+        id: 'homeRahim',
+        label: 'На юге, в султанате Рахим',
+        text: 'Белый город, караваны и колодцы, за которые убивают. Ты знаешь цену воде — и цену слову.',
+        effects: {
+          attributes: { charisma: 1 },
+          skills: { trade: 1, persuasion: 2 },
+          tags: ['home_rahim', 'southern'],
+        },
+      },
+      {
+        id: 'homeLeague',
+        label: 'В вольном городе Лиги',
+        text: 'Хартия вместо короны, гильдия вместо рода, пристань вместо поля. Тебя учили считать и не верить на слово.',
+        effects: {
+          attributes: { mind: 1 },
+          skills: { trade: 2, scholarship: 1 },
+          tags: ['home_league', 'townsman'],
+        },
+      },
     ],
   },
   {

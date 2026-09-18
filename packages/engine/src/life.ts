@@ -146,6 +146,7 @@ export const TERRAIN_FOOD: Record<Terrain, number> = {
   marsh: 0.7,
   coast: 1.1,
   steppe: 0.9,
+  desert: 0.35,
 }
 
 /**

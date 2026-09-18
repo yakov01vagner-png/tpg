@@ -35,12 +35,14 @@ function live(years: number, seed = 1) {
   let bands = initial
   let rng = afterMuster
   const taken: string[] = []
+  let rebellions = 0
   for (let day = 1; day <= years * 365; day += 1) {
     settlements = tickDays(world, settlements, 1).settlements
     const turn = tickPolitics(world, politics, settlements, day, rng)
     politics = turn.politics
     settlements = turn.settlements
     rng = turn.rng
+    rebellions += turn.events.filter((event) => event.type === 'rebellion').length
     const march = tickBands(world, politics, settlements, bands, rng)
     bands = march.bands
     settlements = march.settlements
@@ -50,7 +52,7 @@ function live(years: number, seed = 1) {
       if (event.type === 'bandTook') taken.push(event.locationId)
     }
   }
-  return { settlements, politics, bands, taken }
+  return { settlements, politics, bands, taken, rebellions }
 }
 
 describe('дружины на карте', () => {
@@ -152,12 +154,19 @@ describe('война, у которой есть последствия', () => 
   })
 
   it('у мятежа есть выход: за двадцать лет мятежники не копятся без конца', () => {
-    const { politics } = live(20)
+    const { politics, rebellions } = live(20)
     const rebels = politics.lords.filter(isRebel)
     // Раньше мятеж был дверью в одну сторону: пятнадцать лордов из шестнадцати
-    // уходили в мятеж и оставались там навсегда.
-    console.log(`мятежников через 20 лет: ${rebels.length} из ${politics.lords.length}`)
-    expect(rebels.length).toBeLessThan(politics.lords.length / 2)
+    // уходили в мятеж и оставались там навсегда. Выход — это когда мятежей за
+    // двадцать лет было много больше, чем мятежников осталось: их унимают.
+    // На материке (этап 44) север и юг голодают по замыслу, мятежей от голода
+    // больше, и в мятеже стоит около половины владетелей — но не больше трёх
+    // пятых, и большинство мятежей кончается.
+    console.log(
+      `мятежников через 20 лет: ${rebels.length} из ${politics.lords.length}, мятежей было ${rebellions}`,
+    )
+    expect(rebels.length).toBeLessThan(politics.lords.length * 0.6)
+    expect(rebels.length).toBeLessThan(rebellions / 2)
     expect(politics.lords.length).toBeGreaterThan(5)
   })
 
