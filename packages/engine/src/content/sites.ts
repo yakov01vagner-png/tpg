@@ -1,4 +1,5 @@
 import type { SiteKind, Terrain } from '../world/types'
+import type { GoodId } from './goods'
 
 /**
  * Места без жителей — данные, а не код (правило репозитория №6).
@@ -18,6 +19,23 @@ export interface SiteDef {
   readonly danger: number
   /** Во сколько раз дольше идти через это место. */
   readonly slow: number
+  /**
+   * Что здесь можно найти, если не проходить мимо. Находка одна на место за всю
+   * игру: иначе курган превращается в станок для денег.
+   */
+  readonly find?: SiteFind
+}
+
+export interface SiteFind {
+  /** Ступень выживания или ловкости рук, ниже которой ищут впустую. */
+  readonly need: number
+  readonly money?: readonly [number, number]
+  readonly good?: GoodId
+  readonly amount?: readonly [number, number]
+  /** Что рассказать игроку, когда нашёл. */
+  readonly text: string
+  /** Могилу разрыли. Округа это запоминает, и не с благодарностью. */
+  readonly grim?: boolean
 }
 
 export const SITES: Record<SiteKind, SiteDef> = {
@@ -30,6 +48,11 @@ export const SITES: Record<SiteKind, SiteDef> = {
     terrains: ['mountains', 'hills'],
     danger: 0.45,
     slow: 1.8,
+    find: {
+      need: 6,
+      money: [30, 90],
+      text: 'Под камнем — обледеневшая котомка. Хозяин её не хватится.',
+    },
   },
   ford: {
     id: 'ford',
@@ -39,6 +62,12 @@ export const SITES: Record<SiteKind, SiteDef> = {
     terrains: ['plains', 'forest', 'marsh', 'steppe', 'hills'],
     danger: 0.3,
     slow: 1.3,
+    find: {
+      need: 4,
+      good: 'cloth',
+      amount: [4, 10],
+      text: 'В корягах застрял тюк сукна: кто-то не довёз и не вернулся искать.',
+    },
   },
   crossing: {
     id: 'crossing',
@@ -49,6 +78,11 @@ export const SITES: Record<SiteKind, SiteDef> = {
     terrains: ['coast', 'marsh', 'plains'],
     danger: 0.15,
     slow: 1.2,
+    find: {
+      need: 3,
+      money: [15, 40],
+      text: 'Под настилом — кошель, обронённый с телеги ещё в прошлом году.',
+    },
   },
   grove: {
     id: 'grove',
@@ -58,6 +92,12 @@ export const SITES: Record<SiteKind, SiteDef> = {
     terrains: ['forest', 'hills', 'plains'],
     danger: 0.2,
     slow: 1.1,
+    find: {
+      need: 3,
+      good: 'honey',
+      amount: [5, 12],
+      text: 'Борть в старой сосне полна: хозяин её давно не приходил.',
+    },
   },
   wilds: {
     id: 'wilds',
@@ -68,6 +108,12 @@ export const SITES: Record<SiteKind, SiteDef> = {
     terrains: ['forest', 'marsh', 'steppe', 'hills'],
     danger: 0.55,
     slow: 1.4,
+    find: {
+      need: 7,
+      good: 'furs',
+      amount: [3, 8],
+      text: 'Чей-то схрон под выворотнем: шкуры, увязанные на совесть.',
+    },
   },
   barrow: {
     id: 'barrow',
@@ -77,6 +123,12 @@ export const SITES: Record<SiteKind, SiteDef> = {
     terrains: ['steppe', 'plains', 'hills'],
     danger: 0.35,
     slow: 1,
+    find: {
+      need: 8,
+      money: [120, 380],
+      text: 'В насыпи — лаз. Внутри темно, тесно и есть что взять.',
+      grim: true,
+    },
   },
   ruins: {
     id: 'ruins',
@@ -86,6 +138,12 @@ export const SITES: Record<SiteKind, SiteDef> = {
       'Камни, из которых окрестные деревни возят себе фундаменты. Раньше тут стояло что-то большое.',
     danger: 0.4,
     slow: 1,
+    find: {
+      need: 5,
+      good: 'iron',
+      amount: [4, 12],
+      text: 'Под завалом — кованые скобы и петли: железо тут доброе, старое.',
+    },
   },
   outpost: {
     id: 'outpost',
@@ -104,6 +162,12 @@ export const SITES: Record<SiteKind, SiteDef> = {
     terrains: ['hills', 'mountains'],
     danger: 0.25,
     slow: 1.1,
+    find: {
+      need: 4,
+      good: 'iron',
+      amount: [3, 9],
+      text: 'В отвале — недобранная жила: её бросили, когда обвалился свод.',
+    },
   },
   shrine: {
     id: 'shrine',
@@ -113,6 +177,12 @@ export const SITES: Record<SiteKind, SiteDef> = {
       'Камень, столб или крест на развилке. Проезжие оставляют монету, и не все из вежливости.',
     danger: 0.05,
     slow: 1,
+    find: {
+      need: 4,
+      money: [25, 70],
+      text: 'В расщелине камня — монеты, оставленные проезжими. Все до одной чужие.',
+      grim: true,
+    },
   },
   spring: {
     id: 'spring',
@@ -122,6 +192,12 @@ export const SITES: Record<SiteKind, SiteDef> = {
     terrains: ['forest', 'hills', 'mountains', 'plains'],
     danger: 0.1,
     slow: 1,
+    find: {
+      need: 2,
+      good: 'herbs',
+      amount: [4, 9],
+      text: 'У воды растёт то, за чем лекари посылают учеников за десять вёрст.',
+    },
   },
   causeway: {
     id: 'causeway',
@@ -131,6 +207,12 @@ export const SITES: Record<SiteKind, SiteDef> = {
     terrains: ['marsh'],
     danger: 0.4,
     slow: 1.7,
+    find: {
+      need: 3,
+      good: 'timber',
+      amount: [5, 14],
+      text: 'В стороне от гати — сложенные брёвна: заготовили и не вывезли.',
+    },
   },
 }
 

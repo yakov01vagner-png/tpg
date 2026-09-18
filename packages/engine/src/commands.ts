@@ -152,6 +152,10 @@ export type Command =
   /** Позвать с собой именного человека. */
   | { readonly type: 'recruitCompanion'; readonly companionId: string }
   | { readonly type: 'dismissCompanion'; readonly companionId: string }
+  /** Встать лагерем там, где нет крыши. */
+  | { readonly type: 'camp' }
+  /** Осмотреться в глуши: что здесь лежит, кроме земли. */
+  | { readonly type: 'search' }
   /** Взяться за поручение с лицом. */
   | { readonly type: 'startChain'; readonly chainId: string }
   /** Выкупить пленного спутника: дорого, зато сразу. */
@@ -283,6 +287,10 @@ export function applyCommand(
       return attackBand(state, command.bandId)
     case 'recruitCompanion':
       return recruitCompanion(state, command.companionId)
+    case 'camp':
+      return camp(state)
+    case 'search':
+      return search(state)
     case 'startChain':
       return startChain(state, command.chainId)
     case 'ransomCompanion':
@@ -1678,6 +1686,99 @@ function ransomCompanion(state: GameState, companionId: string): CommandResult {
 
 export const COMPANION_RANSOM = 100
 
+// --- глушь ------------------------------------------------------------------
+
+/** Сколько часов занимает ночёвка под открытым небом. */
+export const CAMP_HOURS = 8
+
+/**
+ * Лагерь.
+ *
+ * Сутки вне поселения были невозможны: спать можно было только там, где есть
+ * крыша, поэтому дорога длиннее одного дня не существовала. Лагерь — это
+ * ночёвка на земле: отдыхаешь хуже, чем в доме, и не знаешь, кто выйдет к огню.
+ */
+function camp(state: GameState): CommandResult {
+  const here = state.world.locations[state.locationId]
+  if (!here) return fail('invalid', 'Непонятно, где находится герой.')
+  if (state.settlements[state.locationId]) {
+    return fail('unavailableHere', 'Здесь есть крыша: лагерем встают там, где её нет.')
+  }
+
+  const draft = open(state)
+  notice(draft, 'Костёр, котелок и очередь караулить.')
+  advance(draft, hours(CAMP_HOURS))
+  // Под небом отдыхают хуже, чем под крышей: три четверти от сна в доме.
+  addFatigue(draft, -Math.round(SLEEP_RECOVERY_PER_HOUR * CAMP_HOURS * 0.75))
+  practice(draft, 'survival', 18)
+  // Ночь в глуши — это ещё и ночь в глуши.
+  ambush(draft, state.locationId)
+  return close(draft)
+}
+
+/**
+ * Осмотреться.
+ *
+ * Место без жителей не пустое: в кургане лежит то, ради чего его насыпали, у
+ * брода стоит непривезённый тюк, в отвале — недобранная жила. Находка одна на
+ * место за всю игру, иначе курган становится станком для денег.
+ */
+function search(state: GameState): CommandResult {
+  const here = state.world.locations[state.locationId]
+  if (!here || !isSite(here.archetype)) {
+    return fail('unavailableHere', 'Искать имеет смысл там, где не живут люди.')
+  }
+  const find = SITES[here.archetype].find
+  if (!find) return fail('unavailableHere', 'Здесь нечего искать.')
+  if (state.searchedSites.includes(state.locationId)) {
+    return fail('invalid', 'Здесь уже всё осмотрено.')
+  }
+  const blocked = checkFatigue(state.character, 16)
+  if (blocked) return blocked
+
+  const draft = open(state)
+  draft.searchedSites = [...draft.searchedSites, state.locationId]
+  advance(draft, hours(3))
+  addFatigue(draft, 16)
+  practice(draft, 'survival', 14)
+
+  // Ищут выживанием либо ловкостью рук: следопыт и вор находят разное, но оба
+  // находят. Ниже нужной ступени находят только следы чужой удачи.
+  const skill = Math.max(
+    skillLevel(state.character, 'survival'),
+    skillLevel(state.character, 'sleight'),
+  )
+  const odds = Math.max(0.05, Math.min(0.92, 0.25 + (skill - find.need) * 0.09))
+  const [found, afterRoll] = rollChance(draft.rng, odds)
+  draft.rng = afterRoll
+  if (!found) {
+    notice(draft, 'Обошёл кругом, обстучал, обшарил. Ничего.')
+    return close(draft)
+  }
+
+  notice(draft, find.text, 'money')
+  if (find.money) {
+    const [low, high] = find.money
+    const [amount, afterAmount] = nextInt(draft.rng, low, high)
+    draft.rng = afterAmount
+    addMoney(draft, amount)
+    notice(draft, `Взято: ${amount} монет.`, 'money')
+  }
+  if (find.good && find.amount) {
+    const [low, high] = find.amount
+    const [amount, afterAmount] = nextInt(draft.rng, low, high)
+    draft.rng = afterAmount
+    addGoods(draft, find.good, amount)
+    notice(draft, `Взято: ${GOODS[find.good].label.toLowerCase()} — ${amount}.`, 'money')
+  }
+  if (find.grim) {
+    // Могилу разрыли, приношение унесли. Округа этого не забудет.
+    draft.reputation = withPlaceRep(draft.reputation, state.locationId, -12)
+    seeDeed(draft, 'sack')
+  }
+  return close(draft)
+}
+
 // --- поручения руками -------------------------------------------------------
 
 function startChain(state: GameState, chainId: string): CommandResult {
@@ -2346,6 +2447,7 @@ interface Draft {
   chains: readonly ChainProgress[]
   doneChains: readonly string[]
   battlesWon: number
+  searchedSites: readonly string[]
   bands: readonly Band[]
   companions: readonly Companion[]
   enterprises: readonly Enterprise[]
@@ -2376,6 +2478,7 @@ function open(state: GameState): Draft {
     chains: state.chains,
     doneChains: state.doneChains,
     battlesWon: state.battlesWon,
+    searchedSites: state.searchedSites,
     bands: state.bands,
     companions: state.companions,
     enterprises: state.enterprises,
@@ -2520,6 +2623,7 @@ function close(draft: Draft): CommandResult {
     chains: draft.chains,
     doneChains: draft.doneChains,
     battlesWon: draft.battlesWon,
+    searchedSites: draft.searchedSites,
     time: draft.time,
     rng: draft.rng,
     character: draft.character,

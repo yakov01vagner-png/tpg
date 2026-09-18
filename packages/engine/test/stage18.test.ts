@@ -100,7 +100,11 @@ describe('у места без жителей нет ничего, что счи
       const result = applyCommand(there, command)
       expect(result.ok, `${command.type} прошло в глуши`).toBe(false)
     }
-    expect(jobsAt(there)).toHaveLength(0)
+    // Работа в глуши бывает (этап 21), но только та, что названа прямо: ни
+    // конюшен, ни прилавка, ни наставника здесь нет и быть не может.
+    for (const job of jobsAt(there)) {
+      expect(job.where?.archetypes, job.id).toContain(site.archetype)
+    }
     expect(coursesAt(there)).toHaveLength(0)
   })
 })

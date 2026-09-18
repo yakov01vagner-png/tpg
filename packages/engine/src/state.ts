@@ -26,7 +26,7 @@ import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 15
+export const SCHEMA_VERSION = 16
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -94,6 +94,8 @@ export interface GameState {
   readonly doneChains: readonly string[]
   /** Сколько боёв выиграно: цепочки и лорды считают по этому. */
   readonly battlesWon: number
+  /** Где уже искали. Находка одна на место: курган не станок для денег. */
+  readonly searchedSites: readonly string[]
   /** Игра кончена: герой погиб. Пермадэт редкий, но настоящий. */
   readonly over: boolean
   readonly log: readonly LogEntry[]
@@ -133,6 +135,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     chains: [],
     doneChains: [],
     battlesWon: 0,
+    searchedSites: [],
     over: false,
     log: [
       {

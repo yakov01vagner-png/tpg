@@ -1,5 +1,6 @@
 import {
   BUILDINGS,
+  CAMP_HOURS,
   type Command,
   type GameState,
   PLACE_LABELS,
@@ -41,6 +42,7 @@ import { font, lineHeight, palette, radii, spacing, touch } from '../theme'
 import {
   Body,
   Button,
+  Card,
   Chip,
   Chips,
   Dim,
@@ -111,6 +113,10 @@ export function HomeScreen({ game }: { game: GameState }) {
   // Место без жителей: здесь не торгуют и не нанимаются, зато здесь можно
   // оказаться — и это надо сказать словами, а не пустыми плитками.
   const site = here && isSite(here.archetype) ? here.archetype : null
+  const reasonFor = (command: Command): string | null => {
+    const check = canApply(game, command)
+    return check.ok ? null : check.message
+  }
   if (site && SITES[site].danger >= 0.35) {
     happening.push({ text: 'Место недоброе: здесь ходят с оглядкой', tone: 'warn' })
   }
@@ -279,11 +285,38 @@ export function HomeScreen({ game }: { game: GameState }) {
       </Section>
 
       {settlement ? null : (
-        <Section title="Что здесь есть">
-          <Dim>
-            Ни торга, ни работы, ни наставника: людей тут не живёт. Отсюда можно идти дальше, а
-            можно встать на ночь.
-          </Dim>
+        <Section title="Что здесь делают">
+          <Card
+            glyph={<Icon name="rest" size={20} color={palette.info} />}
+            title="Встать лагерем"
+            description="Костёр, котелок и очередь караулить. Под небом отдыхаешь хуже, чем под крышей, и не знаешь, кто выйдет на огонь."
+            meta={`${CAMP_HOURS} ч`}
+            reason={reasonFor({ type: 'camp' })}
+            onPress={() => dispatch({ type: 'camp' })}
+          />
+          {site && SITES[site].find ? (
+            <Card
+              glyph={<Icon name="journal" size={20} color={palette.gold} />}
+              title={
+                game.searchedSites.includes(game.locationId) ? 'Здесь уже осмотрено' : 'Осмотреться'
+              }
+              description="Место без жителей не пустое. Ищут выживанием или ловкостью рук, и находят один раз."
+              meta="3 ч"
+              reason={reasonFor({ type: 'search' })}
+              onPress={() => dispatch({ type: 'search' })}
+              tone="gold"
+            />
+          ) : null}
+          {jobs === 0 ? <Dim>Работы здесь нет: за неё берутся там, где кто-то платит.</Dim> : null}
+          {jobs > 0 ? (
+            <Card
+              glyph={<Icon name="earn" size={20} color={palette.gold} />}
+              title="Работа земли"
+              description="Тут платят не в лавке, а за то, что возьмёшь руками."
+              meta={`${jobs} ${plural(jobs, 'работа', 'работы', 'работ')}`}
+              onPress={() => openSheet('earn')}
+            />
+          ) : null}
         </Section>
       )}
 

@@ -149,8 +149,9 @@ describe('лорд говорит', () => {
 })
 
 describe('поручения руками', () => {
-  it('двенадцать цепочек, у каждой человек, шаги и конец', () => {
-    expect(CHAINS).toHaveLength(12)
+  it('у каждой цепочки есть человек, шаги и конец', () => {
+    // Двенадцать на этапе 15, плюс четыре вне стен на этапе 21.
+    expect(CHAINS.length).toBeGreaterThanOrEqual(12)
     for (const chain of CHAINS) {
       expect(chain.steps.length).toBeGreaterThanOrEqual(2)
       expect(chain.giver.name.length).toBeGreaterThan(0)
@@ -240,8 +241,9 @@ describe('биография вдвое', () => {
 })
 
 describe('работы и наставники вдвое', () => {
-  it('сорок работ и двадцать четыре наставника', () => {
-    expect(JOBS).toHaveLength(40)
+  it('работ и наставников не убавилось', () => {
+    // Сорок работ этапа 15 и восемь работ земли этапа 21.
+    expect(JOBS.length).toBeGreaterThanOrEqual(40)
     expect(COURSES).toHaveLength(24)
   })
 

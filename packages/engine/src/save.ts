@@ -78,6 +78,8 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
     }
     return { ...data, world: { ...world, provinces: filled } }
   },
+  /** v15 → v16: в глуши стало что искать. Старый герой ещё нигде не искал. */
+  15: (data) => ({ ...data, searchedSites: data.searchedSites ?? [] }),
   /** v13 → v14: поручения руками и счёт побед. Старый герой ничего не брал. */
   13: (data) => ({
     ...data,

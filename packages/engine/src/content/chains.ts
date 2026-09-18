@@ -1,5 +1,5 @@
 import type { SkillId } from '../skills'
-import type { LocationArchetype } from '../world/types'
+import type { PlaceKind } from '../world/types'
 import type { Availability } from './availability'
 import type { GoodId } from './goods'
 
@@ -15,7 +15,7 @@ import type { GoodId } from './goods'
 export type ChainStep =
   | {
       readonly type: 'visit'
-      readonly archetype: LocationArchetype
+      readonly archetype: PlaceKind
       readonly kingdomId?: string
       readonly text: string
     }
@@ -23,7 +23,7 @@ export type ChainStep =
       readonly type: 'deliver'
       readonly good: GoodId
       readonly amount: number
-      readonly archetype: LocationArchetype
+      readonly archetype: PlaceKind
       readonly text: string
     }
   | { readonly type: 'win'; readonly battles: number; readonly text: string }
@@ -295,6 +295,80 @@ export const CHAINS: readonly ChainDef[] = [
     ],
     outro: 'Феодора принимает травы и дописывает твоё имя в список тех, кого зовут, когда плохо.',
     reward: { money: 80, tag: 'healer_known', placeRep: 10 },
+  },
+  // --- поручения вне стен: их дают там, где кончается улица ------------------
+  {
+    id: 'passWatch',
+    title: 'Перевал держат двое',
+    giver: { name: 'проводник Кайдан', seed: 'chain:kaidan' },
+    where: { archetypes: ['town', 'village', 'fortress'] },
+    intro:
+      'На перевале пропали двое обозников. Кайдан пойдёт туда только с тем, кто умеет ходить по горам.',
+    steps: [
+      {
+        type: 'skill',
+        skill: 'survival',
+        level: 6,
+        text: 'Набрать выживания не ниже шестой ступени.',
+      },
+      { type: 'visit', archetype: 'pass', text: 'Подняться на перевал и посмотреть самому.' },
+    ],
+    outro:
+      'Обозников не нашли, нашли их поклажу. Кайдан делит её пополам и больше об этом не говорит.',
+    reward: { money: 120, tag: 'mountain_walker' },
+  },
+  {
+    id: 'barrowOath',
+    title: 'Что лежит под курганом',
+    giver: { name: 'старуха Ждана', seed: 'chain:zhdana' },
+    where: { archetypes: ['village'] },
+    intro:
+      'Ждана говорит, что курган в поле надо не разрывать, а обойти с огнём и поклониться. За это она заплатит — и предупредит, что будет, если сделать иначе.',
+    steps: [
+      { type: 'visit', archetype: 'barrow', text: 'Дойти до кургана.' },
+      {
+        type: 'visit',
+        archetype: 'shrine',
+        text: 'Вернуться через святилище и оставить там монету.',
+      },
+    ],
+    outro:
+      'Ждана слушает, кивает и отдаёт обещанное. «Теперь он тебя знает», — говорит она, и это звучит не как похвала.',
+    reward: { money: 90, renown: 1, tag: 'barrow_known' },
+  },
+  {
+    id: 'fordToll',
+    title: 'Брод на замке',
+    giver: { name: 'купец Севастьян', seed: 'chain:sevastyan' },
+    where: { archetypes: ['town', 'city', 'port'] },
+    intro:
+      'На броде кто-то берёт с проезжих больше, чем полагается, и делает это с ножом. Севастьяну нужно, чтобы это кончилось.',
+    steps: [
+      { type: 'visit', archetype: 'ford', text: 'Дойти до брода и посмотреть, кто там стоит.' },
+      { type: 'win', battles: 1, text: 'Разобраться с теми, кто держит переправу.' },
+    ],
+    outro: 'Брод снова ничей. Севастьян платит и обещает, что об этом узнают в трёх городах.',
+    reward: { money: 140, renown: 1 },
+  },
+  {
+    id: 'quarryStone',
+    title: 'Камень на стены',
+    giver: { name: 'каменщик Мирон', seed: 'chain:miron' },
+    where: { archetypes: ['city', 'capital', 'fortress'] },
+    intro:
+      'Стройка встала: каменоломня далеко, возчиков нет. Мирону нужен камень и человек, который не побоится туда съездить.',
+    steps: [
+      { type: 'visit', archetype: 'quarry', text: 'Добраться до каменоломни.' },
+      {
+        type: 'deliver',
+        good: 'iron',
+        amount: 8,
+        archetype: 'city',
+        text: 'Привезти восемь мер железа в город: без скоб кладка не встанет.',
+      },
+    ],
+    outro: 'Мирон принимает железо и в первый раз за месяц садится обедать. Платит не глядя.',
+    reward: { money: 110, placeRep: 8 },
   },
   {
     id: 'lordsFavour',
