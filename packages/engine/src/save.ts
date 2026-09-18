@@ -307,7 +307,41 @@ export type LoadResult =
   | { readonly ok: false; readonly error: string }
 
 export function serialize(state: GameState): string {
-  return JSON.stringify(state)
+  // Маска моря — пятьдесят тысяч нулей и единиц — в сейве лежит отрезками
+  // (этап 48): полосы одного цвета длинные, и пятьдесят килобайт становятся
+  // тремя. В памяти она прежняя: `isWater` читает по индексу.
+  return JSON.stringify(state, (key, value) =>
+    key === 'mask' && typeof value === 'string' && value.length > 256 ? packMask(value) : value,
+  )
+}
+
+/** Маска отрезками: «~» и длины полос нулей и единиц по очереди, начиная с нулей. */
+export function packMask(mask: string): string {
+  const runs: number[] = []
+  let current = '0'
+  let length = 0
+  for (const one of mask) {
+    if (one === current) {
+      length += 1
+      continue
+    }
+    runs.push(length)
+    current = one
+    length = 1
+  }
+  runs.push(length)
+  return `~${runs.join(',')}`
+}
+
+export function unpackMask(packed: string): string {
+  if (!packed.startsWith('~')) return packed
+  const parts: string[] = []
+  let current = '0'
+  for (const run of packed.slice(1).split(',')) {
+    parts.push(current.repeat(Number(run)))
+    current = current === '0' ? '1' : '0'
+  }
+  return parts.join('')
 }
 
 export function deserialize(json: string): LoadResult {
@@ -316,6 +350,12 @@ export function deserialize(json: string): LoadResult {
     data = JSON.parse(json)
   } catch {
     return { ok: false, error: 'Файл сохранения повреждён.' }
+  }
+  // Маска моря в сейве лежит отрезками — разворачиваем до миграций: они её
+  // читают как есть.
+  const sea = (data as { world?: { sea?: { mask?: unknown } } })?.world?.sea
+  if (sea && typeof sea.mask === 'string' && sea.mask.startsWith('~')) {
+    sea.mask = unpackMask(sea.mask)
   }
   if (typeof data !== 'object' || data === null) {
     return { ok: false, error: 'Файл сохранения повреждён.' }

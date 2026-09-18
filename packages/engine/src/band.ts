@@ -11,7 +11,7 @@ import { seasonOf } from './time'
 import type { Lord, Politics } from './war'
 import { atWar, isRebel } from './war'
 import { neighbourSettlements, roadsFrom } from './world/queries'
-import { fordShut } from './world/rivers'
+import { fordShut, isFlood } from './world/rivers'
 import type { Terrain, World } from './world/types'
 
 /**
@@ -238,30 +238,48 @@ export function nextHop(
   day: number | null = null,
 ): string | null {
   if (fromId === toId) return null
-  const cameFrom = new Map<string, string>()
-  const queue = [fromId]
-  const seen = new Set([fromId])
+  // Дерево шагов к цели помнится (этап 48): дружин сотня, и каждая каждые
+  // сутки искала путь заново — обход мира ради одного шага стоил шестой части
+  // такта. Обход от цели даёт шаг к ней из любого места разом; зависит он
+  // только от мира и от того, стоит ли половодье. Мир неизменен, пока его не
+  // пополнили, — а тогда и память новая.
+  const flood = day !== null && isFlood(day) ? '~' : ''
+  const key = `${toId}${flood}`
+  let memo = trees.get(world)
+  if (!memo) {
+    memo = new Map()
+    trees.set(world, memo)
+  }
+  let tree = memo.get(key)
+  if (!tree) {
+    tree = towards(world, toId, day)
+    memo.set(key, tree)
+  }
+  return tree.get(fromId) ?? null
+}
+
+const trees = new WeakMap<World, Map<string, Map<string, string>>>()
+
+/**
+ * Шаг к цели из каждого места: обход в ширину от самой цели. Дороги
+ * двусторонние, поэтому кратчайший путь туда — это кратчайший путь оттуда.
+ * Брод под водой не проходят ни в ту, ни в другую сторону.
+ */
+function towards(world: World, toId: string, day: number | null): Map<string, string> {
+  const next = new Map<string, string>()
+  const queue = [toId]
+  const seen = new Set([toId])
   while (queue.length > 0) {
     const current = queue.shift() as string
     for (const road of roadsFrom(world, current)) {
       if (seen.has(road.to)) continue
       if (fordShut(world, road.to, day)) continue
       seen.add(road.to)
-      cameFrom.set(road.to, current)
-      if (road.to === toId) {
-        // Разматываем обратно до первого шага.
-        let step = road.to
-        while (cameFrom.get(step) !== fromId) {
-          const previous = cameFrom.get(step)
-          if (!previous) return null
-          step = previous
-        }
-        return step
-      }
+      next.set(road.to, current)
       queue.push(road.to)
     }
   }
-  return null
+  return next
 }
 
 /** Сколько переходов до каждого места. Один обход на решение, а не по обходу на цель. */

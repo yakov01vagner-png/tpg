@@ -97,6 +97,31 @@ const SEA_SUPPLY: Partial<Record<GoodId, number>> = { fish: 2, salt: 1.5 }
 
 /** Во сколько раз место обеспечено товаром сверх собственной нужды. */
 export function supplyRatio(world: World, locationId: string, good: GoodId): number {
+  return supplyRatiosOf(world, locationId)[good]
+}
+
+/**
+ * Множители по всем товарам разом (этап 48): считаются один раз на мир и
+ * место — они свойство скелета, — а спрашивают их каждые сутки по каждому
+ * месту и товару. Одно обращение на место, а не тринадцать.
+ */
+export function supplyRatiosOf(world: World, locationId: string): Readonly<Record<GoodId, number>> {
+  let memo = supplies.get(world)
+  if (!memo) {
+    memo = new Map()
+    supplies.set(world, memo)
+  }
+  const known = memo.get(locationId)
+  if (known) return known
+  const ratios = {} as Record<GoodId, number>
+  for (const good of GOOD_IDS) ratios[good] = rawSupplyRatio(world, locationId, good)
+  memo.set(locationId, ratios)
+  return ratios
+}
+
+const supplies = new WeakMap<World, Map<string, Readonly<Record<GoodId, number>>>>()
+
+function rawSupplyRatio(world: World, locationId: string, good: GoodId): number {
   const location = world.locations[locationId]
   // У места без жителей нет ни своего производства, ни своей нужды: там просто
   // земля. Цены в нём никто не спрашивает, но вызвать эту функцию могут.

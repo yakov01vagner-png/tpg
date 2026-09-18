@@ -408,7 +408,9 @@ export function generateWorld(
     const shore = onShore(sea, place)
     placed[id] = {
       ...place,
-      shore,
+      // Берег пишется только там, где он есть: полторы тысячи «не на берегу»
+      // в сейве — двадцать килобайт ни о чём (этап 48).
+      ...(shore ? { shore } : {}),
       population:
         place.population > 0
           ? Math.round(

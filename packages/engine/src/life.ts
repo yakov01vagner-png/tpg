@@ -1,7 +1,14 @@
 import type { GoodId } from './content/goods'
 import { GOOD_IDS } from './content/goods'
 import type { Settlement } from './economy'
-import { FOOD_PER_PERSON, RECRUIT_RECOVERY, recruitPool, targetStock } from './economy'
+import {
+  FOOD_PER_PERSON,
+  RECRUIT_RECOVERY,
+  localNeed,
+  recruitPool,
+  supplyRatiosOf,
+  targetStock,
+} from './economy'
 import { hasBuilding } from './holding'
 import type { Rng } from './rng'
 import { nextFloat } from './rng'
@@ -512,11 +519,14 @@ function produceAndEat(
     // Склад: запасов больше, и возвращаются они быстрее.
     const warehouse = hasBuilding(settlement, 'warehouse')
     const recovery = config.goodsRecovery * (warehouse ? 1.5 : 1)
+    const ratios = supplyRatiosOf(world, id)
     for (const good of GOOD_IDS) {
       if (good === 'grain' || good === 'fish') continue
       const craft = smithy && (good === 'tools' || good === 'weapons') ? 1.4 : 1
       const target =
-        targetStock(world, id, good, settlement.population) * craft * (warehouse ? 1.3 : 1)
+        Math.max(1, Math.round(localNeed(good, settlement.population) * ratios[good])) *
+        craft *
+        (warehouse ? 1.3 : 1)
       stock[good] = stock[good] + (target - stock[good]) * recovery
     }
 
