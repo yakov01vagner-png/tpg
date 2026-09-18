@@ -386,7 +386,10 @@ export function MapScreen({ game }: { game: GameState }) {
   // «Мир» — это всё полотно целиком в окне, поэтому масштаб считается от окна, а
   // не назначается числом: на узком телефоне и на широком он разный.
   const fit = view.width > 0 ? Math.min(view.width, view.height) / MAP_SIZE : 0.3
-  const stepZoom = level === 'world' ? fit : level === 'realm' ? 1 : 1.7
+  // «Область» — корона в окне: на материке (этап 47) её земля — тысяча единиц,
+  // и масштаб считается от окна, как и у мира, а не назначен числом.
+  const realmFit = view.width > 0 ? Math.min(view.width, view.height) / REALM_SPAN : 0.5
+  const stepZoom = level === 'world' ? fit : level === 'realm' ? Math.max(fit, realmFit) : 1.7
   const zoom = Math.min(3, Math.max(fit, stepZoom * pinch))
   const size = MAP_SIZE * zoom
 
@@ -1042,6 +1045,9 @@ const ICE_COLOR = '#34485a'
  * Одной линией река терялась — на карте корон земля бывает синей, и русло
  * сливалось с ней в тень под холмами.
  */
+/** Сколько единиц полотна умещается в окне на уровне «область»: земля одной короны. */
+const REALM_SPAN = 1150
+
 const RIVER_COLOR = '#5f9dc0'
 
 /** Туман: земля, которой герой не знает (этап 46). */

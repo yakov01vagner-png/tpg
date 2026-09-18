@@ -5,6 +5,7 @@ import {
   type Command,
   type GameState,
   LIFE,
+  MAGIC_RANKS,
   PLAYER,
   type Settlement,
   TROOPS,
@@ -14,6 +15,7 @@ import {
   courtCase,
   dailyTax,
   dailyTolls,
+  dayOf,
   foodSecurity,
   freeSlots,
   garrisonLimit,
@@ -25,6 +27,8 @@ import {
   kingdomOf,
   lordById,
   loyaltyWord,
+  ownOrder,
+  rankLabel,
   vassalsOf,
   warsOf,
 } from '@tpg/engine'
@@ -69,6 +73,8 @@ export function OwnSheet({ game }: { game: GameState }) {
           <Dim>{`Твоё имя на карте. Слава: ${game.renown}`}</Dim>
         </Panel>
       ) : null}
+
+      <Affairs game={game} />
 
       <Section title={settlement && isOwnedByPlayer(settlement) ? 'Твоя земля' : 'Это место'}>
         {!settlement || !here ? <Empty text="Здесь нечем владеть." /> : null}
@@ -425,3 +431,52 @@ const styles = StyleSheet.create({
   garrison: { marginBottom: spacing.sm },
   garrisonButtons: { flexDirection: 'row', gap: spacing.xs },
 })
+
+/**
+ * Свои дела в одном месте (этап 47): орден, школа, вассалы, корабли и земля
+ * не теряются по листам. Каждая строка — итог, а не управление: управляют
+ * там, где это происходит.
+ */
+function Affairs({ game }: { game: GameState }) {
+  const order = ownOrder(game)
+  const membership = game.guild
+  const vassals = vassalsOf(game)
+  const holdings = holdingsOf(game.settlements, PLAYER)
+  const ships = game.enterprises.filter((one) => one.kind === 'shipping').length
+  const rank = game.character.magicRank ? MAGIC_RANKS[game.character.magicRank].label : null
+  const day = dayOf(game.time)
+  const rows: { label: string; value: string }[] = []
+  if (order && membership) {
+    const owed = membership.paidUntil < day
+    rows.push({
+      label: order.name,
+      value: `${rankLabel(order, membership.standing)}${owed ? ' · взнос просрочен' : ''}`,
+    })
+  }
+  if (rank) rows.push({ label: 'Магия', value: rank })
+  if (holdings.length > 0) {
+    rows.push({
+      label: 'Земля',
+      value: `${holdings.length} ${holdings.length === 1 ? 'место' : holdings.length < 5 ? 'места' : 'мест'}`,
+    })
+  }
+  if (vassals.length > 0) {
+    rows.push({
+      label: 'Вассалы',
+      value: `${vassals.length}: ${vassals.map((lord) => `${lord.name} (${loyaltyWord(lord.loyalty)})`).join(', ')}`,
+    })
+  }
+  if (game.ship) rows.push({ label: 'Судно', value: `«${game.ship.name}»` })
+  if (ships > 0) rows.push({ label: 'Перевоз', value: `${ships} дел морем` })
+  if (game.service) {
+    rows.push({ label: 'Служба', value: game.world.kingdoms[game.service]?.name ?? game.service })
+  }
+  if (rows.length === 0) return null
+  return (
+    <Section title="Свои дела">
+      {rows.map((row) => (
+        <Row key={row.label} title={row.label} subtitle={row.value} />
+      ))}
+    </Section>
+  )
+}

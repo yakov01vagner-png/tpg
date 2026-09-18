@@ -3,12 +3,15 @@ import {
   type ClockSpeed,
   FATIGUE_MAX,
   type GameState,
+  SEASON_LABELS,
   TIME_OF_DAY_LABELS,
   dayOf,
   formatDate,
   hourOf,
   minuteOf,
+  seasonOf,
   timeOfDay,
+  yearOf,
 } from '@tpg/engine'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { Icon } from '../art/icons'
@@ -70,7 +73,7 @@ export function Header({ game, speed }: { game: GameState; speed: ClockSpeed }) 
           <Text style={[styles.pora, pora === 'night' && styles.night]}>
             {/* Дата, а не номер дня: с версии 0.5 у года есть месяцы и времена
                 года, и «14 липня» говорит больше, чем «день 470» (этап 37). */}
-            {`${formatDate(dayOf(game.time))} · ${TIME_OF_DAY_LABELS[pora]}`}
+            {`${formatDate(dayOf(game.time))}, ${SEASON_LABELS[seasonOf(dayOf(game.time))]} · год ${yearOf(dayOf(game.time))} · ${TIME_OF_DAY_LABELS[pora]}`}
           </Text>
         </View>
 
