@@ -1,27 +1,55 @@
+import type { GameState } from '@tpg/engine'
 import { StatusBar } from 'expo-status-bar'
 import { useEffect } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
-import { closeSheet, goTab, useNav } from './src/game/nav'
+import { SHEET_TITLES, type SheetId, closeSheet, useNav } from './src/game/nav'
 import { abandonGame, bootstrap, dismissNotice, useAppState } from './src/game/store'
 import { BattleScreen } from './src/screens/BattleScreen'
 import { CharacterScreen } from './src/screens/CharacterScreen'
 import { CreateCharacterScreen } from './src/screens/CreateCharacterScreen'
+import { EarnSheet } from './src/screens/EarnSheet'
+import { HomeScreen } from './src/screens/HomeScreen'
 import { JournalScreen } from './src/screens/JournalScreen'
-import { LocationScreen } from './src/screens/LocationScreen'
+import { LearnSheet } from './src/screens/LearnSheet'
 import { MapScreen } from './src/screens/MapScreen'
+import { OwnSheet } from './src/screens/OwnSheet'
 import { PeopleScreen } from './src/screens/PeopleScreen'
 import { TradeScreen } from './src/screens/TradeScreen'
 import { WorldScreen } from './src/screens/WorldScreen'
 import { font, lineHeight, palette, radii, spacing } from './src/theme'
 import { Header } from './src/ui/Header'
 import { Sheet } from './src/ui/Sheet'
-import { TabBar } from './src/ui/TabBar'
 import { Button } from './src/ui/parts'
+
+/** Что рисуется на листе с таким именем. Одно место, чтобы не разъехалось. */
+function sheetBody(id: SheetId, game: GameState) {
+  switch (id) {
+    case 'earn':
+      return <EarnSheet game={game} />
+    case 'learn':
+      return <LearnSheet game={game} />
+    case 'market':
+      return <TradeScreen game={game} />
+    case 'people':
+      return <PeopleScreen game={game} />
+    case 'own':
+      return <OwnSheet game={game} />
+    case 'chronicle':
+      return <JournalScreen game={game} />
+    case 'court':
+      return <CharacterScreen game={game} />
+    case 'map':
+      return <MapScreen game={game} />
+    case 'world':
+      return <WorldScreen game={game} />
+  }
+}
 
 export default function App() {
   const state = useAppState()
   const nav = useNav()
+  const top = nav.stack[nav.stack.length - 1]
 
   useEffect(() => {
     void bootstrap()
@@ -46,30 +74,21 @@ export default function App() {
           </View>
         ) : null}
 
-        {state.phase === 'play' && !state.game.over ? (
+        {state.phase === 'play' && !state.game.over && state.game.battle ? (
+          // Бой занимает весь экран: ни шапки, ни листов — только поле.
+          <BattleScreen game={state.game} />
+        ) : null}
+
+        {state.phase === 'play' && !state.game.over && !state.game.battle ? (
           <>
             <Header game={state.game} speed={state.speed} />
             <View style={styles.body}>
-              {state.game.battle ? (
-                <BattleScreen game={state.game} />
-              ) : nav.sheet === 'trade' ? (
-                <Sheet title="Рынок" onClose={closeSheet}>
-                  <TradeScreen game={state.game} />
+              {top ? (
+                <Sheet title={SHEET_TITLES[top]} onClose={closeSheet}>
+                  {sheetBody(top, state.game)}
                 </Sheet>
-              ) : nav.sheet === 'world' ? (
-                <Sheet title="Сводка мира" onClose={closeSheet}>
-                  <WorldScreen game={state.game} />
-                </Sheet>
-              ) : nav.tab === 'here' ? (
-                <LocationScreen game={state.game} />
-              ) : nav.tab === 'map' ? (
-                <MapScreen game={state.game} />
-              ) : nav.tab === 'people' ? (
-                <PeopleScreen game={state.game} />
-              ) : nav.tab === 'hero' ? (
-                <CharacterScreen game={state.game} />
               ) : (
-                <JournalScreen game={state.game} />
+                <HomeScreen game={state.game} />
               )}
             </View>
             {state.notice ? (
@@ -78,21 +97,6 @@ export default function App() {
                 <Text style={styles.noticeHint}>нажми, чтобы убрать</Text>
               </Pressable>
             ) : null}
-            {state.game.battle ? null : (
-              <TabBar
-                active={nav.tab}
-                onSelect={goTab}
-                attention={
-                  new Set(
-                    state.game.character.unspentSkillPoints +
-                      state.game.character.unspentAttributePoints >
-                      0
-                      ? ['hero' as const]
-                      : [],
-                  )
-                }
-              />
-            )}
           </>
         ) : null}
       </SafeAreaView>

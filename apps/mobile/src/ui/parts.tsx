@@ -299,6 +299,57 @@ export function Card({
   )
 }
 
+/**
+ * Плитка намерения: большая кнопка с названием, подписью и числом.
+ *
+ * Дом собран из них: игрок думает «заработать», а не «работа, наставники,
+ * испытания». Число справа — сколько за плиткой возможностей; ноль плитку
+ * гасит, но не прячет: пусть видно, чего здесь нет.
+ */
+export function Tile({
+  title,
+  subtitle,
+  count,
+  onPress,
+  tone = 'neutral',
+}: {
+  title: string
+  subtitle?: string
+  count?: number
+  onPress: () => void
+  tone?: Tone
+}) {
+  const empty = count === 0
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={empty}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.tile,
+        empty && styles.disabled,
+        pressed && styles.cardPressed,
+      ]}
+    >
+      <View style={styles.tileHead}>
+        <Text style={styles.tileTitle}>{title}</Text>
+        {count !== undefined && count > 0 ? (
+          <Text style={[styles.tileCount, { color: toneColor[tone] }]}>{count}</Text>
+        ) : null}
+      </View>
+      {subtitle ? (
+        <Text numberOfLines={2} style={styles.tileSubtitle}>
+          {subtitle}
+        </Text>
+      ) : null}
+    </Pressable>
+  )
+}
+
+export function Tiles({ children }: { children: ReactNode }) {
+  return <View style={styles.tiles}>{children}</View>
+}
+
 /** Плашка сводки: несколько строк на подложке, без действия. */
 export function Panel({ children, tone }: { children: ReactNode; tone?: Tone }) {
   return (
@@ -455,6 +506,26 @@ const styles = StyleSheet.create({
   },
   cardReason: { color: palette.danger, fontSize: font.small, marginTop: spacing.sm },
 
+  tiles: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.lg },
+  tile: {
+    backgroundColor: palette.surface,
+    borderColor: palette.line,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    flexBasis: '48%',
+    flexGrow: 1,
+    minHeight: 76,
+    padding: spacing.md,
+  },
+  tileHead: { alignItems: 'baseline', flexDirection: 'row', justifyContent: 'space-between' },
+  tileTitle: { color: palette.text, fontSize: font.heading, lineHeight: lineHeight.heading },
+  tileCount: { fontSize: font.small },
+  tileSubtitle: {
+    color: palette.dim,
+    fontSize: font.tiny,
+    lineHeight: lineHeight.tiny,
+    marginTop: spacing.xs,
+  },
   panel: {
     backgroundColor: palette.surface,
     borderRadius: radii.md,

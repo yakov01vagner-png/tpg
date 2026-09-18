@@ -10,6 +10,8 @@ import {
   companionsAt,
   dailyFood,
   dailyWages,
+  lordById,
+  matchesAt,
   partyCapacity,
   partySize,
   partyStrength,
@@ -58,6 +60,50 @@ export function PeopleScreen({ game }: { game: GameState }) {
         </Stats>
         {size === 0 ? <Dim>Наёмных людей можно взять там, где они есть.</Dim> : null}
       </Panel>
+
+      {game.bands.some((band) => band.locationId === game.locationId && !band.travel) ? (
+        <Section title="Войско у ворот">
+          {game.bands
+            .filter((band) => band.locationId === game.locationId && !band.travel)
+            .map((band) => {
+              const lord = lordById(game.politics, band.lordId)
+              const count = Object.values(band.units).reduce((sum, n) => sum + (n ?? 0), 0)
+              const command: Command = { type: 'attackBand', bandId: band.id }
+              const check = canApply(game, command)
+              return (
+                <Card
+                  key={band.id}
+                  title={lord ? `${lord.title} ${lord.name}` : 'Рать короны'}
+                  description={`${count} человек под знамёнами`}
+                  meta="напасть"
+                  reason={check.ok ? null : check.message}
+                  onPress={() => dispatch(command)}
+                  tone="danger"
+                />
+              )
+            })}
+        </Section>
+      ) : null}
+
+      {matchesAt(game).length > 0 ? (
+        <Section title="Дом лорда">
+          {matchesAt(game).map((lord) => {
+            const command: Command = { type: 'proposeMarriage', lordId: lord.id }
+            const check = canApply(game, command)
+            return (
+              <Card
+                key={lord.id}
+                title={`Посвататься к дому ${lord.name}`}
+                description="Брак — это союз и приданое. Дом смотрит на славу и на то, что о тебе помнят."
+                meta="сватовство"
+                reason={check.ok ? null : check.message}
+                onPress={() => dispatch(command)}
+                tone="gold"
+              />
+            )
+          })}
+        </Section>
+      ) : null}
 
       <Section title="Спутники">
         {game.companions.length === 0 ? (

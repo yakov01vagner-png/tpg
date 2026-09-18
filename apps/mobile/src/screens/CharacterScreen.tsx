@@ -10,14 +10,12 @@ import {
   SLOT_IDS,
   SLOT_LABELS,
   type SkillId,
-  WORKSHOP_COST,
   ageOf,
   canApply,
   dayOf,
   eligibleRank,
   gearBonus,
   heirOf,
-  matchesAt,
   skillXpToNext,
   skillsOfAttribute,
   unrecognizedGap,
@@ -150,20 +148,6 @@ export function CharacterScreen({ game }: { game: GameState }) {
             </Dim>
           ))
         )}
-        {matchesAt(game).map((lord) => {
-          const command: Command = { type: 'proposeMarriage', lordId: lord.id }
-          const check = canApply(game, command)
-          return (
-            <View key={lord.id} style={styles.action}>
-              <Button
-                label={`Посвататься к дому ${lord.name}`}
-                tone="primary"
-                disabled={!check.ok}
-                onPress={() => dispatch(command)}
-              />
-            </View>
-          )
-        })}
       </Section>
 
       <Section title="Дела">
@@ -188,13 +172,6 @@ export function CharacterScreen({ game }: { game: GameState }) {
             />
           ))
         )}
-        <View style={styles.action}>
-          <Button
-            label={`Открыть мастерскую здесь — ${WORKSHOP_COST}`}
-            disabled={!canApply(game, { type: 'foundWorkshop' }).ok}
-            onPress={() => dispatch({ type: 'foundWorkshop' })}
-          />
-        </View>
       </Section>
 
       {hero.tags.length > 0 ? (

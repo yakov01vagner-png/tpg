@@ -1,22 +1,40 @@
 import { useSyncExternalStore } from 'react'
 
 /**
- * Навигация: пять вкладок и один лист поверх.
+ * Навигация: дом и стопка листов над ним.
  *
- * Дом — «Здесь»: место, где ты стоишь. Вкладки — то, к чему возвращаются
- * десятки раз за игру и до чего дотягивается большой палец. Лист поверх — то,
- * что открывают на минуту и закрывают: рынок, сводка мира, подробности. Своя
- * маленькая навигация вместо библиотеки: два состояния не стоят зависимости.
+ * Дом — место, где ты стоишь. Всё остальное — лист поверх: намерение (заработать,
+ * научиться, рынок, люди, своё), летопись, двор, карта, сводка. Лист закрывается
+ * одним нажатием, и ты снова дома. Вкладок нет: игра — это место, а не меню.
  */
-export type TabId = 'here' | 'map' | 'people' | 'hero' | 'journal'
-export type SheetId = 'trade' | 'world' | null
+export type SheetId =
+  | 'earn'
+  | 'learn'
+  | 'market'
+  | 'people'
+  | 'own'
+  | 'chronicle'
+  | 'court'
+  | 'map'
+  | 'world'
 
-interface NavState {
-  readonly tab: TabId
-  readonly sheet: SheetId
+export const SHEET_TITLES: Record<SheetId, string> = {
+  earn: 'Заработать',
+  learn: 'Научиться',
+  market: 'Рынок',
+  people: 'Люди',
+  own: 'Своё',
+  chronicle: 'Летопись',
+  court: 'Двор',
+  map: 'Карта',
+  world: 'Сводка мира',
 }
 
-let state: NavState = { tab: 'here', sheet: null }
+interface NavState {
+  readonly stack: readonly SheetId[]
+}
+
+let state: NavState = { stack: [] }
 const listeners = new Set<() => void>()
 
 function set(next: NavState): void {
@@ -35,14 +53,15 @@ export function useNav(): NavState {
   return useSyncExternalStore(subscribe, () => state)
 }
 
-export function goTab(tab: TabId): void {
-  set({ tab, sheet: null })
-}
-
-export function openSheet(sheet: Exclude<SheetId, null>): void {
-  set({ ...state, sheet })
+export function openSheet(sheet: SheetId): void {
+  if (state.stack[state.stack.length - 1] === sheet) return
+  set({ stack: [...state.stack, sheet] })
 }
 
 export function closeSheet(): void {
-  set({ ...state, sheet: null })
+  set({ stack: state.stack.slice(0, -1) })
+}
+
+export function goHome(): void {
+  set({ stack: [] })
 }

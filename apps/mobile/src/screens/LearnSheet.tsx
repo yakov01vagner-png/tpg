@@ -1,0 +1,83 @@
+import {
+  type Command,
+  type GameState,
+  MAGIC_RANKS,
+  SKILLS,
+  canApply,
+  coursesAt,
+  eligibleRank,
+  examsAt,
+  formatDuration,
+  formatWindowShort,
+  unrecognizedGap,
+} from '@tpg/engine'
+import { ScrollView, StyleSheet } from 'react-native'
+import { dispatch } from '../game/store'
+import { spacing } from '../theme'
+import { Card, Dim, Empty, Panel, Section } from '../ui/parts'
+
+/** Научиться: наставники и испытания этого места. */
+export function LearnSheet({ game }: { game: GameState }) {
+  const reasonFor = (command: Command): string | null => {
+    const check = canApply(game, command)
+    return check.ok ? null : check.message
+  }
+  const courses = coursesAt(game)
+  const exams = examsAt(game)
+  const magic = game.character.skills.magic.level
+  const earned = eligibleRank(magic)
+  const gap = unrecognizedGap(magic, game.character.magicRank)
+
+  return (
+    <ScrollView contentContainerStyle={styles.content}>
+      {gap > 0 && earned ? (
+        <Panel tone="gold">
+          <Dim tone="gold">
+            {`Сила обгоняет титул: по навыку тянешь на «${MAGIC_RANKS[earned].label}», но признания нет. Ищи школу.`}
+          </Dim>
+        </Panel>
+      ) : null}
+
+      <Section title="Наставники">
+        {courses.length === 0 ? <Empty text="Учиться здесь не у кого — это не то место." /> : null}
+        {courses.map((course) => {
+          const command: Command = { type: 'study', courseId: course.id }
+          return (
+            <Card
+              key={course.id}
+              title={course.label}
+              description={course.description}
+              meta={`${formatDuration(course.durationMinutes)} · −${course.cost} · ${SKILLS[course.skill].label}${course.window ? ` · ${formatWindowShort(course.window)}` : ''}`}
+              reason={reasonFor(command)}
+              onPress={() => dispatch(command)}
+              tone="good"
+            />
+          )
+        })}
+      </Section>
+
+      <Section title="Испытания">
+        {exams.length === 0 ? (
+          <Empty text="Ранги присваивают там, где есть школа. Здесь её нет." />
+        ) : null}
+        {exams.map((exam) => {
+          const command: Command = { type: 'takeExam', examId: exam.id }
+          return (
+            <Card
+              key={exam.id}
+              title={exam.label}
+              description={exam.description}
+              meta={`${formatDuration(exam.durationMinutes)} · −${exam.cost} · ${MAGIC_RANKS[exam.rank].label}`}
+              reason={reasonFor(command)}
+              onPress={() => dispatch(command)}
+            />
+          )
+        })}
+      </Section>
+    </ScrollView>
+  )
+}
+
+const styles = StyleSheet.create({
+  content: { padding: spacing.lg, paddingBottom: spacing.xxl },
+})

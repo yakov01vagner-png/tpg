@@ -6,14 +6,13 @@ import {
   TIME_OF_DAY_LABELS,
   dayOf,
   hourOf,
-  kingdomOf,
   minuteOf,
   timeOfDay,
 } from '@tpg/engine'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { openSheet } from '../game/nav'
 import { setSpeed } from '../game/store'
-import { dayTint, font, lineHeight, palette, radii, spacing } from '../theme'
-import { Meter } from './parts'
+import { dayTint, font, lineHeight, palette, radii, spacing, touch } from '../theme'
 
 const SPEEDS: readonly ClockSpeed[] = ['paused', 'slow', 'normal', 'fast']
 const SPEED_GLYPH: Record<ClockSpeed, string> = {
@@ -24,49 +23,76 @@ const SPEED_GLYPH: Record<ClockSpeed, string> = {
 }
 
 /**
- * Шапка: всё, что нужно видеть всегда, за одну секунду.
+ * Шапка: герой слева, время посередине, карта справа.
  *
- * Первая строка — где ты и который час; подложка едва меняет цвет по времени
- * суток, слово «рассвет» стоит рядом на всякий случай. Вторая — кошель, люди,
- * усталость и ход времени. Ничего сверх этого: остальное живёт на вкладках.
+ * Слева — кнопка с именем (место под лицо этапа 11): она открывает двор. Справа
+ * — карта: мир в одно нажатие. Между ними часы; подложка едва меняет цвет по
+ * времени суток, слово «рассвет» стоит рядом. Кошель и усталость — тонкой
+ * строкой под ними.
  */
 export function Header({ game, speed }: { game: GameState; speed: ClockSpeed }) {
   const hero = game.character
-  const here = game.world.locations[game.locationId]
-  const kingdom = kingdomOf(game.world, game.locationId)
   const pora = timeOfDay(game.time)
   const points = hero.unspentSkillPoints + hero.unspentAttributePoints
   const hh = String(hourOf(game.time)).padStart(2, '0')
   const mm = String(minuteOf(game.time)).padStart(2, '0')
+  const fatigue = Math.min(1, hero.fatigue / FATIGUE_MAX)
 
   return (
     <View style={[styles.box, { backgroundColor: dayTint[pora] }]}>
       <View style={styles.row}>
-        <View style={styles.place}>
-          <Text numberOfLines={1} style={styles.placeName}>
-            {here?.name ?? '…'}
-          </Text>
-          <Text numberOfLines={1} style={styles.placeMeta}>
-            {kingdom?.name ?? ''}
-          </Text>
-        </View>
+        <Pressable
+          accessibilityLabel="Двор"
+          accessibilityRole="button"
+          onPress={() => openSheet('court')}
+          style={styles.hero}
+        >
+          <View style={styles.face}>
+            <Text style={styles.faceLetter}>{hero.name.slice(0, 1)}</Text>
+            {points > 0 ? <View style={styles.dot} /> : null}
+          </View>
+          <View>
+            <Text numberOfLines={1} style={styles.name}>
+              {hero.name}
+            </Text>
+            <Text style={styles.sub}>
+              {`${hero.money} монет`}
+              {points > 0 ? `  ·  +${points} очк.` : ''}
+            </Text>
+          </View>
+        </Pressable>
+
         <View style={styles.clock}>
           <Text style={styles.time}>{`${hh}:${mm}`}</Text>
           <Text style={[styles.pora, pora === 'night' && styles.night]}>
             {`день ${dayOf(game.time)} · ${TIME_OF_DAY_LABELS[pora]}`}
           </Text>
         </View>
+
+        <Pressable
+          accessibilityLabel="Карта"
+          accessibilityRole="button"
+          onPress={() => openSheet('map')}
+          style={styles.mapButton}
+        >
+          <Text style={styles.mapLabel}>Карта</Text>
+        </Pressable>
       </View>
 
       <View style={styles.row}>
-        <Text style={styles.money}>
-          {hero.money}
-          <Text style={styles.moneyUnit}> монет</Text>
-        </Text>
-        {points > 0 ? <Text style={styles.points}>+{points} очк.</Text> : null}
-        <View style={styles.meter}>
-          <Meter value={hero.fatigue} max={FATIGUE_MAX} label="Усталость" invert />
+        <View style={styles.fatigueTrack}>
+          <View
+            style={[
+              styles.fatigueFill,
+              {
+                width: `${fatigue * 100}%`,
+                backgroundColor:
+                  fatigue > 0.8 ? palette.danger : fatigue > 0.5 ? palette.warn : palette.good,
+              },
+            ]}
+          />
         </View>
+        <Text style={styles.fatigueLabel}>{`усталость ${Math.round(hero.fatigue)}`}</Text>
         <View style={styles.speeds}>
           {SPEEDS.map((option) => (
             <Pressable
@@ -96,17 +122,60 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
   },
   row: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
-  place: { flex: 1 },
-  placeName: { color: palette.text, fontSize: font.heading, lineHeight: lineHeight.heading },
-  placeMeta: { color: palette.faint, fontSize: font.tiny, lineHeight: lineHeight.tiny },
-  clock: { alignItems: 'flex-end' },
+  hero: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: touch.min,
+  },
+  face: {
+    alignItems: 'center',
+    backgroundColor: palette.raised,
+    borderColor: palette.gold,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  faceLetter: { color: palette.gold, fontSize: font.heading, fontWeight: '600' },
+  dot: {
+    backgroundColor: palette.good,
+    borderRadius: 4,
+    height: 8,
+    position: 'absolute',
+    right: -1,
+    top: -1,
+    width: 8,
+  },
+  name: { color: palette.text, fontSize: font.body, lineHeight: lineHeight.body },
+  sub: { color: palette.gold, fontSize: font.tiny, lineHeight: lineHeight.tiny },
+  clock: { alignItems: 'center' },
   time: { color: palette.text, fontSize: font.heading, lineHeight: lineHeight.heading },
   pora: { color: palette.dim, fontSize: font.tiny, lineHeight: lineHeight.tiny },
   night: { color: palette.gold },
-  money: { color: palette.gold, fontSize: font.heading },
-  moneyUnit: { color: palette.goldDim, fontSize: font.tiny },
-  points: { color: palette.good, fontSize: font.tiny },
-  meter: { flex: 1 },
+  mapButton: {
+    alignItems: 'center',
+    backgroundColor: palette.surface,
+    borderColor: palette.lineStrong,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: 'center',
+    maxWidth: 72,
+    minHeight: touch.min,
+  },
+  mapLabel: { color: palette.gold, fontSize: font.small },
+  fatigueTrack: {
+    backgroundColor: palette.line,
+    borderRadius: 3,
+    flex: 1,
+    height: 4,
+    overflow: 'hidden',
+  },
+  fatigueFill: { height: 4 },
+  fatigueLabel: { color: palette.faint, fontSize: font.tiny },
   speeds: { flexDirection: 'row', gap: 3 },
   speed: {
     alignItems: 'center',
@@ -114,9 +183,9 @@ const styles = StyleSheet.create({
     borderColor: palette.line,
     borderRadius: radii.sm,
     borderWidth: 1,
-    height: 30,
+    height: 26,
     justifyContent: 'center',
-    minWidth: 30,
+    minWidth: 28,
     paddingHorizontal: spacing.xs,
   },
   speedActive: { backgroundColor: palette.surfaceAlt, borderColor: palette.gold },
