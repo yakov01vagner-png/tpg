@@ -46,6 +46,8 @@ import type { SpellDef, SpellWhere } from './content/spells'
 import { SPELLS_BY_ID } from './content/spells'
 import type { TroopId } from './content/troops'
 import { TROOPS, TROOP_FOOD_PER_DAY } from './content/troops'
+import type { CourtChoice } from './court'
+import { courtCase, vassalsOf } from './court'
 import { tickDiplomacy } from './diplomacy'
 import {
   PRIME_AGE,
@@ -257,6 +259,10 @@ export type Command =
   | { readonly type: 'abandonQuest'; readonly questId: string }
   | { readonly type: 'proclaimRealm'; readonly name: string }
   | { readonly type: 'inviteLord'; readonly lordId: string }
+  /** Двор (этап 43): пожаловать лен вассалу, отнять его, рассудить дело. */
+  | { readonly type: 'grantFief'; readonly lordId: string; readonly locationId: string }
+  | { readonly type: 'revokeFief'; readonly locationId: string }
+  | { readonly type: 'judge'; readonly caseId: string; readonly choice: CourtChoice }
   | { readonly type: 'buy'; readonly good: GoodId; readonly amount: number }
   | { readonly type: 'sell'; readonly good: GoodId; readonly amount: number }
   | { readonly type: 'work'; readonly jobId: string }
@@ -481,6 +487,12 @@ export function applyCommand(
       return proclaimRealm(state, command.name)
     case 'inviteLord':
       return inviteLord(state, command.lordId)
+    case 'grantFief':
+      return grantFief(state, command.lordId, command.locationId)
+    case 'revokeFief':
+      return revokeFief(state, command.locationId)
+    case 'judge':
+      return judge(state, command.caseId, command.choice)
     case 'buy':
       return buy(state, command.good, command.amount)
     case 'sell':
@@ -2418,6 +2430,161 @@ function proclaimRealm(state: GameState, name: string): CommandResult {
   return close(draft)
 }
 
+/**
+ * Что вассалы думают о поступках сюзерена.
+ *
+ * Не устав и не нрав — просто здравый смысл человека, чья земля рядом:
+ * тому, кто жжёт города, не хочется служить, тому, кто щадит и платит, — легче.
+ */
+const VASSALS_FEEL: Readonly<Partial<Record<DeedId, number>>> = {
+  sack: -5,
+  raid: -3,
+  sparePrisoners: 2,
+  winBattle: 2,
+  feedHungry: 1,
+  starve: -3,
+}
+
+/** Доля подати, которую вассал отдаёт с пожалованной земли. */
+export const VASSAL_SHARE = 0.3
+
+/** Сдвинуть верность своих лордов: всех или одного. */
+function shiftVassals(draft: Draft, delta: number, only: string | null): void {
+  draft.politics = {
+    ...draft.politics,
+    lords: draft.politics.lords.map((lord) =>
+      lord.kingdomId === PLAYER && (only === null || lord.id === only)
+        ? { ...lord, loyalty: Math.max(0, Math.min(100, lord.loyalty + delta)) }
+        : lord,
+    ),
+  }
+}
+
+/**
+ * Пожаловать лен (этап 43).
+ *
+ * Своё место — своему лорду: земля переходит к нему, он платит с неё долю и
+ * верит тебе крепче. Отдать можно только своё и только тому, кто под твоей
+ * рукой: чужому лорду не жалуют, чужую землю не раздают.
+ */
+function grantFief(state: GameState, lordId: string, locationId: string): CommandResult {
+  if (!state.realm) return fail('requirements', 'Жалуют от имени: у тебя нет своего.')
+  const lord = lordById(state.politics, lordId)
+  if (!lord || lord.kingdomId !== PLAYER) return fail('invalid', 'Он не под твоей рукой.')
+  const settlement = state.settlements[locationId]
+  if (!settlement || settlement.owner !== PLAYER) return fail('notYours', 'Это не твоя земля.')
+  const draft = open(state)
+  draft.settlements = {
+    ...draft.settlements,
+    [locationId]: { ...settlement, owner: lordId },
+  }
+  shiftVassals(draft, 20, lordId)
+  advance(draft, hours(3))
+  const name = state.world.locations[locationId]?.name ?? 'земля'
+  notice(draft, `${name} пожалована: ${lord.title} ${lord.name} держит её от тебя.`, 'world')
+  return close(draft)
+}
+
+/**
+ * Отнять лен.
+ *
+ * Земля возвращается, лорд помнит, остальные — смотрят: отнятое у одного
+ * пугает всех. Это и есть цена, без которой раздача земли была бы бесплатной.
+ */
+function revokeFief(state: GameState, locationId: string): CommandResult {
+  const settlement = state.settlements[locationId]
+  const holder = settlement ? lordById(state.politics, settlement.owner ?? '') : null
+  if (!settlement || !holder || holder.kingdomId !== PLAYER) {
+    return fail('invalid', 'Эту землю не твой вассал держит.')
+  }
+  const draft = open(state)
+  draft.settlements = {
+    ...draft.settlements,
+    [locationId]: { ...settlement, owner: PLAYER },
+  }
+  shiftVassals(draft, -5, null)
+  shiftVassals(draft, -25, holder.id)
+  advance(draft, hours(3))
+  const name = state.world.locations[locationId]?.name ?? 'земля'
+  notice(
+    draft,
+    `${name} отнята у ${holder.title.toLowerCase()} ${holder.name}. Остальные это заметили.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Рассудить дело (этап 43).
+ *
+ * Дело выводится из земли и дня (`courtCase`); здесь — только последствия.
+ * Выбор всегда кому-то стоит: земле, лорду или казне.
+ */
+function judge(state: GameState, caseId: string, choice: CourtChoice): CommandResult {
+  const current = courtCase(state)
+  if (!current || current.id !== caseId) return fail('invalid', 'Такого дела на суде нет.')
+  if (!current.choices.some((one) => one.id === choice)) {
+    return fail('invalid', 'Так это дело не решают.')
+  }
+  const here = state.settlements[state.locationId]
+  if (!here || here.owner !== PLAYER) {
+    return fail('unavailableHere', 'Двор держат на своей земле.')
+  }
+  const draft = open(state)
+  draft.courtDay = dayOf(draft.time)
+  advance(draft, hours(4))
+  const [first, second] = current.lords
+  switch (choice) {
+    case 'first':
+    case 'second': {
+      const won = choice === 'first' ? first : second
+      const lost = choice === 'first' ? second : first
+      if (won) shiftVassals(draft, 12, won.id)
+      if (lost) shiftVassals(draft, -10, lost.id)
+      notice(
+        draft,
+        `Межа отдана: ${won?.title ?? ''} ${won?.name ?? ''}. ${lost?.name ?? ''} ушёл молча.`,
+        'world',
+      )
+      break
+    }
+    case 'split':
+      if (first) shiftVassals(draft, -3, first.id)
+      if (second) shiftVassals(draft, -3, second.id)
+      notice(draft, 'Пустошь поделена пополам. Довольных нет, врагов тоже.', 'world')
+      break
+    case 'peasants':
+      if (first) shiftVassals(draft, -12, first.id)
+      if (current.locationId)
+        draft.reputation = withPlaceRep(draft.reputation, current.locationId, 12)
+      notice(draft, 'Ты взял сторону крестьян. Лорд поклонился и запомнил.', 'world')
+      break
+    case 'lord':
+      if (first) shiftVassals(draft, 8, first.id)
+      if (current.locationId)
+        draft.reputation = withPlaceRep(draft.reputation, current.locationId, -8)
+      notice(draft, 'Ты оставил суд лорду. Крестьяне разошлись без слов.', 'world')
+      break
+    case 'grant': {
+      const held = current.locationId ? draft.settlements[current.locationId] : undefined
+      const lost = held ? Math.round(dailyTax(held, foodSecurity(held)) * 30) : 0
+      addMoney(draft, -lost)
+      if (current.locationId)
+        draft.reputation = withPlaceRep(draft.reputation, current.locationId, 10)
+      notice(draft, `Подати прощены на месяц: казна недосчитается ${lost}.`, 'world')
+      break
+    }
+    case 'refuse':
+      if (current.locationId)
+        draft.reputation = withPlaceRep(draft.reputation, current.locationId, -6)
+      notice(draft, 'Подати взяты в срок. Старшины ушли, не поклонившись.', 'world')
+      break
+    default:
+      break
+  }
+  return close(draft)
+}
+
 /** Принять лорда под свою руку: уходят к тому, кому верят больше, чем короне. */
 function inviteLord(state: GameState, lordId: string): CommandResult {
   if (!state.realm) return fail('requirements', 'Под чью руку? У тебя нет своего имени.')
@@ -2678,6 +2845,9 @@ export function companionsAt(
  * скажет слово, кто-то уйдёт — и об этом будет строка в летописи.
  */
 function seeDeed(draft: Draft, deed: DeedId): void {
+  // Свои лорды тоже смотрят (этап 43): разорение — не то, чему хотят служить.
+  const felt = VASSALS_FEEL[deed] ?? 0
+  if (felt !== 0 && vassalsOf(draft.base).length > 0) shiftVassals(draft, felt, null)
   // Орден судит по уставу (этап 42): тем же языком поступков, что и спутники.
   const own = ownOrder(draft.base)
   if (own && charterFeels(own, deed) !== 0) {
@@ -3652,6 +3822,7 @@ interface Draft {
   ship: Ship | null
   cleansed: { readonly locationId: string; readonly untilDay: number } | null
   guild: Membership | null
+  courtDay: number
   battle: Battle | null
   politics: Politics
   /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
@@ -3688,6 +3859,7 @@ function open(state: GameState): Draft {
     ship: state.ship,
     cleansed: state.cleansed ?? null,
     guild: state.guild,
+    courtDay: state.courtDay ?? 0,
     battle: state.battle,
     politics: state.politics,
     world: state.world,
@@ -3735,6 +3907,8 @@ function close(draft: Draft): CommandResult {
       draft.settlements,
       dayOf(draft.time),
       draft.rng,
+      // Своим архимагом игрок бывает только сам (этап 43).
+      rankTier(draft.character.magicRank) >= MAGIC_RANKS.archmage.tier ? 'free' : 'busy',
     )
     draft.rng = politics.rng
     draft.politics = politics.politics
@@ -3886,6 +4060,7 @@ function close(draft: Draft): CommandResult {
     ship: draft.ship,
     cleansed: draft.cleansed,
     guild: draft.guild,
+    courtDay: draft.courtDay,
     battle: draft.battle,
     politics: draft.politics,
     bands: draft.bands,
@@ -4119,7 +4294,7 @@ function payUpkeep(draft: Draft, days: number): void {
  */
 function collectHoldings(draft: Draft, days: number): void {
   const mine = holdingsOf(draft.settlements, PLAYER)
-  if (mine.length === 0) return
+  if (mine.length === 0 && vassalsOf(draft.base).length === 0) return
 
   let income = 0
   let wages = 0
@@ -4144,6 +4319,15 @@ function collectHoldings(draft: Draft, days: number): void {
 
   // Дорога — тоже хозяйство: застава в своей провинции берёт с проезжих.
   const tolls = dailyTolls(draft.base.world, settlements, PLAYER) * days
+
+  // Вассал платит с пожалованной земли долю (этап 43): лен даётся не даром.
+  let tribute = 0
+  for (const vassal of vassalsOf(draft.base)) {
+    for (const held of holdingsOf(draft.settlements, vassal.id)) {
+      tribute += dailyTax(held, foodSecurity(held)) * VASSAL_SHARE * days
+    }
+  }
+  income += tribute
 
   draft.settlements = settlements
   const net = Math.round(income + tolls - wages)

@@ -2,6 +2,7 @@ import type { BattleSide } from './battle'
 import type { TroopId } from './content/troops'
 import { LORD_NAMES, LORD_TITLES } from './content/world'
 import type { Settlement } from './economy'
+import { PLAYER } from './holding'
 import { foodSecurity } from './life'
 import type { Rng } from './rng'
 import { nextFloat, nextInt, rollChance } from './rng'
@@ -258,6 +259,7 @@ export function tickPolitics(
   settlements: Readonly<Record<string, Settlement>>,
   day: number,
   rng: Rng,
+  playerMage: Archmage['state'] = 'busy',
 ): PoliticsResult {
   let generator = rng
   let wars = [...politics.wars]
@@ -341,6 +343,7 @@ export function tickPolitics(
     current,
     days,
     generator,
+    playerMage,
   )
   return {
     politics: afterLords.politics,
@@ -364,6 +367,7 @@ function tickLords(
   settlements: Readonly<Record<string, Settlement>>,
   days: number,
   rng: Rng,
+  playerMage: Archmage['state'],
 ): {
   politics: Politics
   settlements: Readonly<Record<string, Settlement>>
@@ -476,7 +480,10 @@ function tickLords(
     // бунтовали редко; с живыми дружинами голод и разбой стали постоянными, и
     // при прежних числах за век бунтовала сотня владетелей — к концу корон не
     // оставалось вовсе. Порог ниже, бросок реже: восстают единицы и по делу.
-    const crownMage = archmages[lord.kingdomId]?.state ?? 'free'
+    // У игрока архимага нет — если только он сам не дорос до архимага (этап
+    // 43): тогда его вассалы так же не решаются, как вассалы корон.
+    const crownMage =
+      lord.kingdomId === PLAYER ? playerMage : (archmages[lord.kingdomId]?.state ?? 'free')
     if (loyalty < 12 && crownMage !== 'free') {
       const [rebels, afterRebel] = rollChance(generator, 0.004 * days)
       generator = afterRebel

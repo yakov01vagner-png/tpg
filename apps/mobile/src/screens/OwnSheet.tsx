@@ -9,7 +9,9 @@ import {
   type Settlement,
   TROOPS,
   TROOP_IDS,
+  VASSAL_SHARE,
   canApply,
+  courtCase,
   dailyTax,
   dailyTolls,
   foodSecurity,
@@ -17,10 +19,13 @@ import {
   garrisonLimit,
   garrisonSize,
   garrisonWages,
+  holdingsOf,
   isOwnedByPlayer,
   isSite,
   kingdomOf,
   lordById,
+  loyaltyWord,
+  vassalsOf,
   warsOf,
 } from '@tpg/engine'
 import { ScrollView, StyleSheet, View } from 'react-native'
@@ -132,6 +137,8 @@ export function OwnSheet({ game }: { game: GameState }) {
         ) : null}
       </Section>
 
+      {game.realm ? <Court game={game} reasonFor={reasonFor} /> : null}
+
       <Section title="Служба">
         {!kingdom ? <Empty text="Здесь некому служить." /> : null}
         {kingdom && game.service === null ? (
@@ -184,6 +191,96 @@ export function OwnSheet({ game }: { game: GameState }) {
         ) : null}
       </Section>
     </ScrollView>
+  )
+}
+
+/**
+ * Двор (этап 43): свои лорды, их верность, лен и суд.
+ *
+ * Здесь власть игрока становится делом: пожаловать место вассалу, отнять,
+ * рассудить спор. Всё это — с последствиями, которые видны в тех же строках.
+ */
+function Court({
+  game,
+  reasonFor,
+}: {
+  game: GameState
+  reasonFor: (command: Command) => string | null
+}) {
+  const vassals = vassalsOf(game)
+  const settlement = game.settlements[game.locationId]
+  const holder = settlement ? lordById(game.politics, settlement.owner ?? '') : null
+  const here = game.world.locations[game.locationId]
+  const pending = courtCase(game)
+  return (
+    <Section
+      title="Двор"
+      aside={vassals.length > 0 ? `вассалов ${vassals.length}` : 'без вассалов'}
+    >
+      {vassals.length === 0 ? (
+        <Dim>Под твоей рукой пока никого: лордов зовут в «Людях», когда они тебе верят.</Dim>
+      ) : null}
+      {vassals.map((lord) => {
+        const held = holdingsOf(game.settlements, lord.id)
+        return (
+          <Row
+            key={lord.id}
+            title={`${lord.title} ${lord.name}`}
+            subtitle={`${loyaltyWord(lord.loyalty)} (${lord.loyalty}) · земли: ${held.length} · доля с неё ${Math.round(VASSAL_SHARE * 100)}%`}
+            right={
+              settlement && isOwnedByPlayer(settlement) && here ? (
+                <Button
+                  compact
+                  label={`Пожаловать ${here.name}`}
+                  tone="quiet"
+                  disabled={
+                    reasonFor({
+                      type: 'grantFief',
+                      lordId: lord.id,
+                      locationId: game.locationId,
+                    }) !== null
+                  }
+                  onPress={() =>
+                    dispatch({ type: 'grantFief', lordId: lord.id, locationId: game.locationId })
+                  }
+                />
+              ) : null
+            }
+          />
+        )
+      })}
+      {holder && holder.kingdomId === PLAYER ? (
+        <Card
+          title={`Отнять ${here?.name ?? 'землю'} у ${holder.title.toLowerCase()} ${holder.name}`}
+          description="Земля вернётся к тебе. Он запомнит, остальные заметят."
+          meta="верность −25 у него, −5 у всех"
+          reason={reasonFor({ type: 'revokeFief', locationId: game.locationId })}
+          onPress={() => dispatch({ type: 'revokeFief', locationId: game.locationId })}
+          tone="danger"
+        />
+      ) : null}
+      {pending ? (
+        <Panel tone="gold">
+          <Body>{pending.title}</Body>
+          <Dim>{pending.text}</Dim>
+          {pending.choices.map((choice) => (
+            <Button
+              key={choice.id}
+              label={`${choice.label} — ${choice.hint}`}
+              disabled={
+                reasonFor({ type: 'judge', caseId: pending.id, choice: choice.id }) !== null
+              }
+              onPress={() => dispatch({ type: 'judge', caseId: pending.id, choice: choice.id })}
+            />
+          ))}
+          {settlement && isOwnedByPlayer(settlement) ? null : (
+            <Faint>Двор держат на своей земле.</Faint>
+          )}
+        </Panel>
+      ) : (
+        <Faint>Дел на суде нет: приходят раз в месяц, на свою землю.</Faint>
+      )}
+    </Section>
   )
 }
 
