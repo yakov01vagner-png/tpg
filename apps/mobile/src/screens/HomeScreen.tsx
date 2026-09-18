@@ -470,6 +470,11 @@ function StateLine({ game }: { game: GameState }) {
   if (settlement.banditry > 0.6) parts.push({ text: 'на дорогах разбой', tone: 'danger' })
   else if (settlement.banditry > 0.25) parts.push({ text: 'на дорогах пошаливают', tone: 'warn' })
   if (settlement.strain > 0.4) parts.push({ text: 'земля истощена', tone: 'warn' })
+  // Разорение — не навсегда: у места с хозяином видно, что его отстраивают.
+  const founded = game.world.locations[game.locationId]?.population ?? 0
+  if (settlement.owner && settlement.population < founded * 0.9) {
+    parts.push({ text: 'отстраивается', tone: 'warn' })
+  }
   // Каким вышел год, видно по тому, что стоит в полях: игроку это важно знать
   // до того, как в амбарах станет пусто.
   if (settlement.harvest < 0.7) parts.push({ text: 'недород', tone: 'danger' })

@@ -157,6 +157,16 @@ export function landHealth(strain: number): number {
  */
 const SPOILAGE = 0.85
 
+/**
+ * Во сколько раз быстрее растёт место, которое отстраивают.
+ *
+ * Не прирост, а возвращение: на пепелище зовут соседскую молодёжь, сажают
+ * пришлых, прощают подати на три года. Втрое — это то, при чём сожжённая
+ * деревня поднимается за поколение, а не за век, и при этом война всё ещё
+ * дороже мира.
+ */
+const REBUILD_SPEED = 3
+
 /** Насколько быстро усталость догоняет ту, какой заслуживает нынешняя пашня. */
 const STRAIN_SPEED = 0.0025
 
@@ -490,7 +500,14 @@ function produceAndEat(
       // сутки, любое место меньше пяти тысяч душ росло на триста шестьдесят
       // человек в год независимо от своего размера.
       const room = growthRoom(world, id, ceiling)
-      if (population < room) population += population * config.growth * (1 - population / room)
+      // Разорённое место отстраивают: хозяин зовёт людей, прощает подати,
+      // ставит новые дворы. Пока этого не было, за век войны столицы, города и
+      // порты теряли пятую часть — набег уносил людей быстрее, чем их успевало
+      // народиться, и никто не возвращал их назад (долг версии 0.3).
+      const founded = world.locations[id]?.population ?? 0
+      const ruined = settlement.owner !== null && population < founded * 0.9
+      const speed = config.growth * (ruined ? REBUILD_SPEED : 1)
+      if (population < room) population += population * speed * (1 - population / room)
     }
 
     if (population > 0 && population < config.abandonAt) {

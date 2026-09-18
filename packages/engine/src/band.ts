@@ -8,7 +8,7 @@ import type { Party } from './party'
 import { type Rng, nextFloat, nextInt, rollChance } from './rng'
 import type { Lord, Politics } from './war'
 import { atWar, isRebel } from './war'
-import { roadsFrom } from './world/queries'
+import { neighbourSettlements, roadsFrom } from './world/queries'
 import type { Terrain, World } from './world/types'
 
 /**
@@ -280,6 +280,22 @@ function distancesFrom(world: World, fromId: string, limit = MAX_MARCH_HOURS): M
 function hoursTo(world: World, fromId: string, toId: string): number {
   const road = roadsFrom(world, fromId).find((candidate) => candidate.to === toId)
   return legHoursFor(road?.hours ?? 12, ARMY_PACE)
+}
+
+/** Какая доля уведённых не гибнет, а уходит к соседям. */
+const FLEE_SHARE = 0.4
+
+/** Ближайшее место с людьми: туда и бегут с пепелища. */
+function nearestSettlement(
+  world: World,
+  settlements: Readonly<Record<string, Settlement>>,
+  fromId: string,
+): string | null {
+  for (const near of neighbourSettlements(world, fromId, 4)) {
+    const place = settlements[near.id]
+    if (place && place.population > 0) return near.id
+  }
+  return null
 }
 
 /**
@@ -798,6 +814,11 @@ export function tickBands(
         // Дозорная башня: люди успевают уйти за стены, набег берёт вдвое меньше.
         const warned = victim.buildings.includes('watchtower') ? 0.5 : 1
         const lost = Math.round(victim.population * (0.005 + severity * 0.015) * warned)
+        // Не всех уводят и не все гибнут: часть уходит к соседям и вернётся,
+        // когда всё утихнет. Пока этого не было, набег был чистым вычитанием, и
+        // за век войны большие места худели на пятую часть (долг версии 0.3).
+        const fled = Math.round(lost * FLEE_SHARE)
+        const refuge = fled > 0 ? nearestSettlement(world, places, band.locationId) : null
         places = {
           ...places,
           [band.locationId]: {
@@ -810,6 +831,11 @@ export function tickBands(
               fish: Math.round(victim.stock.fish * 0.6),
             },
           },
+        }
+        if (refuge) {
+          const host = places[refuge]
+          if (host)
+            places = { ...places, [refuge]: { ...host, population: host.population + fled } }
         }
         events.push({ type: 'bandRaid', bandId: band.id, locationId: band.locationId, lost })
       }
