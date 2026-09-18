@@ -1,4 +1,5 @@
 import { musterBands } from './band'
+import { NO_FAMILY, START_AGE, birthDayFor } from './dynasty'
 import { createSettlements, recruitPool } from './economy'
 import type { Settlement } from './economy'
 import { EMPTY_PARTY } from './party'
@@ -59,6 +60,33 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
       reputation: data.reputation ?? NO_REPUTATION,
       realm: data.realm ?? null,
       quests: data.quests ?? [],
+    }
+  },
+  /**
+   * v7 → v8: появились спутники, дела, возраст и договоры между коронами.
+   * Герою приписывается двадцать лет от начала мира: точнее из старого сейва
+   * не узнать, а без возраста он не сможет ни состариться, ни оставить имя.
+   */
+  7: (data) => {
+    const character = (data.character ?? {}) as Record<string, unknown>
+    const politics = (data.politics ?? {}) as Record<string, unknown>
+    const name = typeof character.name === 'string' ? character.name : 'Безымянный'
+    return {
+      ...data,
+      character: {
+        ...character,
+        bornDay: character.bornDay ?? birthDayFor(1, START_AGE),
+        age: character.age ?? START_AGE,
+        family: character.family ?? { ...NO_FAMILY, house: `дом ${name.split(' ')[0]}а` },
+      },
+      politics: {
+        ...politics,
+        relations: politics.relations ?? {},
+        alliances: politics.alliances ?? [],
+        tributes: politics.tributes ?? [],
+      },
+      companions: data.companions ?? [],
+      enterprises: data.enterprises ?? [],
     }
   },
   /**

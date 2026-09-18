@@ -3,6 +3,8 @@ import { baseAttributes, clampAttribute } from './attributes'
 import type { Equipment } from './content/equipment'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
+import type { Family } from './dynasty'
+import { NO_FAMILY, START_AGE, birthDayFor } from './dynasty'
 import type { MagicRankId } from './magic'
 import type { SkillProgress } from './progression'
 import { EMPTY_SKILL } from './progression'
@@ -28,6 +30,12 @@ export interface Character {
   readonly inventory: Readonly<Partial<Record<GoodId, number>>>
   /** Что надето: оружие, щит, доспех, шлем, конь. */
   readonly equipment: Equipment
+  /** День рождения: возраст считается от него и от нынешнего дня. */
+  readonly bornDay: number
+  /** Сколько лет сейчас. Держим числом, чтобы не пересчитывать на каждый чих. */
+  readonly age: number
+  /** Жена или муж, дети, имя рода. */
+  readonly family: Family
 }
 
 export const FATIGUE_MAX = 100
@@ -38,6 +46,8 @@ export interface CharacterDraft {
   readonly skills?: Partial<Record<SkillId, number>>
   readonly money?: number
   readonly tags?: readonly string[]
+  /** Сколько лет герою на старте: биография может начинать и позже. */
+  readonly age?: number
 }
 
 export function emptySkills(): Record<SkillId, SkillProgress> {
@@ -73,7 +83,16 @@ export function createCharacter(draft: CharacterDraft): Character {
     tags: [...(draft.tags ?? [])],
     inventory: {},
     equipment: {},
+    bornDay: birthDayFor(1, draft.age ?? START_AGE),
+    age: draft.age ?? START_AGE,
+    family: { ...NO_FAMILY, house: houseOf(draft.name) },
   }
+}
+
+/** Имя рода: от имени героя, пока он его не прославил. */
+function houseOf(name: string): string {
+  const first = name.trim().split(/\s+/)[0] ?? 'Безымянные'
+  return `дом ${first}а`
 }
 
 export function skillLevel(character: Character, skill: SkillId): number {

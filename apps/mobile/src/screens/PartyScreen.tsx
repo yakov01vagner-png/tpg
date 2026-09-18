@@ -1,10 +1,13 @@
 import {
   type Command,
+  type Companion,
   type GameState,
+  TEMPERS,
   TROOPS,
   TROOP_IDS,
   type TroopId,
   canApply,
+  companionsAt,
   dailyFood,
   dailyWages,
   partyCapacity,
@@ -102,8 +105,77 @@ export function PartyScreen({ game }: { game: GameState }) {
         })}
         {game.world.locations[game.locationId] ? null : <Empty text="Здесь никого не нанять." />}
       </Section>
+
+      <Section title="Спутники">
+        {game.companions.length === 0 ? (
+          <Empty text="Ты идёшь один. Именных людей встречают в городах и обителях." />
+        ) : (
+          game.companions.map((companion) => (
+            <View key={companion.id} style={styles.row}>
+              <View style={styles.rowInfo}>
+                <Text style={styles.name}>{companion.name}</Text>
+                <Text style={styles.meta}>
+                  {`${TEMPERS[companion.temper]?.label ?? ''} · ${moodWord(companion.mood)} · ${roleWord(companion.role)}`}
+                </Text>
+              </View>
+              {companion.role.type !== 'party' ? (
+                <Button
+                  label="Вернуть"
+                  onPress={() =>
+                    dispatch({
+                      type: 'assignCompanion',
+                      companionId: companion.id,
+                      role: { type: 'party' },
+                    })
+                  }
+                />
+              ) : (
+                <Button
+                  label="Отпустить"
+                  onPress={() => dispatch({ type: 'dismissCompanion', companionId: companion.id })}
+                />
+              )}
+            </View>
+          ))
+        )}
+      </Section>
+
+      <Section title="Кого можно позвать">
+        {companionsAt(game).length === 0 ? (
+          <Empty text="Здесь таких людей не встретишь." />
+        ) : (
+          companionsAt(game).map((def) => {
+            const command: Command = { type: 'recruitCompanion', companionId: def.id }
+            const check = canApply(game, command)
+            return (
+              <ActionCard
+                key={def.id}
+                title={def.name}
+                meta={`${def.fee} монет`}
+                description={`${def.story} Нрав: ${TEMPERS[def.temper]?.label ?? ''}.`}
+                reason={check.ok ? null : check.message}
+                onPress={() => dispatch(command)}
+              />
+            )
+          })
+        )}
+      </Section>
     </ScrollView>
   )
+}
+
+/** Расположение спутника словом: число само по себе игроку ничего не говорит. */
+function moodWord(mood: number): string {
+  if (mood >= 75) return 'предан'
+  if (mood >= 50) return 'доволен'
+  if (mood >= 30) return 'холоден'
+  return 'вот-вот уйдёт'
+}
+
+function roleWord(role: Companion['role']): string {
+  if (role.type === 'steward') return 'управляет владением'
+  if (role.type === 'factor') return 'ведёт дело'
+  return 'идёт с тобой'
 }
 
 export function moraleWord(morale: number): string {

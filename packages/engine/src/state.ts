@@ -2,8 +2,10 @@ import type { Band } from './band'
 import { musterBands } from './band'
 import type { Battle } from './battle'
 import type { Character } from './character'
+import type { Companion } from './companion'
 import type { Settlement } from './economy'
 import { createSettlements } from './economy'
+import type { Enterprise } from './enterprise'
 import type { GameEvent } from './events'
 import { describeEvent } from './events'
 import type { Party } from './party'
@@ -21,7 +23,7 @@ import { defaultStartLocationId, generateWorld } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 7
+export const SCHEMA_VERSION = 8
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -75,6 +77,10 @@ export interface GameState {
   readonly realm: { readonly name: string } | null
   /** Взятые поручения. */
   readonly quests: readonly Quest[]
+  /** Именные люди при герое: с ними идут, им поручают, их теряют. */
+  readonly companions: readonly Companion[]
+  /** Караваны и мастерские: доход, который идёт без игрока. */
+  readonly enterprises: readonly Enterprise[]
   /** Игра кончена: герой погиб. Пермадэт редкий, но настоящий. */
   readonly over: boolean
   readonly log: readonly LogEntry[]
@@ -107,6 +113,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     reputation: NO_REPUTATION,
     realm: null,
     quests: [],
+    companions: [],
+    enterprises: [],
     over: false,
     log: [
       {

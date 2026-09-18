@@ -10,6 +10,7 @@
  */
 import { musterBands, tickBands } from '../packages/engine/src/band'
 import type { Band } from '../packages/engine/src/band'
+import { tickDiplomacy } from '../packages/engine/src/diplomacy'
 import { createSettlements, priceOf } from '../packages/engine/src/economy'
 import type { Settlement } from '../packages/engine/src/economy'
 import { foodSecurity, tickDays } from '../packages/engine/src/life'
@@ -72,6 +73,12 @@ interface Run {
   readonly landStart: ReadonlyMap<string, number>
   readonly landEnd: ReadonlyMap<string, number>
   readonly changedHands: number
+  readonly alliancesMade: number
+  readonly alliancesBroken: number
+  readonly joinedWars: number
+  readonly tributes: number
+  readonly alliancesAtEnd: number
+  readonly tributesAtEnd: number
 }
 
 function population(settlements: Settlements): number {
@@ -156,6 +163,10 @@ function run(seed: number, years: number): Run {
   let clashFallen = 0
   let submitted = 0
   let lordsFell = 0
+  let alliancesMade = 0
+  let alliancesBroken = 0
+  let joinedWars = 0
+  let tributes = 0
 
   const began = Date.now()
   for (let day = 1; day <= years * 365; day += 1) {
@@ -174,6 +185,15 @@ function run(seed: number, years: number): Run {
     politics = turn.politics
     settlements = turn.settlements
     rng = turn.rng
+
+    const talks = tickDiplomacy(world, politics, day, rng)
+    politics = talks.politics
+    rng = talks.rng
+    for (const event of talks.events) {
+      if (event.type === 'allianceMade') alliancesMade += 1
+      else if (event.type === 'allianceBroken') alliancesBroken += 1
+      else if (event.type === 'joinedWar') joinedWars += 1
+    }
 
     const march = tickBands(world, politics, settlements, bands, rng)
     bands = march.bands
@@ -196,6 +216,10 @@ function run(seed: number, years: number): Run {
       }
     }
     for (const event of turn.events) {
+      if (event.type === 'tribute') {
+        tributes += 1
+        continue
+      }
       if (event.type === 'warDeclared') {
         warsDeclared += 1
         warPairs.set(pairKey(event.war), (warPairs.get(pairKey(event.war)) ?? 0) + 1)
@@ -291,6 +315,12 @@ function run(seed: number, years: number): Run {
     lordsFell,
     landStart,
     landEnd: landOf(),
+    alliancesMade,
+    alliancesBroken,
+    joinedWars,
+    tributes,
+    alliancesAtEnd: politics.alliances.length,
+    tributesAtEnd: politics.tributes.length,
     changedHands: Object.entries(settlements).filter(
       ([id, settlement]) => ownerAtStart.get(id) !== settlement.owner,
     ).length,
@@ -377,6 +407,11 @@ console.log(
   `Дружины:        ${first.clashes} стычек (${first.clashFallen} полегло), ` +
     `${first.taken} мест взято осадой, ${first.submitted} мятежников присягнули заново, ` +
     `${first.lordsFell} лордов пало`,
+)
+console.log(
+  `Договоры:       ${first.tributes} раз положили дань, союзов ${first.alliancesMade} ` +
+    `(распалось ${first.alliancesBroken}), по союзу вступили в войну ${first.joinedWars} раз; ` +
+    `к концу союзов ${first.alliancesAtEnd}, даней ${first.tributesAtEnd}`,
 )
 console.log(`К концу:        ${first.bandsAtEnd} дружин, ${first.warriorsAtEnd} человек под ружьём`)
 console.log(

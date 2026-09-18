@@ -2,14 +2,22 @@ import {
   ATTRIBUTE_IDS,
   ATTRIBUTE_LABELS,
   type AttributeId,
+  type Command,
   type GameState,
   ITEMS_BY_ID,
   MAGIC_RANKS,
+  PRIME_AGE,
   SLOT_IDS,
   SLOT_LABELS,
   type SkillId,
+  WORKSHOP_COST,
+  ageOf,
+  canApply,
+  dayOf,
   eligibleRank,
   gearBonus,
+  heirOf,
+  matchesAt,
   skillXpToNext,
   skillsOfAttribute,
   unrecognizedGap,
@@ -89,6 +97,77 @@ export function CharacterScreen({ game }: { game: GameState }) {
         ))}
       </Section>
 
+      <Section title="Дом и род">
+        <Text style={styles.line}>
+          {`${hero.age} лет · ${hero.family.house}`}
+          {hero.age > PRIME_AGE ? ' · годы берут своё' : ''}
+        </Text>
+        <Text style={styles.line}>
+          {hero.family.spouse
+            ? `В браке: ${hero.family.spouse.name}`
+            : 'Не женат: свататься надо там, где сидит дом лорда'}
+        </Text>
+        {hero.family.children.length === 0 ? (
+          <Text style={styles.line}>Детей нет.</Text>
+        ) : (
+          hero.family.children.map((child) => (
+            <Text key={`${child.name}:${child.bornDay}`} style={styles.line}>
+              {`${child.name}, ${ageOf(child.bornDay, dayOf(game.time))} лет${
+                heirOf(hero.family, dayOf(game.time))?.name === child.name ? ' — наследник' : ''
+              }`}
+            </Text>
+          ))
+        )}
+        {matchesAt(game).map((lord) => {
+          const command: Command = { type: 'proposeMarriage', lordId: lord.id }
+          const check = canApply(game, command)
+          return (
+            <Button
+              key={lord.id}
+              label={`Посвататься к дому ${lord.name}`}
+              tone="primary"
+              disabled={!check.ok}
+              onPress={() => dispatch(command)}
+            />
+          )
+        })}
+      </Section>
+
+      <Section title="Дела">
+        {game.enterprises.length === 0 ? (
+          <Text style={styles.line}>
+            Ни каравана, ни мастерской. Доход, который идёт без тебя, заводят в городе.
+          </Text>
+        ) : (
+          game.enterprises.map((one) => (
+            <View key={one.id} style={styles.enterprise}>
+              <Text style={styles.line}>
+                {`${one.kind === 'caravan' ? 'Караван' : 'Мастерская'}: ${
+                  game.world.locations[one.locationId]?.name ?? '—'
+                }${one.travel ? ' (в пути)' : ''} · принесло ${one.earned}`}
+              </Text>
+              <Button
+                label="Свернуть"
+                onPress={() => dispatch({ type: 'closeEnterprise', enterpriseId: one.id })}
+              />
+            </View>
+          ))
+        )}
+        {[
+          { label: `Мастерская — ${WORKSHOP_COST}`, command: { type: 'foundWorkshop' } as Command },
+        ].map(({ label, command }) => {
+          const check = canApply(game, command)
+          return (
+            <Button
+              key={label}
+              label={label}
+              disabled={!check.ok}
+              onPress={() => dispatch(command)}
+            />
+          )
+        })}
+      </Section>
+
       <Section title="Снаряжение">
         {SLOT_IDS.map((slot) => {
           const worn = hero.equipment[slot]
@@ -129,6 +208,8 @@ export function CharacterScreen({ game }: { game: GameState }) {
 
 const styles = StyleSheet.create({
   content: { padding: spacing.lg, paddingBottom: spacing.xl },
+  line: { color: colors.dim, fontSize: font.small },
+  enterprise: { gap: spacing.xs, paddingVertical: spacing.xs },
   name: { color: colors.text, fontSize: font.title },
   subtitle: { color: colors.dim, fontSize: font.small, marginBottom: spacing.md },
   gap: {

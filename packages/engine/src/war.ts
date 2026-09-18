@@ -52,15 +52,72 @@ export interface Archmage {
   readonly untilDay: number
 }
 
+/** Договор о дани: проигравший платит победителю, пока срок не вышел. */
+export interface Tribute {
+  readonly from: string
+  readonly to: string
+  readonly perDay: number
+  readonly untilDay: number
+}
+
+/** Союз: два королевства входят в войны друг друга. */
+export interface Alliance {
+  readonly a: string
+  readonly b: string
+  readonly since: number
+  /** Скреплён браком — такой держится крепче. */
+  readonly byMarriage: boolean
+}
+
 export interface Politics {
   readonly wars: readonly War[]
   /** День, до которого политика уже посчитана. */
   readonly lastDay: number
   readonly lords: readonly Lord[]
   readonly archmages: Readonly<Record<string, Archmage>>
+  /** Отношение корон друг к другу, −100..100. Ключ — два имени через «|». */
+  readonly relations: Readonly<Record<string, number>>
+  readonly alliances: readonly Alliance[]
+  readonly tributes: readonly Tribute[]
 }
 
-export const NO_POLITICS: Politics = { wars: [], lastDay: 0, lords: [], archmages: {} }
+/** Ключ пары королевств: порядок не важен, ключ один. */
+/** Сколько мест держит эта сторона: по держателю, а не по скелету мира. */
+function heldBy(settlements: Readonly<Record<string, Settlement>>, side: string): number {
+  let count = 0
+  const crown = `crown:${side}`
+  for (const settlement of Object.values(settlements)) {
+    if (settlement.population <= 0) continue
+    if (settlement.owner === crown || settlement.owner === side) count += 1
+    else if (settlement.owner?.startsWith(`lord:${side}:`)) count += 1
+  }
+  return count
+}
+
+export function pairOf(a: string, b: string): string {
+  return [a, b].sort().join('|')
+}
+
+export function relationOf(politics: Politics, a: string, b: string): number {
+  return politics.relations[pairOf(a, b)] ?? 0
+}
+
+export function allied(politics: Politics, a: string, b: string): boolean {
+  if (a === b) return true
+  return politics.alliances.some(
+    (pact) => (pact.a === a && pact.b === b) || (pact.a === b && pact.b === a),
+  )
+}
+
+export const NO_POLITICS: Politics = {
+  wars: [],
+  lastDay: 0,
+  lords: [],
+  archmages: {},
+  relations: {},
+  alliances: [],
+  tributes: [],
+}
 
 export function lordById(politics: Politics, id: string): Lord | null {
   return politics.lords.find((lord) => lord.id === id) ?? null
@@ -156,7 +213,11 @@ export function createPolitics(
     }
   }
 
-  return [{ wars: [], lastDay: 0, lords, archmages }, owned, generator]
+  return [
+    { wars: [], lastDay: 0, lords, archmages, relations: {}, alliances: [], tributes: [] },
+    owned,
+    generator,
+  ]
 }
 
 export function atWar(politics: Politics, a: string, b: string): boolean {
@@ -177,6 +238,7 @@ export type WarEvent =
   | { readonly type: 'peace'; readonly war: War }
   | { readonly type: 'rebellion'; readonly lordId: string }
   | { readonly type: 'archmage'; readonly kingdomId: string; readonly state: Archmage['state'] }
+  | { readonly type: 'tribute'; readonly tribute: Tribute }
 
 export interface PoliticsResult {
   readonly politics: Politics
@@ -199,6 +261,7 @@ export function tickPolitics(
 ): PoliticsResult {
   let generator = rng
   let wars = [...politics.wars]
+  let tributes = [...politics.tributes]
   const current = settlements
   const events: WarEvent[] = []
   const kingdomIds = Object.keys(world.kingdoms)
@@ -228,13 +291,25 @@ export function tickPolitics(
       }
     }
 
-    // Война кончается.
+    // Война кончается — и чем-то кончается. Сто с лишним войн за век не меняли
+    // ничего: объявили, помирились, всё как было. Теперь проигравший платит
+    // дань, и она видна в состоянии, а не только в журнале.
     for (const war of [...wars]) {
       const [peace, afterPeace] = rollChance(generator, PEACE_CHANCE)
       generator = afterPeace
-      if (peace) {
-        wars = wars.filter((other) => other !== war)
-        events.push({ type: 'peace', war })
+      if (!peace) continue
+      wars = wars.filter((other) => other !== war)
+      events.push({ type: 'peace', war })
+
+      const mine = heldBy(current, war.a)
+      const theirs = heldBy(current, war.b)
+      if (mine === 0 || theirs === 0) continue
+      const [loser, winner, ratio] =
+        mine < theirs ? [war.a, war.b, mine / theirs] : [war.b, war.a, theirs / mine]
+      const terms = peaceTerms(loser, winner, ratio, day)
+      if (terms) {
+        tributes = [...tributes.filter((one) => one.from !== loser || one.to !== winner), terms]
+        events.push({ type: 'tribute', tribute: terms })
       }
     }
 
@@ -244,7 +319,7 @@ export function tickPolitics(
 
   const afterLords = tickLords(
     world,
-    { wars, lastDay: day, lords: politics.lords, archmages: politics.archmages },
+    { ...politics, wars, tributes, lastDay: day },
     current,
     days,
     generator,
@@ -456,7 +531,7 @@ function tickLords(
   }
 
   return {
-    politics: { wars, lastDay: politics.lastDay, lords, archmages },
+    politics: { ...politics, wars, lastDay: politics.lastDay, lords, archmages },
     settlements: places,
     rng: generator,
     events,
@@ -492,4 +567,24 @@ export function warband(strength: number, rng: Rng): [BattleSide, Rng] {
     manAtArms: Math.max(1, Math.round(size * 0.1)),
   }
   return [{ name: 'Вражеский отряд', units, morale: 70, fatigue: 0 }, next]
+}
+
+/** На сколько дней заключают дань. */
+const TRIBUTE_DAYS = 365 * 3
+
+/**
+ * Условия мира.
+ *
+ * Слабейший платит дань сильнейшему. Размер — от того, насколько он слабее:
+ * мир, который ничего не стоит, ничем и не кончается.
+ */
+export function peaceTerms(
+  loser: string,
+  winner: string,
+  strengthRatio: number,
+  day: number,
+): Tribute | null {
+  if (strengthRatio >= 0.85) return null
+  const perDay = Math.max(1, Math.round((1 - strengthRatio) * 12))
+  return { from: loser, to: winner, perDay, untilDay: day + TRIBUTE_DAYS }
 }

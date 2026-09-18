@@ -13,6 +13,20 @@ export const MINUTES_PER_HOUR = 60
 export const HOURS_PER_DAY = 24
 export const MINUTES_PER_DAY = MINUTES_PER_HOUR * HOURS_PER_DAY
 
+/**
+ * Дней в году.
+ *
+ * Год нужен затем, что у людей есть возраст: герой стареет, женится, растит
+ * наследника и умирает (DESIGN.md, п.9.2). Триста шестьдесят пять — не ради
+ * календаря, а чтобы игрок считал годы теми же, что и всю жизнь считал.
+ */
+export const DAYS_PER_YEAR = 365
+
+/** Сколько полных лет прошло между двумя днями. */
+export function yearsBetween(fromDay: number, toDay: number): number {
+  return Math.floor((toDay - fromDay) / DAYS_PER_YEAR)
+}
+
 /** Мир начинается в 6 утра первого дня. */
 export const WORLD_START: GameTime = 6 * MINUTES_PER_HOUR
 

@@ -1,7 +1,7 @@
 import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
 import type { Band, BandEvent } from './band'
-import { bandSize, tickBands } from './band'
+import { bandSize, nextHop, tickBands } from './band'
 import type { Battle, BattleSide, GroupId, OrderId } from './battle'
 import { fleeBattle, resolveRound, startBattle, unformUp } from './battle'
 import type { Character } from './character'
@@ -14,18 +14,35 @@ import {
   fatigueFactor,
   skillLevel,
 } from './character'
+import type { CompanionRole } from './companion'
+import type { Companion } from './companion'
+import { companionDef, hireCompanion } from './companion'
 import type { Availability, Content, Requirements } from './content'
 import { CONTENT } from './content'
 import type { BuildingId } from './content/buildings'
 import { BUILDINGS } from './content/buildings'
+import type { CompanionDef } from './content/companions'
+import { COMPANIONS } from './content/companions'
 import type { SlotId } from './content/equipment'
 import { ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import type { TroopId } from './content/troops'
 import { TROOPS, TROOP_FOOD_PER_DAY } from './content/troops'
+import { tickDiplomacy } from './diplomacy'
+import {
+  PRIME_AGE,
+  ageOf,
+  agedAttributes,
+  deathChance,
+  heirCharacter,
+  heirOf,
+  maybeBirth,
+} from './dynasty'
 import type { Settlement } from './economy'
 import { quoteBuy, quoteSell } from './economy'
+import type { Enterprise } from './enterprise'
+import { CARAVAN_COST, WORKSHOP_COST, tickEnterprises } from './enterprise'
 import { gearBonus, horseCarry, repairCost, withItem } from './equipment'
 import type { GameEvent } from './events'
 import {
@@ -62,7 +79,7 @@ import type { Quest } from './quest'
 import { isShunned, lordRep, placeRep, priceFactor, withLordRep, withPlaceRep } from './reputation'
 import type { Reputation } from './reputation'
 import type { Rng } from './rng'
-import { rollChance } from './rng'
+import { nextInt, rollChance } from './rng'
 import type { SkillId } from './skills'
 import { SKILLS } from './skills'
 import type { GameState } from './state'
@@ -80,6 +97,8 @@ import {
   isWithinWindow,
   nextTimeOfDay,
 } from './time'
+import type { Lord } from './war'
+import { pairOf } from './war'
 import type { Politics } from './war'
 import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
@@ -103,6 +122,17 @@ export type Command =
   | { readonly type: 'seekEnemy' }
   /** Напасть на войско, стоящее здесь же: война перестаёт быть фоном. */
   | { readonly type: 'attackBand'; readonly bandId: string }
+  /** Позвать с собой именного человека. */
+  | { readonly type: 'recruitCompanion'; readonly companionId: string }
+  | { readonly type: 'dismissCompanion'; readonly companionId: string }
+  /** Поручить спутнику дело: держать лен или вести караван. */
+  | { readonly type: 'assignCompanion'; readonly companionId: string; readonly role: CompanionRole }
+  /** Завести своё дело. */
+  | { readonly type: 'foundCaravan'; readonly awayId: string }
+  | { readonly type: 'foundWorkshop' }
+  | { readonly type: 'closeEnterprise'; readonly enterpriseId: string }
+  /** Посвататься к дому лорда: брак — это договор, а не украшение. */
+  | { readonly type: 'proposeMarriage'; readonly lordId: string }
   | { readonly type: 'build'; readonly building: BuildingId }
   | { readonly type: 'station'; readonly troop: TroopId; readonly count: number }
   | { readonly type: 'withdraw'; readonly troop: TroopId; readonly count: number }
@@ -196,6 +226,20 @@ export function applyCommand(
       return seekEnemy(state)
     case 'attackBand':
       return attackBand(state, command.bandId)
+    case 'recruitCompanion':
+      return recruitCompanion(state, command.companionId)
+    case 'dismissCompanion':
+      return dismissCompanion(state, command.companionId)
+    case 'assignCompanion':
+      return assignCompanion(state, command.companionId, command.role)
+    case 'foundCaravan':
+      return foundCaravan(state, command.awayId)
+    case 'foundWorkshop':
+      return foundWorkshop(state)
+    case 'closeEnterprise':
+      return closeEnterprise(state, command.enterpriseId)
+    case 'proposeMarriage':
+      return proposeMarriage(state, command.lordId)
     case 'build':
       return build(state, command.building)
     case 'station':
@@ -1114,6 +1158,263 @@ function attackBand(state: GameState, bandId: string): CommandResult {
   return close(draft)
 }
 
+// --- спутники ---------------------------------------------------------------
+
+/** Кого можно встретить в этом месте: тех, кого ты ещё не звал. */
+export function companionsAt(
+  state: GameState,
+  locationId = state.locationId,
+): readonly CompanionDef[] {
+  const location = state.world.locations[locationId]
+  if (!location) return []
+  const population = state.settlements[locationId]?.population ?? location.population
+  const taken = new Set(state.companions.map((one) => one.id))
+  return Object.values(COMPANIONS).filter(
+    (def) => !taken.has(def.id) && isAvailableAt(def.where, location, population),
+  )
+}
+
+function recruitCompanion(state: GameState, companionId: string): CommandResult {
+  const def = companionDef(companionId)
+  if (!def) return fail('invalid', 'Такого человека нет.')
+  if (state.companions.some((one) => one.id === companionId)) {
+    return fail('invalid', 'Он уже с тобой.')
+  }
+  if (!companionsAt(state).some((one) => one.id === companionId)) {
+    return fail('unavailableHere', 'Здесь его не встретишь.')
+  }
+  if (state.character.money < def.fee) {
+    return fail('noMoney', `Он просит ${def.fee}, а у тебя ${state.character.money}.`)
+  }
+  const draft = open(state)
+  addMoney(draft, -def.fee)
+  draft.companions = [...draft.companions, hireCompanion(def)]
+  notice(draft, `${def.name} идёт с тобой.`)
+  advance(draft, hours(1))
+  return close(draft)
+}
+
+function dismissCompanion(state: GameState, companionId: string): CommandResult {
+  const companion = state.companions.find((one) => one.id === companionId)
+  if (!companion) return fail('invalid', 'Такого спутника у тебя нет.')
+  const draft = open(state)
+  draft.companions = draft.companions.filter((one) => one.id !== companionId)
+  // Дело без управляющего не бросают, а ведут вполсилы — см. tickEnterprises.
+  draft.enterprises = draft.enterprises.map((one) =>
+    one.managerId === companionId ? { ...one, managerId: null } : one,
+  )
+  notice(draft, `${companion.name} уходит своей дорогой.`)
+  advance(draft, hours(1))
+  return close(draft)
+}
+
+function assignCompanion(
+  state: GameState,
+  companionId: string,
+  role: CompanionRole,
+): CommandResult {
+  const companion = state.companions.find((one) => one.id === companionId)
+  if (!companion) return fail('invalid', 'Такого спутника у тебя нет.')
+  if (companion.captive) return fail('invalid', `${companion.name} в плену.`)
+
+  if (role.type === 'steward') {
+    if (state.settlements[role.locationId]?.owner !== PLAYER) {
+      return fail('invalid', 'Это владение не твоё.')
+    }
+  }
+  if (role.type === 'factor') {
+    const enterprise = state.enterprises.find((one) => one.id === role.enterpriseId)
+    if (!enterprise) return fail('invalid', 'Такого дела у тебя нет.')
+  }
+
+  const draft = open(state)
+  // Управляющий у дела один: прежнего освобождаем.
+  draft.enterprises = draft.enterprises.map((one) =>
+    one.managerId === companionId ? { ...one, managerId: null } : one,
+  )
+  if (role.type === 'factor') {
+    draft.enterprises = draft.enterprises.map((one) =>
+      one.id === role.enterpriseId ? { ...one, managerId: companionId } : one,
+    )
+  }
+  draft.companions = draft.companions.map((one) =>
+    one.id === companionId ? { ...one, role } : one,
+  )
+  notice(
+    draft,
+    role.type === 'party'
+      ? `${companion.name} снова идёт с тобой.`
+      : role.type === 'steward'
+        ? `${companion.name} остаётся управлять владением.`
+        : `${companion.name} берёт дело в свои руки.`,
+  )
+  advance(draft, hours(1))
+  return close(draft)
+}
+
+// --- дела -------------------------------------------------------------------
+
+function foundCaravan(state: GameState, awayId: string): CommandResult {
+  if (state.character.money < CARAVAN_COST) {
+    return fail('noMoney', `На караван нужно ${CARAVAN_COST}.`)
+  }
+  if (!state.world.locations[awayId]) return fail('invalid', 'Такого места нет.')
+  if (awayId === state.locationId) return fail('invalid', 'Караван должен куда-то ходить.')
+  if (!nextHop(state.world, state.locationId, awayId)) {
+    return fail('invalid', 'Туда нет дороги.')
+  }
+  const draft = open(state)
+  addMoney(draft, -CARAVAN_COST)
+  draft.enterprises = [
+    ...draft.enterprises,
+    {
+      id: `caravan:${dayOf(draft.time)}:${draft.enterprises.length}`,
+      kind: 'caravan',
+      locationId: state.locationId,
+      homeId: state.locationId,
+      awayId,
+      travel: null,
+      travelTarget: null,
+      invested: CARAVAN_COST,
+      managerId: null,
+      cargo: {},
+      earned: 0,
+    },
+  ]
+  const where = state.world.locations[awayId]?.name ?? 'дальнее место'
+  notice(draft, `Караван снаряжён: отсюда и до ${where}.`)
+  advance(draft, hours(4))
+  return close(draft)
+}
+
+function foundWorkshop(state: GameState): CommandResult {
+  if (state.character.money < WORKSHOP_COST) {
+    return fail('noMoney', `На мастерскую нужно ${WORKSHOP_COST}.`)
+  }
+  const here = state.world.locations[state.locationId]
+  if (
+    !here ||
+    (here.archetype !== 'city' && here.archetype !== 'capital' && here.archetype !== 'town')
+  ) {
+    return fail('unavailableHere', 'Мастерскую держат в городе, а не в поле.')
+  }
+  if (
+    state.enterprises.some((one) => one.kind === 'workshop' && one.locationId === state.locationId)
+  ) {
+    return fail('invalid', 'Здесь у тебя уже есть мастерская.')
+  }
+  const draft = open(state)
+  addMoney(draft, -WORKSHOP_COST)
+  draft.enterprises = [
+    ...draft.enterprises,
+    {
+      id: `workshop:${state.locationId}`,
+      kind: 'workshop',
+      locationId: state.locationId,
+      homeId: null,
+      awayId: null,
+      travel: null,
+      travelTarget: null,
+      invested: WORKSHOP_COST,
+      managerId: null,
+      cargo: {},
+      earned: 0,
+    },
+  ]
+  notice(draft, `Мастерская открыта в месте ${here.name}.`)
+  advance(draft, hours(6))
+  return close(draft)
+}
+
+function closeEnterprise(state: GameState, enterpriseId: string): CommandResult {
+  const enterprise = state.enterprises.find((one) => one.id === enterpriseId)
+  if (!enterprise) return fail('invalid', 'Такого дела у тебя нет.')
+  const draft = open(state)
+  // Половину вложенного возвращают: остальное осело в чужих карманах.
+  addMoney(draft, Math.round(enterprise.invested / 2))
+  draft.enterprises = draft.enterprises.filter((one) => one.id !== enterpriseId)
+  draft.companions = draft.companions.map((one) =>
+    one.role.type === 'factor' && one.role.enterpriseId === enterpriseId
+      ? { ...one, role: { type: 'party' } }
+      : one,
+  )
+  notice(draft, 'Дело свёрнуто.')
+  advance(draft, hours(2))
+  return close(draft)
+}
+
+// --- брак -------------------------------------------------------------------
+
+/** За кого можно посвататься: за дом того, кто тебя знает и здесь сидит. */
+export function matchesAt(state: GameState, locationId = state.locationId): readonly Lord[] {
+  if (state.character.family.spouse) return []
+  const owner = state.settlements[locationId]?.owner
+  if (!owner || owner === PLAYER) return []
+  const lord = lordById(state.politics, owner)
+  return lord ? [lord] : []
+}
+
+/**
+ * Сватовство.
+ *
+ * Дом отдаёт дочь или сына не всякому: смотрят на славу и на то, как о тебе
+ * говорят. Согласие — это союз: с коронами, которым служит дом, отношения
+ * теплеют, и такой союз держится дольше обычного (diplomacy.ts).
+ */
+function proposeMarriage(state: GameState, lordId: string): CommandResult {
+  if (state.character.family.spouse) return fail('invalid', 'Ты уже в браке.')
+  if (state.character.age < 16) return fail('invalid', 'Рано.')
+  const lord = lordById(state.politics, lordId)
+  if (!lord) return fail('invalid', 'Такого дома нет.')
+  if (!matchesAt(state).some((one) => one.id === lordId)) {
+    return fail('unavailableHere', 'Свататься надо там, где сидит дом.')
+  }
+  // Смотрят на славу и на то, что о тебе помнят.
+  const opinion = lordRep(state.reputation, lordId)
+  const weight = state.renown + opinion * 2
+  if (weight < 40) {
+    return fail('invalid', `${lord.title} ${lord.name} не отдаст своей крови безвестному.`)
+  }
+
+  const draft = open(state)
+  const day = dayOf(draft.time)
+  const [name, afterName] = spouseName(draft.rng)
+  draft.rng = afterName
+  patch(draft, {
+    family: {
+      ...draft.character.family,
+      spouse: { name, lordId, kingdomId: lord.kingdomId, sinceDay: day },
+    },
+  })
+  // Приданое: земля даётся не всегда, а деньги — всегда.
+  const dowry = 80 + Math.round(lord.strength * 6)
+  addMoney(draft, dowry)
+  draft.renown += 15
+
+  // Брак с домом короны — это союз с самой короной.
+  if (lord.kingdomId && draft.realm) {
+    const pact = { a: draft.realm.name, b: lord.kingdomId, since: day, byMarriage: true }
+    draft.politics = { ...draft.politics, alliances: [...draft.politics.alliances, pact] }
+  }
+  if (lord.kingdomId) {
+    const key = pairOf(lord.kingdomId, lord.kingdomId)
+    draft.politics = {
+      ...draft.politics,
+      relations: { ...draft.politics.relations, [key]: 100 },
+    }
+  }
+  notice(draft, `Сговорено: ${name} из дома ${lord.name}. Приданое — ${dowry}.`)
+  advance(draft, hours(8))
+  return close(draft)
+}
+
+const SPOUSE_NAMES = ['Мирава', 'Ждана', 'Бранимир', 'Любава', 'Радогост', 'Веселина']
+
+function spouseName(rng: Rng): [string, Rng] {
+  const [index, next] = nextInt(rng, 0, SPOUSE_NAMES.length - 1)
+  return [SPOUSE_NAMES[index] ?? 'Мирава', next]
+}
+
 function buy(state: GameState, good: GoodId, amount: number): CommandResult {
   const problem = checkTradeRequest(good, amount)
   if (problem) return problem
@@ -1426,6 +1727,8 @@ interface Draft {
   battle: Battle | null
   politics: Politics
   bands: readonly Band[]
+  companions: readonly Companion[]
+  enterprises: readonly Enterprise[]
   service: string | null
   siege: { locationId: string; days: number } | null
   renown: number
@@ -1448,6 +1751,8 @@ function open(state: GameState): Draft {
     battle: state.battle,
     politics: state.politics,
     bands: state.bands,
+    companions: state.companions,
+    enterprises: state.enterprises,
     service: state.service,
     siege: state.siege,
     renown: state.renown,
@@ -1498,8 +1803,37 @@ function close(draft: Draft): CommandResult {
       draft.events.push(...bandNews(draft.base, draft.locationId, march.events))
     }
 
+    // Договоры корон: отношение, союзы, дань.
+    const talks = tickDiplomacy(draft.base.world, draft.politics, dayOf(draft.time), draft.rng)
+    draft.politics = talks.politics
+    draft.rng = talks.rng
+
+    // Дела кормят каждый день, и каждый день их можно потерять.
+    for (let i = 0; i < daysPassed; i += 1) {
+      const trade = tickEnterprises(
+        draft.base.world,
+        draft.settlements,
+        draft.enterprises,
+        (enterprise) => {
+          const manager = draft.companions.find((one) => one.id === enterprise.managerId)
+          return manager?.skills.trade ?? 0
+        },
+        draft.rng,
+      )
+      draft.enterprises = trade.enterprises
+      draft.rng = trade.rng
+      if (trade.income !== 0) addMoney(draft, trade.income)
+      for (const event of trade.events) {
+        if (event.type === 'caravanRobbed') {
+          const where = draft.base.world.locations[event.locationId]?.name ?? 'дорогой'
+          notice(draft, `Обоз разграблен под ${where}.`)
+        }
+      }
+    }
+
     payUpkeep(draft, daysPassed)
     expireQuests(draft)
+    growOlder(draft, daysPassed)
   }
 
   const state: GameState = {
@@ -1513,6 +1847,8 @@ function close(draft: Draft): CommandResult {
     battle: draft.battle,
     politics: draft.politics,
     bands: draft.bands,
+    companions: draft.companions,
+    enterprises: draft.enterprises,
     service: draft.service,
     siege: draft.siege,
     renown: draft.renown,
@@ -1641,6 +1977,15 @@ function warNews(
         refused: 'архимаг короны отказался служить',
       }
       news.push({ type: 'notice', text: `Говорят, ${words[event.state]}.` })
+      continue
+    }
+
+    if (event.type === 'tribute') {
+      const { from, to, perDay } = event.tribute
+      news.push({
+        type: 'notice',
+        text: `${kingdomName(from)} платит дань короне ${kingdomName(to)}: ${perDay} в день.`,
+      })
       continue
     }
 
@@ -1811,6 +2156,62 @@ function addGoods(draft: Draft, good: GoodId, delta: number): void {
 
 function patch(draft: Draft, changes: Partial<Character>): void {
   draft.character = { ...draft.character, ...changes }
+}
+
+/**
+ * Годы.
+ *
+ * Возраст пересчитывается на сутках, а не выводится при каждом обращении: в
+ * состоянии он нужен постоянно, и лишний счёт на телефоне ни к чему. Когда
+ * приходит срок, игра не кончается — её продолжает наследник, если он есть.
+ */
+function growOlder(draft: Draft, daysPassed: number): void {
+  if (daysPassed <= 0) return
+  const day = dayOf(draft.time)
+  const age = ageOf(draft.character.bornDay, day)
+  const grewUp = age > draft.character.age
+  if (grewUp) {
+    patch(draft, { age, attributes: agedAttributes(draft.character.attributes, age) })
+    if (age === PRIME_AGE + 1) notice(draft, 'Годы берут своё: тело уже не то, что было.')
+
+    // Дети рождаются раз в год, не чаще: мир и так считает каждый день.
+    const [family, afterBirth, born] = maybeBirth(draft.character.family, day, draft.rng)
+    draft.rng = afterBirth
+    if (born) {
+      patch(draft, { family })
+      const child = family.children[family.children.length - 1]
+      notice(draft, `Родился ребёнок: ${child?.name ?? 'дитя'}.`)
+    }
+
+    const [dies, afterDeath] = rollChance(draft.rng, deathChance(age))
+    draft.rng = afterDeath
+    if (dies) succeed(draft, day)
+  }
+}
+
+/**
+ * Смерть и наследник.
+ *
+ * Наследнику достаётся имя, земля и вассалы — но не слава, не навыки отца и не
+ * его поручения. Иначе смерть ничего бы не значила: продолжение за сына было бы
+ * бесплатным, а пермадэт превратился бы в смену заставки.
+ */
+function succeed(draft: Draft, day: number): void {
+  const heir = heirOf(draft.character.family, day)
+  if (!heir) {
+    draft.over = true
+    notice(draft, `${draft.character.name} умирает, и род пресекается.`)
+    return
+  }
+  const before = draft.character.name
+  draft.character = heirCharacter(draft.character, heir, day)
+  draft.renown = Math.round(draft.renown / 4)
+  draft.quests = []
+  draft.party = { ...draft.party, morale: Math.max(30, draft.party.morale - 20) }
+  notice(
+    draft,
+    `${before} умирает. Имя и земли принимает ${heir.name} — славу придётся нажить заново.`,
+  )
 }
 
 function notice(draft: Draft, text: string): void {

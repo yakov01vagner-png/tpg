@@ -1,5 +1,6 @@
 import {
   ARCHETYPE_LABELS,
+  CARAVAN_COST,
   type Command,
   type GameState,
   type GridCell,
@@ -411,6 +412,13 @@ export function MapScreen({ game }: { game: GameState }) {
                   )
                 })
             : null}
+          {chosen.id !== game.locationId &&
+          canApply(game, { type: 'foundCaravan', awayId: chosen.id }).ok ? (
+            <Button
+              label={`Пустить сюда караван — ${CARAVAN_COST}`}
+              onPress={() => dispatch({ type: 'foundCaravan', awayId: chosen.id })}
+            />
+          ) : null}
           {road ? (
             <Button
               label={`Идти сюда — ${formatDuration(hours(road.hours))}`}
