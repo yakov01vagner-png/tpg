@@ -1,7 +1,7 @@
 import type { Settlement } from './economy'
 import { foodSecurity } from './life'
 import { type Rng, nextFloat, nextInt, rollChance } from './rng'
-import { roadsFrom } from './world/queries'
+import { neighbourSettlements } from './world/queries'
 import type { World } from './world/types'
 
 /**
@@ -100,9 +100,11 @@ export function tickPlague(
     }
 
     // 2. Перекидывается по дорогам: чем больше ездят, тем дальше уходит.
-    for (const road of roadsFrom(world, plague.locationId)) {
-      if (infected.has(road.to)) continue
-      const neighbour = places[road.to]
+    // Сосед — ближайшее поселение, а не первое место за околицей: с версии 0.4
+    // за околицей лежит земля, и по курганам мор не ходит.
+    for (const near of neighbourSettlements(world, plague.locationId)) {
+      if (infected.has(near.id)) continue
+      const neighbour = places[near.id]
       if (!neighbour || neighbour.population <= 0) continue
       // Из-за закрытых ворот мор выходит втрое реже.
       const gate = place.quarantined ? 0.3 : 1
@@ -111,9 +113,9 @@ export function tickPlague(
       if (!spreads) continue
       const [span, afterSpan] = nextInt(generator, DURATION[0], DURATION[1])
       generator = afterSpan
-      infected.add(road.to)
-      next.push({ locationId: road.to, daysLeft: span, severity: plague.severity * 0.9 })
-      events.push({ type: 'plagueSpread', from: plague.locationId, to: road.to })
+      infected.add(near.id)
+      next.push({ locationId: near.id, daysLeft: span, severity: plague.severity * 0.9 })
+      events.push({ type: 'plagueSpread', from: plague.locationId, to: near.id })
     }
 
     const daysLeft = plague.daysLeft - 1

@@ -76,7 +76,10 @@ describe('разбой душит подвоз', () => {
       `за 400 суток на сытой земле: в рудниках ${minePop(calm).toFixed(0)} против ${minePop(troubled).toFixed(0)}`,
     )
     expect(minePop(troubled)).toBeLessThan(minePop(calm))
-    expect(minePop(troubled)).toBeGreaterThan(minePop(calm) * 0.95)
+    // Десятая часть, а не двадцатая: с версии 0.4 подвоз идёт дальше — между
+    // рудником и хлебной деревней лежит земля, — и разбой отъедает от него
+    // больше. Голодом это всё ещё не становится.
+    expect(minePop(troubled)).toBeGreaterThan(minePop(calm) * 0.9)
   })
 
   it('на выжатой земле тот же разбой оборачивается голодом', () => {

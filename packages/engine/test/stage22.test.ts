@@ -16,14 +16,25 @@ import { FRONTIER, isSite } from '../src/world/types'
  */
 const SEEDS = [1, 2, 3]
 
+/** Цена работы по лучшему из прогонов: среднее здесь мерит чужую нагрузку. */
+function fastest(work: () => void, times = 5): number {
+  let best = Number.POSITIVE_INFINITY
+  for (let i = 0; i < times; i += 1) {
+    const began = performance.now()
+    work()
+    best = Math.min(best, performance.now() - began)
+  }
+  return best
+}
+
 describe('мир вдвое больше', () => {
-  it('у каждой короны по три области', () => {
+  it('у каждой короны по четыре области', () => {
     for (const blueprint of KINGDOM_BLUEPRINTS) {
-      expect(blueprint.regions.length, blueprint.id).toBe(3)
+      expect(blueprint.regions.length, blueprint.id).toBe(4)
     }
     const world = generateWorld(1)
     for (const kingdom of Object.values(world.kingdoms)) {
-      expect(kingdom.regionIds).toHaveLength(3)
+      expect(kingdom.regionIds).toHaveLength(4)
     }
   })
 
@@ -59,15 +70,13 @@ describe('мир вдвое больше', () => {
 describe('полотно выдерживает рост', () => {
   it('сетка и раскладка считаются за кадр', () => {
     const world = generateWorld(1)
-    const gridStart = performance.now()
-    worldGrid(world, MAP_SIZE)
-    const gridMs = performance.now() - gridStart
-    const layoutStart = performance.now()
-    layoutOf(world)
-    const layoutMs = performance.now() - layoutStart
+    // По лучшему из прогонов: тесты идут в несколько потоков, и соседний файл,
+    // считающий двадцать лет войны, растягивает чужой замер вдвое-втрое.
+    const gridMs = fastest(() => worldGrid(world, MAP_SIZE))
+    const layoutMs = fastest(() => layoutOf(world))
     console.log(`сетка ${gridMs.toFixed(1)} мс, раскладка ${layoutMs.toFixed(1)} мс`)
-    expect(gridMs).toBeLessThan(60)
-    expect(layoutMs).toBeLessThan(30)
+    expect(gridMs).toBeLessThan(40)
+    expect(layoutMs).toBeLessThan(10)
   })
 
   it('сейв большого мира остаётся переносимым строкой', () => {

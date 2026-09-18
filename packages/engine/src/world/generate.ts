@@ -14,10 +14,10 @@ import {
 import { landCapacityOf } from '../life'
 import type { Rng } from '../rng'
 import { createRng, nextFloat, nextInt } from '../rng'
-import { MAP_SIZE, placeLocations } from './layout'
+import { MAP_SIZE, SITE_GAP, Spacer, placeLocations } from './layout'
 import { hopsBetween } from './queries'
-import { buildRoads } from './roads'
-import { FRONTIER, isSite } from './types'
+import { buildRoads, hoursBetweenPlaces, neighbourPairs, spotOf } from './roads'
+import { FRONTIER, isSettlement, isSite } from './types'
 import type {
   Kingdom,
   Location,
@@ -97,24 +97,9 @@ export function generateWorld(
           locationIds.push(id)
         }
 
-        // Места без жителей: то, что лежит между деревнями. Их вид выбирается
-        // по земле провинции — гать бывает только в топях, перевал только в
-        // горах, — поэтому провинция читается ещё и по тому, что в ней стоит.
+        // Места без жителей здесь не заводятся: они лягут после того, как
+        // поселения встанут на карту, — ровно между соседями (этап 26).
         const siteIds: string[] = []
-        const siteCount = roll.int(2, 3)
-        for (let siteIndex = 0; siteIndex < siteCount; siteIndex += 1) {
-          const kind = pickSite(roll, terrain)
-          const id = `${provinceId}.s${siteIndex}`
-          locations[id] = {
-            id,
-            provinceId,
-            name: names.forSite(kind),
-            archetype: kind,
-            terrain,
-            population: 0,
-          }
-          siteIds.push(id)
-        }
 
         provinces[provinceId] = {
           id: provinceId,
@@ -220,17 +205,160 @@ export function generateWorld(
     }
   }
 
-  // Сперва места ложатся на карту, и только потом по ним прокладывают дороги:
-  // дорога — следствие земли, а не списка (roads.ts).
-  const points = placeLocations({ kingdoms, regions, provinces })
+  // Сперва поселения ложатся на карту, потом между соседями встаёт то, через
+  // что к ним идут, и только потом по всему этому прокладывают дороги: дорога —
+  // следствие земли, а не списка (roads.ts).
+  const spacer = new Spacer()
+  const points = placeLocations({ kingdoms, regions, provinces }, spacer)
   const placed: Record<string, Location> = {}
   for (const [id, location] of Object.entries(locations)) {
     const point = points[id] ?? { x: MAP_SIZE / 2, y: MAP_SIZE / 2 }
     placed[id] = { ...location, x: point.x, y: point.y }
   }
 
+  fillBetween(roll, names, spacer, { provinces, locations: placed })
+  fillLongLegs(roll, names, spacer, { provinces, locations: placed })
+
   const skeleton = { kingdoms, regions, provinces, locations: placed }
   return { ...skeleton, roads: buildRoads(skeleton) }
+}
+
+/**
+ * Дневной переход — это предел отрезка.
+ *
+ * После того как места легли между поселениями, в мире остаются длинные
+ * отрезки: там, где между двумя местами лежит пустая земля, — через марку,
+ * через горы, через степь. Двадцать пять часов одним шагом — это не переход, а
+ * прежний портал в малом виде: за такой отрезок нельзя ни свернуть, ни
+ * остановиться, и решение принимается раз в сутки. Поэтому на всякий длинный
+ * отрезок кладётся ещё земля, пока шаг не станет дневным.
+ *
+ * Заодно это чинит последнюю лазейку правила «между поселениями два места»:
+ * одна пара на мир оказывалась в двух переходах через одинокий курган посреди
+ * ничьей земли.
+ */
+const LONG_LEG = 10
+
+function fillLongLegs(
+  roll: Roller,
+  names: Namer,
+  spacer: Spacer,
+  world: { provinces: Record<string, Province>; locations: Record<string, Location> },
+): void {
+  const pairs = neighbourPairs(Object.values(world.locations).map(spotOf))
+  const counters = new Map<string, number>()
+  for (const province of Object.values(world.provinces)) {
+    counters.set(province.id, province.siteIds.length)
+  }
+
+  for (const pair of pairs) {
+    const from = world.locations[pair.from.id]
+    const to = world.locations[pair.to.id]
+    if (!from || !to) continue
+    const hours = hoursBetweenPlaces(from, to)
+    if (hours <= LONG_LEG) continue
+    const count = Math.min(4, Math.round(hours / LONG_LEG))
+    const span = Math.hypot(from.x - to.x, from.y - to.y)
+    for (let index = 0; index < count; index += 1) {
+      const share = (index + 1) / (count + 1)
+      const host = world.locations[share < 0.5 ? from.id : to.id]
+      const province = world.provinces[host?.provinceId ?? '']
+      if (!host || !province) continue
+      const next = (counters.get(province.id) ?? 0) + 1
+      counters.set(province.id, next)
+      const id = `${province.id}.s${next - 1}`
+      const kind = pickSite(roll, province.terrain)
+      const point = spacer.place(
+        {
+          x: from.x + (to.x - from.x) * share,
+          y: from.y + (to.y - from.y) * share,
+        },
+        SITE_GAP,
+      )
+      // Если распорядитель отнёс точку далеко в сторону, земля тут уже занята:
+      // ставить нечего, отрезок останется длинным.
+      if (Math.hypot(point.x - from.x, point.y - from.y) > span) continue
+      world.locations[id] = {
+        id,
+        provinceId: province.id,
+        name: names.forSite(kind),
+        archetype: kind,
+        terrain: province.terrain,
+        population: 0,
+        x: point.x,
+        y: point.y,
+      }
+      world.provinces[province.id] = { ...province, siteIds: [...province.siteIds, id] }
+    }
+  }
+}
+
+/**
+ * Земля между поселениями.
+ *
+ * Правило версии 0.4: прямой дороги из деревни в деревню не бывает — между ними
+ * всегда лежит не меньше двух мест без жителей. Поэтому места без жителей не
+ * рассыпаются по провинции наугад, а кладутся ровно на те отрезки, по которым
+ * от соседа к соседу и ходят: сперва считается, кто кому сосед (`neighbourPairs`
+ * — те двое, между которыми никто не стоит), потом на каждый такой отрезок
+ * ложатся брод, перевал или урочище. После этого прямого отрезка между
+ * поселениями уже не остаётся: дорога идёт через них, потому что они и есть
+ * дорога.
+ *
+ * До 0.4 между деревнями стояло ноль или одно место, и путь из деревни в
+ * деревню был одним шагом: земля между ними была надписью.
+ */
+function fillBetween(
+  roll: Roller,
+  names: Namer,
+  spacer: Spacer,
+  world: { provinces: Record<string, Province>; locations: Record<string, Location> },
+): void {
+  const settlements = Object.values(world.locations).filter((one) => isSettlement(one.archetype))
+  const pairs = neighbourPairs(settlements.map(spotOf))
+  const counters = new Map<string, number>()
+  for (const province of Object.values(world.provinces)) {
+    counters.set(province.id, province.siteIds.length)
+  }
+
+  for (const pair of pairs) {
+    const from = world.locations[pair.from.id]
+    const to = world.locations[pair.to.id]
+    if (!from || !to) continue
+    const span = Math.hypot(from.x - to.x, from.y - to.y)
+    // Два места на отрезок, а на длинном — три: чем дальше сосед, тем больше
+    // между вами земли, и тем длиннее был бы иначе один шаг.
+    const count = span > 90 ? 3 : 2
+    for (let index = 0; index < count; index += 1) {
+      const share = (index + 1) / (count + 1)
+      // Место стоит у дороги, а не строго на прямой: иначе карта — чертёж.
+      const off = ((index % 2 === 0 ? 1 : -1) * Math.min(18, span * 0.12)) / 2
+      const wanted = {
+        x: from.x + (to.x - from.x) * share - ((to.y - from.y) / Math.max(1, span)) * off,
+        y: from.y + (to.y - from.y) * share + ((to.x - from.x) / Math.max(1, span)) * off,
+      }
+      // Земля под местом — земля того соседа, к которому оно ближе.
+      const host = world.locations[share < 0.5 ? from.id : to.id]
+      const province = world.provinces[host?.provinceId ?? '']
+      if (!host || !province) continue
+      const next = (counters.get(province.id) ?? 0) + 1
+      counters.set(province.id, next)
+      const id = `${province.id}.s${next - 1}`
+      const kind = pickSite(roll, province.terrain)
+      const point = spacer.place(wanted, SITE_GAP)
+      world.locations[id] = {
+        id,
+        provinceId: province.id,
+        name: names.forSite(kind),
+        archetype: kind,
+        terrain: province.terrain,
+        population: 0,
+        x: point.x,
+        y: point.y,
+      }
+      world.provinces[province.id] = { ...province, siteIds: [...province.siteIds, id] }
+    }
+  }
 }
 
 /**

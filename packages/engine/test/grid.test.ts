@@ -69,11 +69,16 @@ describe('полотно мира клетками', () => {
   })
 
   it('считается быстро: карту открывают на телефоне', () => {
-    const started = Date.now()
-    worldGrid(generateWorld(7), MAP_SIZE)
-    const spent = Date.now() - started
-    console.log(`сетка мира: ${spent} мс на ${GRID_SIZE}×${GRID_SIZE}`)
-    expect(spent).toBeLessThan(250)
+    const world = generateWorld(7)
+    // По лучшему из прогонов: см. perf.test.ts — среднее мерит соседний файл.
+    let spent = Number.POSITIVE_INFINITY
+    for (let i = 0; i < 5; i += 1) {
+      const began = performance.now()
+      worldGrid(world, MAP_SIZE)
+      spent = Math.min(spent, performance.now() - began)
+    }
+    console.log(`сетка мира: ${spent.toFixed(1)} мс на ${GRID_SIZE}×${GRID_SIZE}`)
+    expect(spent).toBeLessThan(40)
   })
 })
 

@@ -47,14 +47,17 @@ describe('мир, в котором есть не только деревни', 
     }
   })
 
-  it('мест около ста двадцати, и почти половина — без жителей', () => {
+  it('мест за полтысячи, и две трети из них — без жителей', () => {
     for (const seed of SEEDS) {
       const current = generateWorld(seed)
       const all = Object.keys(current.locations).length
       const wild = sitesOf(current).length
-      expect(all).toBeGreaterThan(100)
-      expect(wild / all).toBeGreaterThan(0.35)
-      expect(wild / all).toBeLessThan(0.6)
+      // С версии 0.4 между любыми двумя поселениями лежит не меньше двух мест
+      // без жителей (этап 26), поэтому глушь и стала большинством мира: её
+      // ровно столько, сколько нужно, чтобы дорога шла по земле.
+      expect(all, `зерно ${seed}`).toBeGreaterThan(450)
+      expect(wild / all, `зерно ${seed}`).toBeGreaterThan(0.6)
+      expect(wild / all, `зерно ${seed}`).toBeLessThan(0.85)
     }
   })
 

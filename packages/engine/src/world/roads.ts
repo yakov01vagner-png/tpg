@@ -23,7 +23,7 @@ import { isSite } from './types'
  */
 
 /** Сколько единиц карты покрывает час пешего пути по ровному месту. */
-export const UNITS_PER_HOUR = 8
+export const UNITS_PER_HOUR = 12
 
 /**
  * Дальше этого места соседями не считаются.
@@ -33,10 +33,10 @@ export const UNITS_PER_HOUR = 8
  * сшивается отдельно и по кратчайшему — так в мире остаются и дальние
  * переходы, но ровно там, где без них не обойтись.
  */
-const REACH = 150
+const REACH = 225
 
 /** Место на карте: только то, что нужно дороге. */
-interface Spot {
+export interface Spot {
   readonly id: string
   readonly x: number
   readonly y: number
@@ -47,7 +47,6 @@ interface Spot {
 export function buildRoads(world: Omit<World, 'roads'>): Record<string, readonly Road[]> {
   const spots = Object.values(world.locations).map(toSpot)
   const roads: Record<string, Road[]> = {}
-  const index = new Grid(spots)
 
   const connect = (a: Spot, b: Spot) => {
     const forward = roads[a.id] ?? []
@@ -61,14 +60,9 @@ export function buildRoads(world: Omit<World, 'roads'>): Record<string, readonly
   }
 
   const union = new Union(spots.map((spot) => spot.id))
-  for (const [i, a] of spots.entries()) {
-    for (const b of index.near(a, REACH)) {
-      // Пара считается один раз: соседство взаимно.
-      if (b.index <= i) continue
-      if (!neighbours(a, b.spot, index)) continue
-      connect(a, b.spot)
-      union.join(a.id, b.spot.id)
-    }
+  for (const pair of neighbourPairs(spots)) {
+    connect(pair.from, pair.to)
+    union.join(pair.from.id, pair.to.id)
   }
 
   // Острова сшиваются кратчайшим переходом: мир должен быть связен, даже если
@@ -76,6 +70,31 @@ export function buildRoads(world: Omit<World, 'roads'>): Record<string, readonly
   bridgeIslands(spots, union, connect)
 
   return roads
+}
+
+/**
+ * Кто кому сосед: пары, между которыми не стоит никто третий.
+ *
+ * Тем же правилом генератор решает, где встать местам без жителей: сперва
+ * считается соседство поселений, а потом между соседями кладётся то, через что
+ * к ним идут (этап 26).
+ */
+export function neighbourPairs(spots: readonly Spot[]): { from: Spot; to: Spot }[] {
+  const index = new Grid(spots)
+  const pairs: { from: Spot; to: Spot }[] = []
+  for (const [i, a] of spots.entries()) {
+    index.forEachNear(a, REACH, (j, b) => {
+      // Пара считается один раз: соседство взаимно.
+      if (j > i && neighbours(a, b, index)) pairs.push({ from: a, to: b })
+      return true
+    })
+  }
+  return pairs
+}
+
+/** Место на карте в виде, который понимает дорога. */
+export function spotOf(location: Location): Spot {
+  return toSpot(location)
 }
 
 /**
@@ -87,12 +106,13 @@ export function buildRoads(world: Omit<World, 'roads'>): Record<string, readonly
  */
 function neighbours(a: Spot, b: Spot, index: Grid): boolean {
   const span = distance(a, b)
-  for (const other of index.near(a, span)) {
-    const c = other.spot
-    if (c.id === a.id || c.id === b.id) continue
-    if (distance(c, b) < span) return false
-  }
-  return true
+  let alone = true
+  index.forEachNear(a, span, (_index, c) => {
+    if (c.id === b.id || distance(c, b) >= span) return true
+    alone = false
+    return false
+  })
+  return alone
 }
 
 /**
@@ -160,41 +180,54 @@ function bridgeIslands(
   }
 }
 
-/** Сетка для поиска соседей: перебирать все места против всех дорого. */
-class Grid {
-  private readonly cells = new Map<string, { index: number; spot: Spot }[]>()
-  private readonly size = REACH
+/**
+ * Сетка для поиска соседей: перебирать все места против всех дорого.
+ *
+ * Клетка мельче предела нарочно. При клетке в целый предел проверка «не стоит
+ * ли кто между» перебирала сотню мест на каждую пару и стоила ста семидесяти
+ * миллисекунд на рождение мира — больше всего бюджета холодного старта. При
+ * мелкой клетке перебирается десяток, и та же работа занимает двадцать.
+ * Соседей отдаём обходом без списка: на шести с половиной сотнях мест пары
+ * складываются десятками тысяч, и каждый выделенный массив стоит дороже самой
+ * проверки.
+ */
+const CELL = 75
 
-  constructor(spots: readonly Spot[]) {
+class Grid {
+  private readonly cells = new Map<number, number[]>()
+  private readonly columns: number
+
+  constructor(private readonly spots: readonly Spot[]) {
+    this.columns = Math.ceil(4000 / CELL)
     for (const [index, spot] of spots.entries()) {
       const key = this.key(spot.x, spot.y)
-      const cell = this.cells.get(key) ?? []
-      cell.push({ index, spot })
-      this.cells.set(key, cell)
+      const cell = this.cells.get(key)
+      if (cell) cell.push(index)
+      else this.cells.set(key, [index])
     }
   }
 
-  near(from: Spot, radius: number): { index: number; spot: Spot }[] {
-    const found: { index: number; spot: Spot }[] = []
-    const span = Math.min(radius, REACH)
-    const steps = Math.ceil(span / this.size)
-    const cx = Math.floor(from.x / this.size)
-    const cy = Math.floor(from.y / this.size)
+  /** Пройтись по всем, кто ближе радиуса. Возврат `false` прекращает обход. */
+  forEachNear(from: Spot, radius: number, visit: (index: number, spot: Spot) => boolean): void {
+    const steps = Math.ceil(radius / CELL)
+    const cx = Math.floor(from.x / CELL)
+    const cy = Math.floor(from.y / CELL)
     for (let dx = -steps; dx <= steps; dx += 1) {
       for (let dy = -steps; dy <= steps; dy += 1) {
-        const cell = this.cells.get(`${cx + dx}:${cy + dy}`)
+        const cell = this.cells.get((cx + dx) * this.columns + (cy + dy))
         if (!cell) continue
-        for (const one of cell) {
-          if (one.spot.id === from.id) continue
-          if (distance(from, one.spot) <= span) found.push(one)
+        for (const index of cell) {
+          const spot = this.spots[index]
+          if (!spot || spot.id === from.id) continue
+          if (distance(from, spot) > radius) continue
+          if (!visit(index, spot)) return
         }
       }
     }
-    return found
   }
 
-  private key(x: number, y: number): string {
-    return `${Math.floor(x / this.size)}:${Math.floor(y / this.size)}`
+  private key(x: number, y: number): number {
+    return Math.floor(x / CELL) * this.columns + Math.floor(y / CELL)
   }
 }
 

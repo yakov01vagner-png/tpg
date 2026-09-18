@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { KINGDOM_BLUEPRINTS, MARCHES } from '../src/content/world'
 import { defaultStartLocationId, generateWorld } from '../src/world/generate'
+import { MAP_SIZE } from '../src/world/layout'
 import { addressOf, hopsBetween, reachableFrom, roadsFrom } from '../src/world/queries'
 import { FRONTIER, isSettlement } from '../src/world/types'
 import type { World } from '../src/world/types'
@@ -136,7 +137,7 @@ describe('дороги', () => {
         const span = Math.hypot(capital.x - to.x, capital.y - to.y)
         // В 0.3 из столицы Ре-Эстиза уходили четыре отрезка по 227–303 единицы
         // карты — прямо к вольным сёлам чужих марок, мимо 43–67 мест.
-        expect(span, `${capital.name} → ${to.name}`).toBeLessThan(120)
+        expect(span, `${capital.name} → ${to.name}`).toBeLessThan(MAP_SIZE * 0.09)
       }
     }
   })

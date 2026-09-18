@@ -1,4 +1,5 @@
 import type { Kingdom, Location, Province, Region, Road, World } from './types'
+import { isSettlement } from './types'
 
 /** Дороги из локации. Пустой список — тупик, такого в сгенерированном мире быть не должно. */
 export function roadsFrom(world: World, locationId: string): readonly Road[] {
@@ -36,6 +37,43 @@ export function locationsOfProvince(world: World, provinceId: string): readonly 
   return province.locationIds
     .map((id) => world.locations[id])
     .filter((location): location is Location => Boolean(location))
+}
+
+/**
+ * Ближайшие поселения по дорогам.
+ *
+ * С версии 0.4 у деревни не бывает соседа-деревни: между поселениями всегда
+ * лежит земля (этап 26). Поэтому всё, что раньше спрашивало «кто у меня за
+ * околицей» через `roadsFrom`, теперь спрашивает это: идём по дорогам, пока не
+ * упрёмся в людей, и останавливаемся на них. Без этого мор перестал
+ * перекидываться вовсе: за околицей у него оказывались одни курганы.
+ */
+export function neighbourSettlements(
+  world: World,
+  fromId: string,
+  maxHops = 6,
+): readonly { readonly id: string; readonly hops: number; readonly hours: number }[] {
+  const seen = new Set<string>([fromId])
+  const found: { id: string; hops: number; hours: number }[] = []
+  let edge: { id: string; hops: number; hours: number }[] = [{ id: fromId, hops: 0, hours: 0 }]
+
+  while (edge.length > 0) {
+    const next: { id: string; hops: number; hours: number }[] = []
+    for (const step of edge) {
+      if (step.hops >= maxHops) continue
+      for (const road of roadsFrom(world, step.id)) {
+        if (seen.has(road.to)) continue
+        seen.add(road.to)
+        const reached = { id: road.to, hops: step.hops + 1, hours: step.hours + road.hours }
+        const place = world.locations[road.to]
+        // Дошли до поселения — дальше через него не идём: это уже его округа.
+        if (place && isSettlement(place.archetype)) found.push(reached)
+        else next.push(reached)
+      }
+    }
+    edge = next
+  }
+  return found
 }
 
 /** Все локации, куда можно дойти по дорогам. Используется проверкой связности. */

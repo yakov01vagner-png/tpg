@@ -20,10 +20,21 @@ export interface Point {
   readonly y: number
 }
 
-export const MAP_SIZE = 1400
+export const MAP_SIZE = 2100
+
+/**
+ * Полотно мира.
+ *
+ * Полторы тысячи было тесно: с версии 0.4 между двумя поселениями должны
+ * умещаться два места без жителей, и при прежнем масштабе распорядитель
+ * (`Spacer`) растаскивал деревни на сто восемьдесят единиц от середины их же
+ * провинции — то есть в чужую землю. Полотно выросло в полтора раза, а зазоры
+ * остались прежними: земля стала просторнее, а не крупнее. Час пути при этом
+ * стоит столько же — `UNITS_PER_HOUR` вырос вместе с полотном.
+ */
 
 /** Насколько далеко половины марки расходятся вдоль границы. */
-const MARCH_SPAN = 62
+const MARCH_SPAN = 93
 
 /** Устойчивый разброс: одно и то же место всегда оказывается в одной точке. */
 function jitter(seed: string, spread: number): Point {
@@ -70,7 +81,7 @@ export function provinceCentersOf(world: World): Readonly<Record<string, Point>>
         // Провинции уходят от столицы вглубь области: первая лежит у самого
         // престола, дальние — на окраине. Вбок они расходятся не больше, чем
         // на пятую часть клина, иначе область перестаёт быть куском.
-        const radius = 58 + provinceIndex * 62
+        const radius = 87 + provinceIndex * 93
         const sway = count === 1 ? 0 : ((provinceIndex % 2 === 0 ? -1 : 1) * spread) / 5
         const angle = regionAngle + sway
         centers[provinceId] = {
@@ -128,9 +139,9 @@ export function layoutOf(world: World): Readonly<Record<string, Point>> {
  */
 export function placeLocations(
   world: Pick<World, 'kingdoms' | 'regions' | 'provinces'>,
+  spacer: Spacer = new Spacer(),
 ): Readonly<Record<string, Point>> {
   const points: Record<string, Point> = {}
-  const taken: Point[] = []
   const centers = provinceCentersOf(world as World)
 
   // Обход идёт по всем провинциям сразу, а не по коронам: у пограничья короны
@@ -145,20 +156,20 @@ export function placeLocations(
     // основание одной деревни двигало на карте все соседние: мир нельзя было
     // пополнить, не перерисовав его целиком (DESIGN.md, п.3.1).
     for (const locationId of province.locationIds) {
-      const spot = jitter(locationId, 40)
-      points[locationId] = separate(taken, {
-        x: clamp(provinceCenter.x + spot.x),
-        y: clamp(provinceCenter.y + spot.y),
-      })
+      const spot = jitter(locationId, 60)
+      points[locationId] = spacer.place(
+        { x: provinceCenter.x + spot.x, y: provinceCenter.y + spot.y },
+        SETTLEMENT_GAP,
+      )
     }
 
     // Места без жителей ложатся по тому же правилу, но дальше от середины:
     // они и есть то, что лежит между.
     for (const siteId of province.siteIds ?? []) {
-      const spot = jitter(siteId, 52)
-      points[siteId] = separate(taken, {
-        x: clamp(provinceCenter.x + spot.x),
-        y: clamp(provinceCenter.y + spot.y),
+      const spot = jitter(siteId, 78)
+      points[siteId] = spacer.place({
+        x: provinceCenter.x + spot.x,
+        y: provinceCenter.y + spot.y,
       })
     }
   }
@@ -174,8 +185,8 @@ export function placeLocations(
  * основание ничего не двигает на карте (DESIGN.md, п.3.1).
  */
 export function placeNear(parent: Point, id: string): Point {
-  const spot = jitter(id, 46)
-  const span = Math.max(22, Math.hypot(spot.x, spot.y))
+  const spot = jitter(id, 69)
+  const span = Math.max(33, Math.hypot(spot.x, spot.y))
   const angle = Math.atan2(spot.y, spot.x)
   return {
     x: clamp(parent.x + Math.cos(angle) * span),
@@ -184,29 +195,57 @@ export function placeNear(parent: Point, id: string): Point {
 }
 
 /**
- * Два поселения в одной точке — это поселение, которого на карте нет. Слишком
- * близкую точку отводим по спирали, пока она не встанет отдельно. Отводят
- * всегда того, кто пришёл позже: списки мест пополняются с конца, поэтому
- * основанное сегодня никогда не сдвинет стоявшее вчера.
+ * Два места в одной точке — это место, которого на карте нет.
+ *
+ * Слишком близкую точку отводим по спирали, пока она не встанет отдельно.
+ * Отводят всегда того, кто пришёл позже: списки мест пополняются с конца,
+ * поэтому основанное сегодня никогда не сдвинет стоявшее вчера. Тем же
+ * распорядителем генератор кладёт места без жителей — после того, как
+ * поселения уже встали (этап 26).
  */
-const MIN_GAP = 16
+export const MIN_GAP = 16
 
-function separate(taken: Point[], wanted: Point): Point {
-  let point = wanted
-  for (let step = 0; step < 64 && crowded(taken, point); step += 1) {
-    const angle = step * 2.399963 // золотой угол: витки не ложатся друг на друга
-    const radius = MIN_GAP * (1 + step * 0.35)
-    point = {
-      x: clamp(wanted.x + Math.cos(angle) * radius),
-      y: clamp(wanted.y + Math.sin(angle) * radius),
+/**
+ * Сколько места держит вокруг себя поселение.
+ *
+ * Не для красоты карты, а ради правила 0.4: между двумя поселениями должно
+ * умещаться не меньше двух мест без жителей. Пока деревни стояли в шестнадцати
+ * единицах друг от друга, поставить между ними что-либо было нельзя — тридцать
+ * отрезков из четырёхсот так и оставались прямыми «деревня — деревня».
+ */
+export const SETTLEMENT_GAP = 48
+
+/** А место без жителей — самую малость: оно и есть то, что стоит вплотную. */
+export const SITE_GAP = 12
+
+export class Spacer {
+  private readonly taken: { point: Point; gap: number }[] = []
+
+  place(wanted: Point, gap: number = MIN_GAP): Point {
+    const target = { x: clamp(wanted.x), y: clamp(wanted.y) }
+    let point = target
+    for (let step = 0; step < 64 && this.crowded(point, gap); step += 1) {
+      const angle = step * 2.399963 // золотой угол: витки не ложатся друг на друга
+      const radius = gap * (1 + step * 0.35)
+      point = {
+        x: clamp(target.x + Math.cos(angle) * radius),
+        y: clamp(target.y + Math.sin(angle) * radius),
+      }
     }
+    this.taken.push({ point, gap })
+    return point
   }
-  taken.push(point)
-  return point
-}
 
-function crowded(taken: Point[], point: Point): boolean {
-  return taken.some((other) => Math.hypot(other.x - point.x, other.y - point.y) < MIN_GAP)
+  /**
+   * Тесно ли тут. Двоим хватает того зазора, которого просит меньший: место без
+   * жителей встаёт у самой околицы, а два поселения расходятся широко.
+   */
+  private crowded(point: Point, gap: number): boolean {
+    return this.taken.some(
+      (other) =>
+        Math.hypot(other.point.x - point.x, other.point.y - point.y) < Math.min(gap, other.gap),
+    )
+  }
 }
 
 function clamp(value: number): number {

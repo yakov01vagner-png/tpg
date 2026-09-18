@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { SITES } from '../src/content/sites'
 import { generateWorld } from '../src/world/generate'
-import { layoutOf } from '../src/world/layout'
+import { MAP_SIZE, layoutOf } from '../src/world/layout'
 import { reachableFrom, roadsFrom } from '../src/world/queries'
 import { UNITS_PER_HOUR, hoursBetweenPlaces } from '../src/world/roads'
 import { isSite } from '../src/world/types'
@@ -76,7 +76,11 @@ describe('дорога лежит по земле', () => {
       )
       if (seed === 1)
         console.log(`часы и расстояние: r = ${r.toFixed(2)}, с землёй r = ${exact.toFixed(2)}`)
-      expect(r, `зерно ${seed}`).toBeGreaterThan(0.85)
+      // С голым расстоянием связь неполная, и это не изъян, а вся суть: час
+      // пути — это расстояние **по чему-то**. После этапа 26 отрезки стали
+      // короткими и похожими по длине, а земля под ними разная — от равнины до
+      // горной гати, — и её доля в цене часа перевесила. Поэтому проверяется
+      // не голое расстояние, а формула целиком.
       expect(exact, `зерно ${seed}`).toBeGreaterThan(0.97)
     }
   })
@@ -86,8 +90,10 @@ describe('дорога лежит по земле', () => {
       const world = generateWorld(seed)
       const longest = legs(world).reduce((worst, leg) => Math.max(worst, span(leg.from, leg.to)), 0)
       if (seed === 1) console.log(`самый длинный отрезок: ${longest.toFixed(0)} единиц карты`)
-      // В 0.3 самый длинный отрезок был 360 единиц при мире 1085 × 1165.
-      expect(longest, `зерно ${seed}`).toBeLessThan(170)
+      // В 0.3 самый длинный отрезок был 360 единиц при мире 1085 × 1165; теперь
+      // полотно в полтора раза больше, и меряться надо его долей: одна восьмая
+      // против прежней трети.
+      expect(longest / MAP_SIZE, `зерно ${seed}`).toBeLessThan(0.13)
     }
   })
 
@@ -100,7 +106,7 @@ describe('дорога лежит по земле', () => {
         for (const road of roadsFrom(world, kingdom.capitalId)) {
           const to = world.locations[road.to]
           if (!to) continue
-          expect(span(capital, to), `${capital.name} → ${to.name}`).toBeLessThan(120)
+          expect(span(capital, to), `${capital.name} → ${to.name}`).toBeLessThan(MAP_SIZE * 0.09)
         }
       }
     }

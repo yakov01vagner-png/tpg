@@ -5,7 +5,7 @@ import type { Settlement } from '../src/economy'
 import { type Plague, plagueAt, tickPlague } from '../src/plague'
 import { createRng } from '../src/rng'
 import { generateWorld } from '../src/world/generate'
-import { roadsFrom } from '../src/world/queries'
+import { neighbourSettlements, roadsFrom } from '../src/world/queries'
 
 const world = generateWorld(1)
 const start = createSettlements(world)
@@ -40,7 +40,9 @@ describe('мор', () => {
 
   it('идёт по дорогам, а не по воздуху', () => {
     const source = bigPlace()
-    const neighbours = new Set(roadsFrom(world, source).map((road) => road.to))
+    // Соседом мору служит ближайшее поселение по дорогам, а не первое место за
+    // околицей: с версии 0.4 за околицей лежит земля, и на курганах мора нет.
+    const neighbours = new Set(neighbourSettlements(world, source).map((one) => one.id))
     let places: Readonly<Record<string, Settlement>> = start
     let plagues: readonly Plague[] = [{ locationId: source, daysLeft: 60, severity: 1 }]
     let rng = createRng(7)
