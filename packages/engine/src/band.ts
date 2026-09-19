@@ -3,7 +3,7 @@ import type { GroupId, OrderId } from './battle'
 import { WAR_MAGES } from './content/lore'
 import type { TroopId } from './content/troops'
 import type { Settlement } from './economy'
-import { takeLand } from './holding'
+import { PLAYER, takeLand } from './holding'
 import { ARMY_PACE, legHoursFor } from './journey'
 import { temperDeeds } from './lordlife'
 import type { Party } from './party'
@@ -622,8 +622,10 @@ export function tickBands(
   // Дружина без лорда никому не служит и воевать ей не за что: павший
   // владетель уводит своих людей с карты, иначе по миру копятся ничьи войска.
   const living = new Set(lords.map((lord) => lord.id))
+  // Войско игрока стоит на карте на тех же правах, что и чужое (этап 84, Ка5):
+  // его не ведёт кубик, его ведут приказы, — но живёт и ходит он тем же тактом.
   const standing = bands.filter(
-    (band) => living.has(band.lordId) || band.lordId.startsWith('crown:'),
+    (band) => living.has(band.lordId) || band.lordId.startsWith('crown:') || band.lordId === PLAYER,
   )
 
   // У всякого, кто держит землю, есть дружина: и у нового лорда, которого
@@ -1016,7 +1018,8 @@ export function tickBands(
       CAMPAIGN_CHANCE * (day === null ? 1 : CAMPAIGN_SEASON[seasonOf(day)]),
     )
     generator = afterStir
-    if (goal.type === 'muster' && stirs) {
+    // Своё войско само в поход не выходит: у него есть тот, кто отдаёт приказы.
+    if (goal.type === 'muster' && stirs && band.lordId !== PLAYER) {
       const [chosen, afterChoice] = chooseGoal(
         world,
         { ...politics, lords, wars },

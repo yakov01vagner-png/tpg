@@ -4,6 +4,7 @@ import type { Battle } from './battle'
 import { startSway } from './brother'
 import type { OrderSway } from './brother'
 import type { Brotherhood } from './brotherhood'
+import type { Campaign, Dispatch } from './campaign'
 import type { Captive } from './captive'
 import type { ChainProgress } from './chain'
 import type { Character } from './character'
@@ -325,6 +326,13 @@ export interface GameState {
   readonly congress?: Congress | null
   /** Чем кончались съезды: для летописи века. */
   readonly congresses?: readonly CongressRecord[]
+  /**
+   * Кампания (этап 84): против кого воюем и зачем. Фронты и снабжение не
+   * хранятся — они считаются из того, где стоят твои части.
+   */
+  readonly campaign?: Campaign | null
+  /** Донесения, которые ещё идут: весть от войска приходит не в тот же день. */
+  readonly dispatches?: readonly Dispatch[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -425,6 +433,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     rumours: [],
     congress: null,
     congresses: [],
+    campaign: null,
+    dispatches: [],
     factions: {},
     spellcraft: {},
     weather: [],

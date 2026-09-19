@@ -15,6 +15,24 @@ import {
 } from './battle'
 import { type OrderSway, brothersAt, startSway, swayOf, tickOrders } from './brother'
 import { type Brotherhood, canFound, charterById, ownCharterFeels } from './brotherhood'
+import {
+  type Campaign,
+  type CampaignAim,
+  type Dispatch,
+  type HostOrder,
+  SUPPLY,
+  aimDef,
+  aimFor,
+  campaignOf,
+  campaignReport,
+  dispatchDelay,
+  dispatchesOf,
+  frontsOf,
+  hostById,
+  hostsOf,
+  orderDef,
+  supplyOf,
+} from './campaign'
 import { type Captive, LORD_CAPTURE_CHANCE, captiveFrom, fateOutcome } from './captive'
 import type { IntrigueKind } from './castle'
 import {
@@ -661,7 +679,7 @@ import {
   wildAt,
 } from './wild'
 import { iceBound, isHarbour, lanesFrom } from './world/lanes'
-import { kingdomOf, regionOf, roadsFrom } from './world/queries'
+import { kingdomOf, neighbourSettlements, regionOf, roadsFrom } from './world/queries'
 import { fordShut } from './world/rivers'
 import type { World } from './world/types'
 import { TERRAIN_LABELS, isSettlement, isSite } from './world/types'
@@ -872,6 +890,16 @@ export type Command =
       readonly secret?: SecretId
       readonly guarantor?: string
     }
+  /** Кампания (этап 84): цель войны, свои части и приказы им. */
+  | { readonly type: 'setCampaign'; readonly against: string; readonly aim?: CampaignAim }
+  | { readonly type: 'formHost'; readonly troop: TroopId; readonly count: number }
+  | {
+      readonly type: 'orderHost'
+      readonly hostId: string
+      readonly order: HostOrder
+      readonly targetId?: string
+    }
+  | { readonly type: 'recallHost'; readonly hostId: string }
   /** Съезд корон (этап 83): созвать, купить голос. */
   | {
       readonly type: 'callCongress'
@@ -1310,6 +1338,14 @@ export function applyCommand(
         ...(command.secret ? { secret: command.secret } : {}),
         ...(command.guarantor ? { guarantor: command.guarantor } : {}),
       })
+    case 'setCampaign':
+      return setCampaign(state, command.against, command.aim)
+    case 'formHost':
+      return formHost(state, command.troop, command.count)
+    case 'orderHost':
+      return orderHost(state, command.hostId, command.order, command.targetId)
+    case 'recallHost':
+      return recallHost(state, command.hostId)
     case 'callCongress':
       return callCongress(state, command.question, command.about)
     case 'buyVote':
@@ -5838,10 +5874,10 @@ function crownSelf(state: GameState): CommandResult {
   draft.renown += 5
   seeDeed(draft, 'takeFief')
   advance(draft, hours(24 * CORONATION.days))
+  const missed = plan.absent.length > 0 ? ` Не приехали: ${plan.absent.join(', ')}.` : ''
   notice(
     draft,
-    `Венчание: ${styleOf(state)}. Приехали — ${plan.guests.join(', ') || 'никто'}.` +
-      (plan.absent.length > 0 ? ` Не приехали: ${plan.absent.join(', ')}.` : ''),
+    `Венчание: ${styleOf(state)}. Приехали — ${plan.guests.join(', ') || 'никто'}.${missed}`,
     'world',
   )
   return close(draft)
@@ -9145,6 +9181,8 @@ interface Draft {
   rumours: readonly { against: string; untilDay: number }[]
   congress: Congress | null
   congresses: readonly CongressRecord[]
+  campaign: Campaign | null
+  dispatches: readonly Dispatch[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9231,6 +9269,8 @@ function open(state: GameState): Draft {
     rumours: state.rumours ?? [],
     congress: state.congress ?? null,
     congresses: state.congresses ?? [],
+    campaign: state.campaign ?? null,
+    dispatches: state.dispatches ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9370,6 +9410,9 @@ function close(draft: Draft): CommandResult {
       draft.politics = march.politics
       draft.rng = march.rng
       draft.events.push(...bandNews(draft.base, draft.locationId, march.events))
+      // Что сделали твои части, ты узнаёшь не сразу (этап 84, Ка5): весть идёт
+      // столько, сколько идёт гонец. Тем же считается и счёт кампании (Ка6).
+      ownDispatches(draft, march.events)
     }
 
     // Позванная погода держится считанные сутки и уходит сама (этап 60, А3).
@@ -9515,6 +9558,8 @@ function close(draft: Draft): CommandResult {
       }
     }
 
+    // Войско ест каждый день, а донесения идут своим ходом (этап 84, Ка3 и Ка5).
+    tickCampaign(draft, daysPassed)
     // Съезд собирается в назначенный день (этап 83, Е4).
     holdCongress(draft)
     // Соглядатаев берут за руку, а слухи стихают (этап 82, С4 и С6).
@@ -9627,6 +9672,8 @@ function close(draft: Draft): CommandResult {
     rumours: draft.rumours,
     congress: draft.congress,
     congresses: draft.congresses,
+    campaign: draft.campaign,
+    dispatches: draft.dispatches,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -9893,6 +9940,155 @@ function warNews(
  * уплачено. Решение связывает и тех, кто был против, — потому оно и дороже
  * договора: нарушить его значит пойти против всех сразу.
  */
+/**
+ * Кампания за прошедшие сутки (этап 84, Ка3, Ка5 и Ка6).
+ *
+ * Войско ест: своя земля кормит из амбаров, чужая — только если с неё берут, и
+ * округа это помнит. Голодное войско теряет дух и людей. Донесения приходят с
+ * запозданием — столько, сколько идёт весть от того места до тебя.
+ */
+/**
+ * Донесения от своих частей (этап 84, Ка5 и Ка6).
+ *
+ * Взятое место, разорённая округа, проигранная стычка — всё это случилось там,
+ * где стоит часть, а узнаёшь ты об этом тогда, когда доедет гонец. Заодно здесь
+ * же ведётся счёт кампании: что взято и сколько своих потеряно.
+ */
+function ownDispatches(draft: Draft, events: readonly BandEvent[]): void {
+  const mine = new Set(draft.bands.filter((one) => one.lordId === PLAYER).map((one) => one.id))
+  if (mine.size === 0) return
+  const day = dayOf(draft.time)
+  const waiting = [...dispatchesOf(draft)]
+  const campaign = campaignOf(draft)
+  let taken = campaign?.taken ?? 0
+  let lost = campaign?.lost ?? 0
+  const name = (id: string) => draft.base.world.locations[id]?.name ?? 'место'
+
+  for (const event of events) {
+    if (event.type === 'bandTook' && mine.has(event.bandId)) {
+      taken += 1
+      waiting.push({
+        day: day + dispatchDelay(draft.base.world, event.locationId, draft.locationId),
+        text: `Донесение: ${name(event.locationId)} взято твоими людьми.`,
+      })
+      continue
+    }
+    if (event.type === 'bandRaid' && mine.has(event.bandId)) {
+      waiting.push({
+        day: day + dispatchDelay(draft.base.world, event.locationId, draft.locationId),
+        text: `Донесение: округа ${name(event.locationId)} разорена, уведено ${event.lost}.`,
+      })
+      continue
+    }
+    if (event.type === 'bandClash') {
+      const won = mine.has(event.winner) || event.winner === PLAYER
+      const beaten = event.loser === PLAYER
+      if (!won && !beaten) continue
+      if (beaten) lost += event.fallen
+      waiting.push({
+        day: day + dispatchDelay(draft.base.world, event.locationId, draft.locationId),
+        text: won
+          ? `Донесение: твои побили чужих у ${name(event.locationId)}; полегло ${event.fallen}.`
+          : `Донесение: твоя часть разбита у ${name(event.locationId)}; потеряно ${event.fallen}.`,
+      })
+    }
+  }
+  if (waiting.length !== dispatchesOf(draft).length) draft.dispatches = waiting
+  if (campaign && (taken !== campaign.taken || lost !== campaign.lost)) {
+    draft.campaign = { ...campaign, taken, lost }
+  }
+}
+
+function tickCampaign(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+
+  // 1. Донесения, которым срок дойти.
+  const waiting = dispatchesOf(draft)
+  if (waiting.length > 0) {
+    const arrived = waiting.filter((one) => one.day <= day)
+    if (arrived.length > 0) {
+      draft.dispatches = waiting.filter((one) => one.day > day)
+      for (const one of arrived) notice(draft, one.text, 'war')
+    }
+  }
+
+  // 2. Итог кампании: война кончилась — кончилась и она. Считается прежде
+  // снабжения: кампания кончается и у того, у кого войска на карте нет.
+  const done = campaignOf(draft)
+  if (done && !atWar(draft.politics, PLAYER, done.against)) {
+    const report = campaignReport(draft.base, done, day)
+    draft.campaign = null
+    notice(draft, `Кампания кончена. ${report.says}`, 'war')
+  }
+
+  const hosts = hostsOf(draft)
+  if (hosts.length === 0) return
+
+  // 3. Снабжение.
+  let places = draft.settlements
+  const fedBands: Band[] = []
+  for (const host of hosts) {
+    const supply = supplyOf(draft.base, draft.base.world, host, day)
+    const eats = supply.needs * days
+    if (supply.kind === 'depot' && supply.fromId) {
+      const depot = places[supply.fromId]
+      if (depot) {
+        places = {
+          ...places,
+          [supply.fromId]: {
+            ...depot,
+            stock: { ...depot.stock, grain: Math.max(0, depot.stock.grain - eats) },
+          },
+        }
+      }
+      fedBands.push(host)
+      continue
+    }
+    if (supply.kind === 'forage' && supply.fromId) {
+      const here = places[supply.fromId]
+      if (here) {
+        places = {
+          ...places,
+          [supply.fromId]: {
+            ...here,
+            stock: { ...here.stock, grain: Math.max(0, here.stock.grain - eats) },
+            banditry: Math.min(1, here.banditry + SUPPLY.forageBanditry * days),
+          },
+        }
+        draft.reputation = withPlaceRep(draft.reputation, supply.fromId, SUPPLY.forageMood * days)
+      }
+      fedBands.push(host)
+      continue
+    }
+    // Нечего есть: дух и люди.
+    const size = bandSize(host)
+    const lost = Math.max(1, Math.round(size * SUPPLY.hungryLoss * days))
+    const units: Record<string, number> = { ...host.units }
+    let left = lost
+    for (const troop of Object.keys(units) as TroopId[]) {
+      const had = units[troop] ?? 0
+      const takes = Math.min(had, left)
+      units[troop] = had - takes
+      left -= takes
+      if (left <= 0) break
+    }
+    fedBands.push({
+      ...host,
+      units,
+      morale: Math.max(0, host.morale - SUPPLY.hungryMorale * days),
+    })
+    notice(draft, `Войску нечего есть: ${lost - left} человек ушло, дух падает.`, 'war')
+  }
+  draft.settlements = places
+  if (fedBands.length > 0) {
+    const byId = new Map(fedBands.map((one) => [one.id, one]))
+    draft.bands = draft.bands.map((one) => byId.get(one.id) ?? one)
+  }
+  // Части без людей на карте не стоят.
+  draft.bands = draft.bands.filter((one) => one.lordId !== PLAYER || bandSize(one) > 0)
+}
+
 function holdCongress(draft: Draft): void {
   const congress = draft.congress
   if (!congress) return
@@ -10153,6 +10349,148 @@ function treatyKindOf(errand: EmbassyErrand): TreatyKind | null {
   if (errand === 'passage') return 'passage'
   if (errand === 'mediation') return 'peace'
   return null
+}
+
+/**
+ * Объявить цель кампании (этап 84, Ка1).
+ *
+ * У войны должна быть цель, и она должна быть видна: без неё войско ходит по
+ * карте, а война не кончается ничем. По умолчанию цель выводится из повода
+ * (этап 65), но выбрать можно и другую.
+ */
+function setCampaign(state: GameState, against: string, aim?: CampaignAim): CommandResult {
+  if (!atWar(state.politics, PLAYER, against)) {
+    return fail('requirements', 'С этой короной ты не воюешь.')
+  }
+  const day = dayOf(state.time)
+  const chosen = aim ?? aimFor(state, against)
+  const draft = open(state)
+  draft.campaign = {
+    against,
+    aim: chosen,
+    sinceDay: day,
+    taken: 0,
+    lost: 0,
+  }
+  advance(draft, hours(2))
+  notice(
+    draft,
+    `Кампания против ${kingdomName(state, against)}: ${aimDef(chosen).label}. ${aimDef(chosen).about}`,
+    'war',
+  )
+  return close(draft)
+}
+
+/**
+ * Отделить часть войска (этап 84, Ка5).
+ *
+ * Ты водишь не отряд, а войско: люди из своего отряда становятся частью, которая
+ * стоит на карте сама и слушает приказы. Дальше она живёт тем же тактом, что и
+ * чужие дружины (этап 29).
+ */
+function formHost(state: GameState, troop: TroopId, count: number): CommandResult {
+  if (!state.realm) return fail('requirements', 'Войско водит держава.')
+  if (!Number.isInteger(count) || count <= 0) return fail('invalid', 'Сколько именно?')
+  const have = state.party.units[troop] ?? 0
+  if (have < count) return fail('requirements', `Столько людей у тебя нет: ${have}.`)
+  const day = dayOf(state.time)
+
+  const draft = open(state)
+  draft.party = {
+    ...draft.party,
+    units: { ...draft.party.units, [troop]: have - count },
+  }
+  const id = `band:${PLAYER}:${day}:${hostsOf(draft).length + 1}`
+  draft.bands = [
+    ...draft.bands,
+    {
+      id,
+      lordId: PLAYER,
+      kingdomId: PLAYER,
+      units: { [troop]: count },
+      morale: draft.party.morale,
+      locationId: state.locationId,
+      travel: null,
+      goal: { type: 'muster' },
+      siegeDays: 0,
+    },
+  ]
+  advance(draft, hours(4))
+  notice(
+    draft,
+    `Отделена часть: ${count} ${TROOPS[troop].label.toLowerCase()}. Ждёт приказа.`,
+    'war',
+  )
+  return close(draft)
+}
+
+/**
+ * Приказать части (этап 84, Ка5).
+ *
+ * Приказ — это цель на карте, а не движение: часть сама пойдёт туда дорогами и
+ * своим шагом, и донесение о том, что вышло, придёт не в тот же день.
+ */
+function orderHost(
+  state: GameState,
+  hostId: string,
+  order: HostOrder,
+  targetId?: string,
+): CommandResult {
+  const host = hostById(state, hostId)
+  if (!host) return fail('invalid', 'Такой части у тебя нет.')
+  const target = targetId ?? host.locationId
+  if (order !== 'hold' && order !== 'home' && !state.settlements[target]) {
+    return fail('invalid', 'Такого места нет.')
+  }
+  const draft = open(state)
+  const goal =
+    order === 'advance'
+      ? ({ type: 'raid', targetId: target } as const)
+      : order === 'siege'
+        ? ({ type: 'siege', targetId: target } as const)
+        : order === 'forage'
+          ? ({ type: 'defend', targetId: host.locationId } as const)
+          : order === 'home'
+            ? ({ type: 'home', targetId: mineNearest(draft, host.locationId) } as const)
+            : ({ type: 'muster' } as const)
+  draft.bands = draft.bands.map((one) => (one.id === hostId ? { ...one, goal } : one))
+  advance(draft, hours(2))
+  const where = state.world.locations[target]?.name ?? 'место'
+  notice(
+    draft,
+    `Приказ части: ${orderDef(order).label}${order === 'advance' || order === 'siege' ? ` — ${where}` : ''}.`,
+    'war',
+  )
+  return close(draft)
+}
+
+/** Куда отводить: к ближайшему своему месту. */
+function mineNearest(draft: Draft, from: string): string {
+  const mine = holdingsOf(draft.settlements, PLAYER)
+  if (mine.length === 0) return from
+  const near = neighbourSettlements(draft.base.world, from, 8)
+  const found = near.find((one) => mine.some((place) => place.locationId === one.id))
+  return found?.id ?? mine[0]?.locationId ?? from
+}
+
+/** Свести часть обратно в отряд: это можно там, где ты сам. */
+function recallHost(state: GameState, hostId: string): CommandResult {
+  const host = hostById(state, hostId)
+  if (!host) return fail('invalid', 'Такой части у тебя нет.')
+  if (host.locationId !== state.locationId || host.travel !== null) {
+    return fail('unavailableHere', 'Свести можно ту часть, которая стоит там, где ты.')
+  }
+  const draft = open(state)
+  let units = draft.party.units
+  for (const [troop, count] of Object.entries(host.units)) {
+    if (!count) continue
+    units = { ...units, [troop]: (units[troop as TroopId] ?? 0) + count }
+  }
+  draft.party = { ...draft.party, units }
+  draft.bands = draft.bands.filter((one) => one.id !== hostId)
+  advance(draft, hours(3))
+  notice(draft, 'Часть сведена в отряд.', 'war')
+  return close(draft)
 }
 
 /**
@@ -10691,10 +11029,11 @@ function realmLife(draft: Draft, days: number): void {
   const year = Math.floor(day / DAYS_PER_YEAR)
   if (year === Math.floor((day - days) / DAYS_PER_YEAR)) return
   const report = realmYear(draft.base, day)
+  const grumble =
+    report.unhappy.length > 0 ? ` Недовольны: ${report.unhappy.slice(0, 3).join(', ')}.` : ''
   notice(
     draft,
-    `Год державы: приход ${report.income}, расход ${report.spent}. ${report.says}` +
-      (report.unhappy.length > 0 ? ` Недовольны: ${report.unhappy.slice(0, 3).join(', ')}.` : ''),
+    `Год державы: приход ${report.income}, расход ${report.spent}. ${report.says}${grumble}`,
     'world',
   )
 }

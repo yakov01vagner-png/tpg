@@ -135,10 +135,9 @@ export function treatyWords(world: World, treaty: Treaty, day: number): string {
         ? 'срок вышел'
         : `ещё ${Math.round((treaty.untilDay - day) / 365)} лет`
   const witness = treaty.guarantor ? `, свидетель — ${nameOf(treaty.guarantor)}` : ''
-  const secret =
-    treaty.secret && treaty.secret.known
-      ? `; тайная статья раскрыта: ${secretDef(treaty.secret.id).label}`
-      : ''
+  const secret = treaty.secret?.known
+    ? `; тайная статья раскрыта: ${secretDef(treaty.secret.id).label}`
+    : ''
   return `${def.label}: ${nameOf(treaty.a)} и ${nameOf(treaty.b)}, ${term}${witness}${secret}`
 }
 
