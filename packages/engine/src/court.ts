@@ -14,7 +14,19 @@ import type { Lord } from './war'
  * Дела не лежат в состоянии: они выводятся из земли, вассалов и дня. В
  * состоянии только то, когда суд был в последний раз (`courtDay`).
  */
-export type CourtChoice = 'first' | 'second' | 'split' | 'peasants' | 'lord' | 'grant' | 'refuse'
+export type CourtChoice =
+  | 'first'
+  | 'second'
+  | 'split'
+  | 'peasants'
+  | 'lord'
+  | 'grant'
+  | 'refuse'
+  /**
+   * Откуп (этап 76, З2): спор решается в пользу того, кто платит. Быстро,
+   * выгодно и помнится всеми — в том числе теми, кто не платил.
+   */
+  | 'ransom'
 
 export interface CourtCase {
   readonly id: string
@@ -73,6 +85,11 @@ export function courtCase(state: GameState): CourtCase | null {
         { id: 'first', label: `Отдать ${first.name}`, hint: 'один благодарен, другой обижен' },
         { id: 'second', label: `Отдать ${second.name}`, hint: 'один благодарен, другой обижен' },
         { id: 'split', label: 'Разделить пополам', hint: 'оба недовольны, но никто не враг' },
+        {
+          id: 'ransom',
+          label: 'Отдать тому, кто заплатит',
+          hint: 'серебро в казну; оба запомнят, как ты судишь',
+        },
       ],
     }
   }

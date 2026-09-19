@@ -36,6 +36,7 @@ import { EMPTY_PARTY } from './party'
 import type { Plague } from './plague'
 import { arrivalQuarter } from './quarter'
 import type { Quest } from './quest'
+import type { Charters } from './realm'
 import type { Reputation } from './reputation'
 import { NO_REPUTATION } from './reputation'
 import type { Rng } from './rng'
@@ -268,6 +269,11 @@ export interface GameState {
    * у самого человека, а не у должности.
    */
   readonly offices?: Offices
+  /**
+   * Грамоты державы (этап 76): вольности городов и послабления местам. Лежит
+   * только то, что ты кому-то обещал; всё остальное выводится из мира.
+   */
+  readonly charters?: Charters
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -356,6 +362,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     lordDeeds: {},
     oaths: {},
     offices: {},
+    charters: {},
     factions: {},
     spellcraft: {},
     weather: [],

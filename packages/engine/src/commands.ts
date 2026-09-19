@@ -395,6 +395,18 @@ import {
 } from './quarter'
 import { describeQuest, isComplete, offersAt } from './quest'
 import type { Quest } from './quest'
+import {
+  type ArrearsAnswer,
+  type Charters,
+  RELIEF_DAYS,
+  arrearsDef,
+  charterOf,
+  debtors,
+  libertyOffers,
+  realmMood,
+  realmYear,
+  takeAt,
+} from './realm'
 import { isShunned, lordRep, placeRep, priceFactor, withLordRep, withPlaceRep } from './reputation'
 import type { Reputation } from './reputation'
 import type { Rng } from './rng'
@@ -745,6 +757,13 @@ export type Command =
   | { readonly type: 'swearOath'; readonly lordId: string; readonly locationId: string }
   /** Созвать вассалов по присяге (этап 74, В3). */
   | { readonly type: 'summonVassals' }
+  /** Закон державы (этап 76): вольность городу и ответ недоимщику. */
+  | { readonly type: 'grantCharter'; readonly locationId: string }
+  | {
+      readonly type: 'answerArrears'
+      readonly locationId: string
+      readonly answer: ArrearsAnswer
+    }
   /** Двор (этап 75): назначить, отставить, послать с поручением. */
   | { readonly type: 'appoint'; readonly officeId: OfficeId; readonly holderId: string }
   | { readonly type: 'dismissOfficer'; readonly officeId: OfficeId }
@@ -1142,6 +1161,10 @@ export function applyCommand(
       return swearOath(state, command.lordId, command.locationId)
     case 'summonVassals':
       return summonVassals(state)
+    case 'grantCharter':
+      return grantCharter(state, command.locationId)
+    case 'answerArrears':
+      return answerArrears(state, command.locationId, command.answer)
     case 'appoint':
       return appoint(state, command.officeId, command.holderId)
     case 'dismissOfficer':
@@ -5223,8 +5246,15 @@ function judge(state: GameState, caseId: string, choice: CourtChoice): CommandRe
     case 'second': {
       const won = choice === 'first' ? first : second
       const lost = choice === 'first' ? second : first
-      if (won) shiftVassals(draft, 12, won.id)
-      if (lost) shiftVassals(draft, -10, lost.id)
+      if (won) {
+        shiftVassals(draft, 12, won.id)
+        draft.lordDeeds = withLordDeed(draft.lordDeeds, won.id, 'gifted')
+      }
+      if (lost) {
+        shiftVassals(draft, -10, lost.id)
+        // Проигравший помнит не число, а то, что его не услышали (этап 76, З2).
+        draft.lordDeeds = withLordDeed(draft.lordDeeds, lost.id, 'refused')
+      }
       notice(
         draft,
         `Межа отдана: ${won?.title ?? ''} ${won?.name ?? ''}. ${lost?.name ?? ''} ушёл молча.`,
@@ -5237,8 +5267,34 @@ function judge(state: GameState, caseId: string, choice: CourtChoice): CommandRe
       if (second) shiftVassals(draft, -3, second.id)
       notice(draft, 'Пустошь поделена пополам. Довольных нет, врагов тоже.', 'world')
       break
+    case 'ransom': {
+      // Откуп (этап 76, З2): платит тот, у кого больше людей, — ему и межа.
+      const richer = first && second ? (first.strength >= second.strength ? first : second) : first
+      const poorer = richer === first ? second : first
+      const price = Math.round((richer?.strength ?? 10) * 6)
+      addMoney(draft, price)
+      if (richer) {
+        shiftVassals(draft, 4, richer.id)
+        draft.lordDeeds = withLordDeed(draft.lordDeeds, richer.id, 'gifted')
+      }
+      if (poorer) {
+        shiftVassals(draft, -16, poorer.id)
+        draft.lordDeeds = withLordDeed(draft.lordDeeds, poorer.id, 'robbed')
+      }
+      // Так судят не только те, кто платил: об этом узнают все.
+      shiftVassals(draft, -4, null)
+      notice(
+        draft,
+        `Межа отдана тому, кто заплатил: ${price} в казну. ${poorer?.name ?? 'Второй'} ушёл, не поклонившись.`,
+        'world',
+      )
+      break
+    }
     case 'peasants':
-      if (first) shiftVassals(draft, -12, first.id)
+      if (first) {
+        shiftVassals(draft, -12, first.id)
+        draft.lordDeeds = withLordDeed(draft.lordDeeds, first.id, 'refused')
+      }
       if (current.locationId)
         draft.reputation = withPlaceRep(draft.reputation, current.locationId, 12)
       notice(draft, 'Ты взял сторону крестьян. Лорд поклонился и запомнил.', 'world')
@@ -5466,6 +5522,83 @@ function summonVassals(state: GameState): CommandResult {
   if (came === 0)
     notice(draft, 'Никто не пришёл. Это и есть цена присяги, которой не верят.', 'war')
   else notice(draft, `Собрано по присяге: ${came} человек.`, 'war')
+  return close(draft)
+}
+
+/**
+ * Дать городу вольность (этап 76, З4).
+ *
+ * Город платит разом и дальше живёт по договору: судит сам, держит свою стражу
+ * и отдаёт тебе меньше половины прежнего. Это не милость и не потеря — это
+ * обмен: деньги и спокойствие сейчас против подати потом.
+ */
+function grantCharter(state: GameState, locationId: string): CommandResult {
+  if (!state.realm) return fail('requirements', 'Вольности даёт держава, а не человек.')
+  const day = dayOf(state.time)
+  const offer = libertyOffers(state, day).find((one) => one.locationId === locationId)
+  if (!offer) return fail('invalid', 'Этот город вольности не просит.')
+  const draft = open(state)
+  addMoney(draft, offer.price)
+  draft.charters = {
+    ...draft.charters,
+    [locationId]: { kind: 'liberty', sinceDay: day, paid: offer.price },
+  }
+  draft.reputation = withPlaceRep(draft.reputation, locationId, 20)
+  // Знать вольностей не любит: город, который судит сам, — это суд, отнятый у
+  // них (этап 75, Д4 — партии это чувствуют).
+  shiftVassals(draft, -4, null)
+  advance(draft, hours(4))
+  const name = state.world.locations[locationId]?.name ?? 'город'
+  notice(draft, `${name} получил вольность: ${offer.price} в казну, и дальше по договору.`, 'world')
+  return close(draft)
+}
+
+/**
+ * Ответить недоимщику (этап 76, З3).
+ *
+ * Три ответа с разной ценой: взять силой — вернуть всё и остаться в памяти
+ * надолго; договориться — половина и послабление на полгода; простить — ничего
+ * и самое доброе имя. Числа маленькие, а помнят их дольше самих чисел.
+ */
+function answerArrears(state: GameState, locationId: string, answer: ArrearsAnswer): CommandResult {
+  const day = dayOf(state.time)
+  const debt = debtors(state, day).find((one) => one.locationId === locationId)
+  if (!debt) return fail('invalid', 'За этим местом недоимки нет.')
+  const settlement = state.settlements[locationId]
+  if (!settlement) return fail('invalid', 'Такого места нет.')
+  const def = arrearsDef(answer)
+
+  const draft = open(state)
+  const taken = Math.round(debt.owed * def.takes)
+  if (taken > 0) addMoney(draft, taken)
+  draft.reputation = withPlaceRep(draft.reputation, locationId, def.mood)
+  draft.settlements = {
+    ...draft.settlements,
+    [locationId]: {
+      ...settlement,
+      banditry: Math.max(0, Math.min(1, settlement.banditry + def.banditry)),
+    },
+  }
+  // Недоимку считают от того, когда место в последний раз видели: ответ — это и
+  // есть тот самый счёт (этап 61, В5).
+  draft.visits = { ...draft.visits, [locationId]: day }
+  if (answer === 'deal') {
+    draft.charters = {
+      ...draft.charters,
+      [locationId]: { kind: 'relief', sinceDay: day, untilDay: day + RELIEF_DAYS, paid: 0 },
+    }
+  }
+  advance(draft, hours(6))
+  const name = state.world.locations[locationId]?.name ?? 'место'
+  notice(
+    draft,
+    answer === 'force'
+      ? `${name}: недоимка взята силой — ${taken}. Это запомнят.`
+      : answer === 'deal'
+        ? `${name}: взято ${taken}, подать снижена на полгода.`
+        : `${name}: недоимка прощена. Об этом будут говорить.`,
+    'money',
+  )
   return close(draft)
 }
 
@@ -8509,6 +8642,7 @@ interface Draft {
   lordDeeds: Readonly<Record<string, readonly LordDeedId[]>>
   oaths: Readonly<Record<string, Oath>>
   offices: Offices
+  charters: Charters
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -8583,6 +8717,7 @@ function open(state: GameState): Draft {
     lordDeeds: state.lordDeeds ?? {},
     oaths: state.oaths ?? {},
     offices: state.offices ?? {},
+    charters: state.charters ?? {},
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -8867,6 +9002,8 @@ function close(draft: Draft): CommandResult {
       }
     }
 
+    // Закон державы ложится на людей (этап 76, З5) и подводит итог раз в год (З6).
+    realmLife(draft, daysPassed)
     // Свои люди возвращаются из поездок (этап 75, Д5): с серебром, с людьми,
     // с чужим словом или с тем, что на дорогах стало тише.
     returnOfficers(draft)
@@ -8952,6 +9089,7 @@ function close(draft: Draft): CommandResult {
     lordDeeds: draft.lordDeeds,
     oaths: draft.oaths,
     offices: draft.offices,
+    charters: draft.charters,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -9176,6 +9314,34 @@ function warNews(
  * чего посылали: серебро недоимок, поднятых людей, чужое слово или тишину на
  * дорогах. Пока он в дороге, его должность пуста — это и есть цена.
  */
+/**
+ * Закон державы в людях и год державы (этап 76, З5 и З6).
+ *
+ * Память мест ходит от того, как ты берёшь и что ты им дал: тяжёлая подать
+ * помнится, вольность помнится дольше. Раз в год — итог: сколько принесло,
+ * сколько съело и кто этим недоволен.
+ */
+function realmLife(draft: Draft, days: number): void {
+  const mine = holdingsOf(draft.settlements, PLAYER)
+  if (mine.length === 0 || days <= 0) return
+  const day = dayOf(draft.time)
+  for (const settlement of mine) {
+    const shift = realmMood(draft.base, settlement, day) * days
+    if (shift === 0) continue
+    draft.reputation = withPlaceRep(draft.reputation, settlement.locationId, shift)
+  }
+  // Год державы: итог подводится в тот же день, что и жатва.
+  const year = Math.floor(day / DAYS_PER_YEAR)
+  if (year === Math.floor((day - days) / DAYS_PER_YEAR)) return
+  const report = realmYear(draft.base, day)
+  notice(
+    draft,
+    `Год державы: приход ${report.income}, расход ${report.spent}. ${report.says}` +
+      (report.unhappy.length > 0 ? ` Недовольны: ${report.unhappy.slice(0, 3).join(', ')}.` : ''),
+    'world',
+  )
+}
+
 function returnOfficers(draft: Draft): void {
   const day = dayOf(draft.time)
   const offices = { ...draft.offices }
@@ -9351,7 +9517,11 @@ function collectHoldings(draft: Draft, days: number): void {
     // Сенешаль смотрит за управляющими (этап 75, Д1): при хорошем ворують вдвое
     // меньше, при негодном — как и прежде.
     const skim = skimOf(draft.base, settlement.locationId, day) * skimGuard(draft.base, day)
-    const collected = base * taxTake(law) * arrearsFactor(draft.base, settlement.locationId, day)
+    // Грамота меняет не закон, а то, что ты берёшь с этого места (этап 76, З4).
+    const collected =
+      base *
+      takeAt(draft.base, settlement.locationId, day) *
+      arrearsFactor(draft.base, settlement.locationId, day)
     const stolen = collected * skim
     if (stolen >= 1) {
       thieved += stolen
