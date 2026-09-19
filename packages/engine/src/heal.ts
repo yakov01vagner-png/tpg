@@ -1,6 +1,8 @@
 import {
+  AILMENTS,
   AILMENT_DEFS,
   type Ailment,
+  type AilmentCause,
   FESTER_HARM,
   FESTER_SLOW,
   HEALER_KINDS,
@@ -17,7 +19,8 @@ import {
 } from './content/heal'
 import type { Settlement } from './economy'
 import type { GameState } from './state'
-import type { World } from './world/types'
+import type { Season } from './time'
+import type { PlaceKind, Terrain, World } from './world/types'
 import type { Wound } from './wounds'
 
 /**
@@ -156,6 +159,67 @@ export function ailmentDef(ailment: Ailment) {
 /** Чем болеет отряд сейчас. */
 export function ailmentOf(state: Pick<GameState, 'ailment'>): Ailment | null {
   return state.ailment?.kind ?? null
+}
+
+/**
+ * Где и от чего берутся хвори (этап 73, Б6).
+ *
+ * Причина болезни — данные (`AILMENT_DEFS`), а логика только сверяет их с тем,
+ * где герой стоит. Пока хворей было три, причины лежали тремя ветками в
+ * `sicken`; на двенадцати ветки стали таблицей, а код — одной проверкой.
+ */
+export interface SickWhere {
+  /** В море и без свежей еды: со свежей цинги не бывает. */
+  readonly atSea: boolean
+  readonly terrain: Terrain | null
+  readonly archetype: PlaceKind | null
+  readonly season: Season
+  /** В пути, а не под крышей. */
+  readonly onRoad: boolean
+  /** В осаде или под мором. */
+  readonly besieged: boolean
+  /** Отряду нечего есть. */
+  readonly hungry: boolean
+  /** Тесный город без бани. */
+  readonly crowded: boolean
+  /** Ночует в глуши. */
+  readonly inWilds: boolean
+}
+
+export function causeHolds(cause: AilmentCause, where: SickWhere): boolean {
+  switch (cause.kind) {
+    case 'sea':
+      return where.atSea
+    case 'terrain':
+      return (
+        where.terrain === cause.terrain &&
+        (cause.season === undefined || cause.season === where.season)
+      )
+    case 'siege':
+      return where.besieged
+    case 'road':
+      return where.onRoad && where.season === cause.season
+    case 'hunger':
+      return where.hungry
+    case 'crowd':
+      return where.crowded
+    case 'place':
+      return where.archetype === cause.archetype
+    case 'wilds':
+      return where.inWilds
+  }
+}
+
+/** Чем здесь можно заболеть и с какой охотой. */
+export function ailmentsHere(where: SickWhere): readonly { ailment: Ailment; chance: number }[] {
+  return AILMENTS.filter((ailment) => causeHolds(AILMENT_DEFS[ailment].cause, where)).map(
+    (ailment) => ({ ailment, chance: AILMENT_DEFS[ailment].chance }),
+  )
+}
+
+/** Держится ли ещё причина той хвори, которой болеет герой. */
+export function ailmentHolds(ailment: Ailment, where: SickWhere): boolean {
+  return causeHolds(AILMENT_DEFS[ailment].cause, where)
 }
 
 /** Во сколько раз медленнее идут больные. */

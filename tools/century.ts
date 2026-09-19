@@ -10,12 +10,24 @@
  */
 import { musterBands, tickBands } from '../packages/engine/src/band'
 import type { Band } from '../packages/engine/src/band'
+import { startSway, tickOrders } from '../packages/engine/src/brother'
+import type { OrderSway } from '../packages/engine/src/brother'
+import { ORDERS } from '../packages/engine/src/content/orders'
 import { tickDiplomacy } from '../packages/engine/src/diplomacy'
 import { createSettlements, priceOf } from '../packages/engine/src/economy'
 import type { Settlement } from '../packages/engine/src/economy'
-import { foodSecurity, rollHarvest, tickDays } from '../packages/engine/src/life'
+import { LIFE, foodSecurity, rollHarvest, tickDays } from '../packages/engine/src/life'
+import { crownOf } from '../packages/engine/src/lordlife'
+import { merchantsAt } from '../packages/engine/src/merchant'
 import type { Plague } from '../packages/engine/src/plague'
 import { tickPlague } from '../packages/engine/src/plague'
+import {
+  crownPlan,
+  marketTowns,
+  orderAim,
+  tickTrade,
+  ventureOf,
+} from '../packages/engine/src/plans'
 import { createRng } from '../packages/engine/src/rng'
 import { tickSettling } from '../packages/engine/src/settle'
 import { createPolitics, isRebel, tickPolitics } from '../packages/engine/src/war'
@@ -91,6 +103,26 @@ interface Run {
   readonly failedHarvests: number
   readonly placesAtEnd: number
   readonly strainAvg: number
+  /** Этап 72: обозы купцов и то, что они делают с ценами. */
+  readonly caravans: number
+  readonly carried: number
+  readonly spreadStart: number
+  readonly spreadEnd: number
+  /** Этап 59: свары орденов и их вес к концу. */
+  readonly orderClashes: number
+  readonly swayAtEnd: OrderSway
+  /** Этап 64: лорды рождаются и умирают. */
+  readonly lordsDied: number
+  readonly oldestLord: number
+  readonly lordAgeAvg: number
+  /** Этап 65: за что воевали и чем кончилось. */
+  readonly casusKinds: ReadonlyMap<string, number>
+  readonly termKinds: ReadonlyMap<string, number>
+  /** Этап 60: чем были заняты архимаги. */
+  readonly deedDays: Readonly<Record<string, number>>
+  /** Этап 72: чего хотят к концу века. */
+  readonly crownWants: readonly string[]
+  readonly orderWants: readonly string[]
 }
 
 function population(settlements: Settlements): number {
@@ -194,10 +226,41 @@ function run(seed: number, years: number): Run {
   let leanYears = 0
   let failedHarvests = 0
   let plagues: readonly Plague[] = []
+  let sway: OrderSway = startSway()
+  let caravans = 0
+  let carried = 0
+  let orderClashes = 0
+  let lordsDied = 0
+  const casusKinds = new Map<string, number>()
+  const termKinds = new Map<string, number>()
+  const deedDays: Record<string, number> = {}
+
+  /**
+   * Перекос цен по всем обозам мира: разница между концами каждой купеческой
+   * дороги. Мера этапа 72 — если товар и правда возят, за век она не растёт.
+   */
+  const spreadOf = (places: Settlements): number => {
+    let total = 0
+    for (const townId of marketTowns(world, places)) {
+      for (const merchant of merchantsAt(world, places, townId)) {
+        const venture = ventureOf(world, places, merchant)
+        if (!venture) continue
+        const from = places[venture.fromId]
+        const to = places[venture.toId]
+        if (!from || !to) continue
+        total += Math.abs(priceOf(world, to, venture.good) - priceOf(world, from, venture.good))
+      }
+    }
+    return total
+  }
+  const spreadStart = spreadOf(settlements)
 
   const began = Date.now()
   for (let day = 1; day <= years * 365; day += 1) {
-    const life = tickDays(world, settlements, 1)
+    // Сутки считаются ровно как в игре, вместе с днём года: без него у мира нет
+    // ни зимы, ни жатвы — а прогон, в котором всегда весна, мерит не тот мир, в
+    // который играют. Обители в таком прогоне усыхали вдвое за два года.
+    const life = tickDays(world, settlements, 1, LIFE, day)
     settlements = life.settlements
     for (const event of life.events) {
       if (event.type === 'famine') {
@@ -221,6 +284,20 @@ function run(seed: number, years: number): Run {
       if (event.type === 'plagueBegan') outbreaks += 1
       else if (event.type === 'plagueDeaths') plagueDeaths += event.deaths
     }
+
+    // Обозы купцов (этап 72, Ч3): сами решают, когда идти, — раз в двадцать
+    // суток каждый.
+    const carts = tickTrade(world, settlements, day - 1, day)
+    settlements = carts.settlements
+    caravans += carts.moves.length
+    for (const move of carts.moves) carried += move.load
+
+    // Ордена живут и ссорятся без игрока (этап 59).
+    const chapter = tickOrders(world, settlements, sway, rng)
+    sway = chapter.sway
+    settlements = chapter.settlements
+    rng = chapter.rng
+    orderClashes += chapter.clashes.length
 
     if (day % 365 === 0) {
       const settled = tickSettling(world, settlements, day, rng)
@@ -276,8 +353,25 @@ function run(seed: number, years: number): Run {
         tributes += 1
         continue
       }
+      if (event.type === 'peaceTerms') {
+        termKinds.set(event.term, (termKinds.get(event.term) ?? 0) + 1)
+        continue
+      }
+      if (event.type === 'lordDied') {
+        lordsDied += 1
+        continue
+      }
+      if (event.type === 'archmageDeed') {
+        deedDays[event.deed] = (deedDays[event.deed] ?? 0) + 1
+        continue
+      }
       if (event.type === 'warDeclared') {
         warsDeclared += 1
+        // У мятежа повод свой: он и есть повод. Смешивать его с «без повода»
+        // значит прятать в отчёте два десятка войн.
+        const kind =
+          event.war.casus?.kind ?? (event.war.reason.startsWith('мятеж') ? 'мятеж' : 'без повода')
+        casusKinds.set(kind, (casusKinds.get(kind) ?? 0) + 1)
         warPairs.set(pairKey(event.war), (warPairs.get(pairKey(event.war)) ?? 0) + 1)
         seenWars.set(warKey(event.war), day)
       } else if (event.type === 'peace') {
@@ -285,9 +379,8 @@ function run(seed: number, years: number): Run {
         const started = seenWars.get(warKey(event.war))
         if (started !== undefined) longestWar = Math.max(longestWar, day - started)
         seenWars.delete(warKey(event.war))
-      } else if (event.type === 'raid') {
-        raids += 1
-        raidLosses += event.lost
+        // Набеги считаются по событиям дружин (`bandRaid`): в политике их нет
+        // с этапа 29 — разоряет войско, а не кубик.
       } else if (event.type === 'rebellion') {
         rebellions += 1
       }
@@ -396,6 +489,28 @@ function run(seed: number, years: number): Run {
       (sum, band) => sum + Object.values(band.units).reduce((a, b) => a + (b ?? 0), 0),
       0,
     ),
+    caravans,
+    carried,
+    spreadStart,
+    spreadEnd: spreadOf(settlements),
+    orderClashes,
+    swayAtEnd: sway,
+    lordsDied,
+    oldestLord: politics.lords.reduce((most, lord) => Math.max(most, lord.age ?? 0), 0),
+    lordAgeAvg:
+      politics.lords.reduce((sum, lord) => sum + (lord.age ?? 0), 0) /
+      Math.max(1, politics.lords.length),
+    casusKinds,
+    termKinds,
+    deedDays,
+    crownWants: Object.keys(world.kingdoms).map((id) => {
+      const plan = crownPlan(world, politics, settlements, id)
+      return `${world.kingdoms[id]?.name ?? id} (${crownOf(id).temper}) — ${plan.want}: ${plan.why}`
+    }),
+    orderWants: ORDERS.map((order) => {
+      const aim = orderAim(world, order, years * 365)
+      return `${order.name} — ${aim.want}: ${aim.why}`
+    }),
   }
 }
 
@@ -496,6 +611,45 @@ console.log(
   `Время счёта:    ${first.ms} мс на ${years} лет (${(first.ms / years).toFixed(1)} мс/год)`,
 )
 
+console.log(
+  `Лорды:          умерло своей смертью ${first.lordsDied}, к концу ${first.lordsAtEnd} ` +
+    `(средний возраст ${first.lordAgeAvg.toFixed(0)}, старшему ${first.oldestLord})`,
+)
+console.log(
+  `Ордена:         ${first.orderClashes} свар между братствами; вес к концу — ` +
+    `${Object.entries(first.swayAtEnd)
+      .sort((a, b) => b[1] - a[1])
+      .map(
+        ([id, value]) => `${ORDERS.find((one) => one.id === id)?.name ?? id} ${value.toFixed(0)}`,
+      )
+      .join(', ')}`,
+)
+console.log(
+  `Обозы купцов:   ${first.caravans} ходок, ${first.carried} мер свезено; ` +
+    `перекос цен ${first.spreadStart} → ${first.spreadEnd}`,
+)
+console.log(
+  `Дела архимагов: ${
+    Object.entries(first.deedDays)
+      .sort((a, b) => b[1] - a[1])
+      .map(([deed, count]) => `${deed} ${count}`)
+      .join(', ') || '—'
+  }`,
+)
+
+console.log('\nЗа что воевали:')
+for (const [kind, count] of [...first.casusKinds].sort((a, b) => b[1] - a[1])) {
+  console.log(`  ${kind.padEnd(16)} ${count} раз`)
+}
+console.log('Чем кончались войны:')
+for (const [term, count] of [...first.termKinds].sort((a, b) => b[1] - a[1])) {
+  console.log(`  ${term.padEnd(16)} ${count} раз`)
+}
+
+console.log('\nЧего хотят к концу века:')
+for (const line of first.crownWants) console.log(`  ${line}`)
+for (const line of first.orderWants) console.log(`  ${line}`)
+
 console.log(`\nЗемля по держателю (мест из ${Object.keys(world.locations).length}):`)
 for (const side of new Set([...first.landStart.keys(), ...first.landEnd.keys()])) {
   const name = world.kingdoms[side]?.name ?? side
@@ -525,10 +679,13 @@ for (const [archetype, row] of [...first.byArchetype].sort((a, b) => b[1].end - 
   )
 }
 
-console.log('\nПо десятилетиям:')
+console.log('\nПо десятилетиям (и годы пика и дна):')
 console.log('  год   население  живых  голодных  разбой  войн  мятежн.  зерно(дер/стол)')
 for (const s of first.snapshots) {
-  if (s.year % 10 !== 0) continue
+  // Пик и дно печатаются всегда, даже если пришлись на середину десятилетия:
+  // иначе в отчёте стоит число, которого в таблице не найти, и проверять его
+  // нечем.
+  if (s.year % 10 !== 0 && s.year !== first.peak.year && s.year !== first.trough.year) continue
   console.log(
     `  ${String(s.year).padStart(3)}  ${String(s.population).padStart(9)}  ${String(s.alive).padStart(5)}  ` +
       `${String(s.starving).padStart(8)}  ${s.banditry.toFixed(2).padStart(6)}  ${String(s.wars).padStart(4)}  ` +

@@ -6,7 +6,22 @@
  * Здесь повод становится вещью: он выводится из мира, его видно, и он решает,
  * чем война кончится.
  */
-export const CASUS_KINDS = ['march', 'raids', 'tribute', 'inherit', 'faith', 'ambition'] as const
+export const CASUS_KINDS = [
+  'march',
+  'raids',
+  'tribute',
+  'inherit',
+  'faith',
+  'ambition',
+  // Ещё шесть поводов (этап 73, Б6): столько же, сколько прежних, и все так же
+  // выводятся из мира, а не выбираются кубиком.
+  'rebel',
+  'relic',
+  'feud',
+  'famine',
+  'toll',
+  'throne',
+] as const
 export type CasusKind = (typeof CASUS_KINDS)[number]
 
 export interface CasusDef {
@@ -92,6 +107,48 @@ export const CASUS: readonly CasusDef[] = [
     says: 'Повода нет. Есть сила, и есть тот, кто слабее.',
     wants: ['land', 'tribute', 'nothing'],
     stubborn: 0.7,
+  },
+  {
+    kind: 'rebel',
+    label: 'укрывательство мятежника',
+    says: 'Наш изменник сидит на их земле, и его никто не гонит. Значит, он им нужен.',
+    wants: ['handover', 'tribute'],
+    stubborn: 1.1,
+  },
+  {
+    kind: 'relic',
+    label: 'святыня под чужой рукой',
+    says: 'Обитель, где лежат наши отцы, стоит на их земле. Этого не оставляют.',
+    wants: ['land', 'handover'],
+    stubborn: 1.5,
+  },
+  {
+    kind: 'feud',
+    label: 'давняя вражда',
+    says: 'С ними у нас счёт длиною в три колена. Повода не нужно — нужен срок.',
+    wants: ['land', 'tribute'],
+    stubborn: 1.5,
+  },
+  {
+    kind: 'famine',
+    label: 'голодный год',
+    says: 'У нас хлеба нет, а у них амбары полны. Купить нам не продали.',
+    wants: ['tribute', 'nothing'],
+    stubborn: 0.6,
+  },
+  {
+    kind: 'toll',
+    label: 'мыто на дороге',
+    says: 'Они берут с наших обозов столько, что возить стало незачем.',
+    wants: ['tribute', 'nothing'],
+    stubborn: 0.7,
+  },
+  {
+    kind: 'throne',
+    label: 'слабый государь',
+    says: 'За таким государем земля не держится. Лучше пусть держится за нами.',
+    wants: ['land', 'marriage'],
+    stubborn: 0.9,
   },
 ]
 

@@ -18,6 +18,21 @@ export interface RiteDef {
   readonly piety: number
   /** Нужен ли сан выше приходского: молебен служат везде, венчают не везде. */
   readonly needsBishop?: boolean
+  /**
+   * Что обряд даёт кроме благочестия (этап 73, Б6).
+   *
+   * До двенадцати обрядов это были три ветки `if` в команде: исповедь добавляла
+   * месту доброе слово, отпевание — духу отряду. На двенадцати обрядах ветки
+   * стали таблицей: обряд — данные, а команда их читает (правило 6).
+   */
+  readonly gives?: {
+    /** Духу отряда. */
+    readonly morale?: number
+    /** Доброго слова в месте. */
+    readonly place?: number
+    /** Славы. */
+    readonly renown?: number
+  }
 }
 
 export const RITES: readonly RiteDef[] = [
@@ -36,6 +51,7 @@ export const RITES: readonly RiteDef[] = [
     offering: 12,
     minutes: 60,
     piety: 8,
+    gives: { place: 4 },
   },
   {
     id: 'funeral',
@@ -44,6 +60,7 @@ export const RITES: readonly RiteDef[] = [
     offering: 25,
     minutes: 90,
     piety: 6,
+    gives: { morale: 8 },
   },
   {
     id: 'blessing',
@@ -53,6 +70,80 @@ export const RITES: readonly RiteDef[] = [
     minutes: 60,
     piety: 12,
     needsBishop: true,
+    gives: { place: 8, renown: 1 },
+  },
+  // Ещё восемь обрядов (этап 73, Б6): храм должен уметь больше, чем молебен и
+  // исповедь, — иначе вера в игре кончается на второй день.
+  {
+    id: 'naming',
+    label: 'Крещение',
+    description: 'Имя новорождённому при свидетелях. В малом месте на это сходятся все.',
+    offering: 10,
+    minutes: 90,
+    piety: 6,
+    gives: { place: 3 },
+  },
+  {
+    id: 'blessingArms',
+    label: 'Освящение оружия',
+    description: 'Клинки кладут на камень, и священник говорит над ними. Люди идут в бой веселее.',
+    offering: 18,
+    minutes: 60,
+    piety: 5,
+    gives: { morale: 6 },
+  },
+  {
+    id: 'vigil',
+    label: 'Ночное бдение',
+    description: 'Ночь на ногах, со свечой и без слов. Наутро голова пустая и тихая.',
+    offering: 6,
+    minutes: 480,
+    piety: 12,
+  },
+  {
+    id: 'penance',
+    label: 'Епитимья',
+    description: 'Не деньгами, а делом: поклоны, пост и работа при храме. Дорого не платой.',
+    offering: 0,
+    minutes: 600,
+    piety: 16,
+  },
+  {
+    id: 'oath',
+    label: 'Присяга на святыне',
+    description: 'Слово, данное при мощах. Такое помнят и те, кто его слышал, и тот, кто дал.',
+    offering: 20,
+    minutes: 60,
+    piety: 5,
+    gives: { renown: 1 },
+  },
+  {
+    id: 'consecration',
+    label: 'Освящение дома',
+    description: 'Обход с водой и дымом по всем углам: у дома появляется тот, к кому в нём ходят.',
+    offering: 45,
+    minutes: 120,
+    piety: 8,
+    gives: { place: 6 },
+  },
+  {
+    id: 'requiem',
+    label: 'Поминовение рода',
+    description: 'По всем, кто был до тебя, — с именами. В месте это замечают.',
+    offering: 30,
+    minutes: 120,
+    piety: 9,
+    gives: { place: 2 },
+  },
+  {
+    id: 'anointing',
+    label: 'Помазание на землю',
+    description: 'Владыка признаёт твоё право на землю вслух. Дороже всего и весит больше всего.',
+    offering: 140,
+    minutes: 120,
+    piety: 14,
+    needsBishop: true,
+    gives: { renown: 2, place: 4 },
   },
 ]
 

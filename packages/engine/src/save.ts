@@ -1,4 +1,6 @@
 import { musterBands } from './band'
+import { startSway } from './brother'
+import { PLAIN_LAW } from './content/estate'
 import { NO_FAMILY, START_AGE, birthDayFor } from './dynasty'
 import { createSettlements, initialStock, recruitPool } from './economy'
 import type { Settlement } from './economy'
@@ -300,6 +302,86 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
    * состоит — вступить он может и сам, там, где орден стоит.
    */
   20: (data) => ({ ...data, guild: data.guild ?? null }),
+  /**
+   * v21 → v22: вся глубина версии 0.6 (этапы 49–72).
+   *
+   * Тридцать полей появились за версию, и до сих пор каждое читалось через
+   * `?? по умолчанию`: сейв 0.5 работал, но состояние в нём было неполным, и
+   * всякий новый читатель обязан был помнить про «а если поля нет». Здесь они
+   * дописываются разом, как в новорождённой игре, — кроме двух мест, где
+   * честнее не молчание, а прямое решение.
+   *
+   * Первое — знание мира: с этапа 55 герой знает не всю карту, а то, где был.
+   * Отнимать это у старого героя нельзя — он по этой карте ходил, — поэтому
+   * ему записываются все провинции его мира.
+   *
+   * Второе — люди, дом и летопись: их не выдумывают. Дома у него нет (купит),
+   * колен в летописи нет (его колено — первое), память купцов и лордов пуста
+   * (в его мире их ещё не было). Семья остаётся та, что была, — с версии 0.4 у
+   * неё есть место в сейве.
+   */
+  21: (data) => {
+    const world = (data.world ?? {}) as Record<string, unknown>
+    const provinces = Object.keys((world.provinces ?? {}) as Record<string, unknown>)
+    const character = (data.character ?? {}) as Record<string, unknown>
+    const family = (character.family ?? NO_FAMILY) as Record<string, unknown>
+    return {
+      ...data,
+      character: {
+        ...character,
+        family: {
+          ...NO_FAMILY,
+          ...family,
+          children: family.children ?? [],
+        },
+      },
+      // Где он стоит внутри места: квартал считается при входе, а старый герой
+      // стоит посреди места, как и стоял.
+      quarter: data.quarter ?? null,
+      knowledge: data.knowledge ?? { provinces },
+      // Люди, которые теперь помнят: у старого героя с ними ещё не было дел.
+      dealings: data.dealings ?? {},
+      talked: data.talked ?? {},
+      lordDeeds: data.lordDeeds ?? {},
+      factions: data.factions ?? {},
+      visits: data.visits ?? {},
+      // Ремесло, вера, книги и ученик.
+      craft: data.craft ?? {},
+      cech: data.cech ?? null,
+      piety: data.piety ?? 0,
+      books: data.books ?? {},
+      upbringing: data.upbringing ?? {},
+      student: data.student ?? null,
+      // Дом, владение и летопись рода.
+      home: data.home ?? null,
+      law: data.law ?? PLAIN_LAW,
+      pleas: data.pleas ?? {},
+      works: data.works ?? {},
+      house: data.house ?? [],
+      marks: data.marks ?? {},
+      goal: data.goal ?? null,
+      milestones: data.milestones ?? [],
+      // Слава, стыд и павшие.
+      fame: data.fame ?? {},
+      shames: data.shames ?? [],
+      fallen: data.fallen ?? [],
+      // Война, осада и пленные.
+      captives: data.captives ?? [],
+      // Ордена, чары и глушь.
+      orderSway: data.orderSway ?? startSway(),
+      interdicts: data.interdicts ?? [],
+      brotherhood: data.brotherhood ?? null,
+      spellcraft: data.spellcraft ?? {},
+      weather: data.weather ?? [],
+      artifacts: data.artifacts ?? [],
+      wilds: data.wilds ?? {},
+      // Хворь, зелья и увечья.
+      potions: data.potions ?? {},
+      ailment: data.ailment ?? null,
+      maims: data.maims ?? [],
+      cleansed: data.cleansed ?? null,
+    }
+  },
 }
 
 export type LoadResult =

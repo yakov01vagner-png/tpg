@@ -12,9 +12,12 @@ import {
   type PeaceTermKind,
 } from './content/casus'
 import type { Settlement } from './economy'
+import { foodSecurity } from './life'
+import { crownOf } from './lordlife'
 import type { Rng } from './rng'
 import { nextInt } from './rng'
 import type { Politics, War } from './war'
+import { pairOf } from './war'
 import type { World } from './world/types'
 
 /**
@@ -34,6 +37,13 @@ function hashOf(text: string): number {
   }
   return hash >>> 0
 }
+
+/** Ниже этого отношения война не нуждается в поводе: он уже есть. */
+const FEUD_DEEP = -60
+
+/** Ниже этой сытости земля голодает, выше — кормится. */
+const HUNGRY_LAND = 0.5
+const FED_LAND = 0.7
 
 export interface Casus {
   readonly kind: CasusKind
@@ -141,7 +151,35 @@ export function casusFor(
   const owed = politics.tributes.find((one) => one.from === b && one.to === a)
   if (owed) return [{ kind: 'tribute' }, rng]
 
-  // 2. Спорная марка: провинция, где сидят оба, — и чужих там больше.
+  // 2. Укрывательство мятежника: наш изменник сидит там, где у них земля.
+  //    Раньше спорной марки: земля мятежника считается землёй его короны, и
+  //    провинция с ним выглядела бы спорной — повод нашёлся бы, но не тот.
+  const sheltered = politics.lords.find((lord) => {
+    if (lord.kingdomId !== null) return false
+    if (lord.id.split(':')[1] !== a) return false
+    const seat = Object.values(settlements).find(
+      (one) => one.owner === lord.id && one.population > 0,
+    )
+    const provinceId = seat ? world.locations[seat.locationId]?.provinceId : undefined
+    return provinceId !== undefined && heldIn(world, settlements, provinceId, b) > 0
+  })
+  if (sheltered) return [{ kind: 'rebel' }, rng]
+
+  // 3. Святыня под чужой рукой: обитель на их земле в провинции, где сидим и
+  //    мы. Тоже раньше спорной марки, и по той же причине: провинция с их
+  //    обителью и так спорная, но спор в ней не о меже, а об обители.
+  for (const province of Object.values(world.provinces)) {
+    if (heldIn(world, settlements, province.id, a) <= 0) continue
+    const holy = province.locationIds.find((id) => {
+      const place = world.locations[id]
+      const settlement = settlements[id]
+      if (!place || !settlement || settlement.population <= 0) return false
+      return place.archetype === 'monastery' && sideOf(settlement.owner) === b
+    })
+    if (holy) return [{ kind: 'relic', provinceId: province.id }, rng]
+  }
+
+  // 4. Спорная марка: провинция, где сидят оба, — и чужих там больше.
   const contested: string[] = []
   for (const province of Object.values(world.provinces)) {
     const mine = heldIn(world, settlements, province.id, a)
@@ -154,7 +192,7 @@ export function casusFor(
     if (provinceId) return [{ kind: 'march', provinceId }, afterPick]
   }
 
-  // 3. Наследство: земля короны `b`, которую держит человек без сюзерена, —
+  // 5. Наследство: земля короны `b`, которую держит человек без сюзерена, —
   //    на такую всегда найдётся тот, кто помнит родство.
   const orphan = Object.values(settlements).find((one) => {
     if (one.population <= 0 || !one.owner) return false
@@ -167,15 +205,41 @@ export function casusFor(
     return [{ kind: 'inherit', ...(province ? { provinceId: province } : {}) }, rng]
   }
 
-  // 4. Набеги без ответа: так бывает там, где есть общая граница — дорога из
+  // 6. Давняя вражда: счёт, которому три колена. Повода к нему не нужно.
+  if ((politics.relations[pairOf(a, b)] ?? 0) <= FEUD_DEEP) return [{ kind: 'feud' }, rng]
+
+  // 7. Голодный год: у нас пусто, у них полно. Это тоже причина, и честная.
+  const hungerOf = (side: string): number => {
+    let sum = 0
+    let count = 0
+    for (const one of Object.values(settlements)) {
+      if (one.population <= 0 || sideOf(one.owner) !== side) continue
+      sum += foodSecurity(one)
+      count += 1
+    }
+    return count === 0 ? 1 : sum / count
+  }
+  if (hungerOf(a) < HUNGRY_LAND && hungerOf(b) > FED_LAND) return [{ kind: 'famine' }, rng]
+
+  // 8. Набеги без ответа: так бывает там, где есть общая граница — дорога из
   //    твоего места в чужое. Без дороги набегать не на кого.
   const border = touching(world, settlements, a, b)
   const [roll, afterRoll] = nextInt(rng, 0, 99)
   if (border && roll < 45) return [{ kind: 'raids' }, afterRoll]
-  // 5. Спор о вере — только между коронами разной веры: у каждой она своя по
+  // 9. Спор о вере — только между коронами разной веры: у каждой она своя по
   //    имени, и различаются они через одну.
   if (roll < 60 && (hashOf(a) & 1) !== (hashOf(b) & 1)) return [{ kind: 'faith' }, afterRoll]
-  // 6. Поводов нет — остаётся честолюбие. Оно не выдумка: это тоже причина.
+  // 10. Мыто на дороге: сосед с рынком на границе берёт с обозов столько, что
+  //     возить стало незачем.
+  if (border && roll < 75) {
+    const tollgate = Object.values(settlements).some(
+      (one) => one.population > 0 && sideOf(one.owner) === b && one.buildings.includes('market'),
+    )
+    if (tollgate) return [{ kind: 'toll' }, afterRoll]
+  }
+  // 11. Слабый государь: за таким земля не держится, и соседи это видят.
+  if (border && crownOf(b).temper === 'weak') return [{ kind: 'throne' }, afterRoll]
+  // 12. Поводов нет — остаётся честолюбие. Оно не выдумка: это тоже причина.
   return [{ kind: 'ambition' }, afterRoll]
 }
 

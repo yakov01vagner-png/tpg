@@ -77,13 +77,19 @@ export function bynameDef(id: string): BynameDef | null {
 export function bynameOf(state: Pick<GameState, 'fame'>): BynameDef | null {
   let best: BynameDef | null = null
   let strongest = 0
+  let demanded = 0
   for (const def of BYNAMES) {
     const value = fameOf(state, def.circle)
     const earned = def.needs >= 0 ? value >= def.needs : value <= def.needs
     if (!earned) continue
     const distance = Math.abs(value)
-    if (distance > strongest) {
+    // Из двух заслуженных берётся то, которое труднее заслужить: с этапа 73 у
+    // каждого круга есть и середина, и крайность, и «Смелый» не должен
+    // перебивать «Железную Руку» только потому, что стоит в списке раньше.
+    const asks = Math.abs(def.needs)
+    if (distance > strongest || (distance === strongest && asks > demanded)) {
       strongest = distance
+      demanded = asks
       best = def
     }
   }

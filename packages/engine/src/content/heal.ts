@@ -1,3 +1,5 @@
+import type { Season } from '../time'
+import type { PlaceKind, Terrain } from '../world/types'
 import type { GoodId } from './goods'
 
 /**
@@ -197,8 +199,47 @@ export const HERB_GOOD: GoodId = 'herbs'
  * понос в осаждённом городе. Болезнь — не урон, а условие: она держится, пока
  * держится причина.
  */
-export const AILMENTS = ['scurvy', 'fever', 'flux'] as const
+export const AILMENTS = [
+  'scurvy',
+  'fever',
+  'flux',
+  'chill',
+  'frostbite',
+  'sunstroke',
+  'weakness',
+  'nightblind',
+  'rash',
+  'lice',
+  'minerslung',
+  'worms',
+] as const
 export type Ailment = (typeof AILMENTS)[number]
+
+/**
+ * Отчего болеют (этап 73, Б6).
+ *
+ * Причина — данные, а не ветка в коде: у каждой хвори записано, где и от чего
+ * она берётся, и логика это только читает (правило 6). Пока причин было три,
+ * они лежали тремя `if`-ами в `sicken`; на двенадцати это перестало быть
+ * кодом — и стало таблицей.
+ */
+export type AilmentCause =
+  /** В море без свежей еды. */
+  | { readonly kind: 'sea' }
+  /** В такой земле — и, если сказано, в такое время года. */
+  | { readonly kind: 'terrain'; readonly terrain: Terrain; readonly season?: Season }
+  /** В осаде или под мором. */
+  | { readonly kind: 'siege' }
+  /** В пути в такое время года. */
+  | { readonly kind: 'road'; readonly season: Season }
+  /** Когда отряду нечего есть. */
+  | { readonly kind: 'hunger' }
+  /** В большом городе, где тесно и нет бани. */
+  | { readonly kind: 'crowd' }
+  /** В таком месте. */
+  | { readonly kind: 'place'; readonly archetype: PlaceKind }
+  /** На ночёвках в глуши. */
+  | { readonly kind: 'wilds' }
 
 export const AILMENT_DEFS: Record<
   Ailment,
@@ -211,6 +252,10 @@ export const AILMENT_DEFS: Record<
     readonly pace: number
     /** Чем лечится. */
     readonly cure: string
+    /** Отчего берётся. */
+    readonly cause: AilmentCause
+    /** Насколько вероятна за сутки, пока причина держится. */
+    readonly chance: number
   }
 > = {
   scurvy: {
@@ -219,6 +264,8 @@ export const AILMENT_DEFS: Record<
     morale: 1.5,
     pace: 1.15,
     cure: 'берег и свежая еда',
+    cause: { kind: 'sea' },
+    chance: 1 / 45,
   },
   fever: {
     label: 'лихорадка',
@@ -226,6 +273,8 @@ export const AILMENT_DEFS: Record<
     morale: 2,
     pace: 1.25,
     cure: 'отвар и сухая земля',
+    cause: { kind: 'terrain', terrain: 'marsh' },
+    chance: 0.03,
   },
   flux: {
     label: 'кровавый понос',
@@ -233,15 +282,107 @@ export const AILMENT_DEFS: Record<
     morale: 2.5,
     pace: 1.2,
     cure: 'чистая вода и покой',
+    cause: { kind: 'siege' },
+    chance: 0.02,
+  },
+  chill: {
+    label: 'простуда',
+    about: 'Осенний дождь за воротник, ночёвка в мокром — и к утру голос сел, а жар поднялся.',
+    morale: 1,
+    pace: 1.1,
+    cure: 'тёплый кров и три дня без дороги',
+    cause: { kind: 'road', season: 'autumn' },
+    chance: 0.02,
+  },
+  frostbite: {
+    label: 'обморожение',
+    about: 'Пальцы белеют и не слушаются. Зимняя дорога берёт своё с тех, кто по ней идёт.',
+    morale: 2,
+    pace: 1.3,
+    cure: 'зимовка под крышей',
+    cause: { kind: 'road', season: 'winter' },
+    chance: 0.02,
+  },
+  sunstroke: {
+    label: 'солнечный удар',
+    about: 'В пустыне летом голова не держит мыслей, а тело — воды.',
+    morale: 2,
+    pace: 1.25,
+    cure: 'тень, вода и другая земля',
+    cause: { kind: 'terrain', terrain: 'desert', season: 'summer' },
+    chance: 0.04,
+  },
+  weakness: {
+    label: 'голодная немочь',
+    about: 'Не болезнь даже, а то, что бывает с людьми, которым нечего есть третью неделю.',
+    morale: 3,
+    pace: 1.2,
+    cure: 'хлеб, и побольше',
+    cause: { kind: 'hunger' },
+    chance: 0.06,
+  },
+  nightblind: {
+    label: 'куриная слепота',
+    about:
+      'К сумеркам глаза гаснут. От долгой дороги на одной каше — и проходит от печени и зелени.',
+    morale: 1,
+    pace: 1.05,
+    cure: 'свежая еда',
+    cause: { kind: 'hunger' },
+    chance: 0.02,
+  },
+  rash: {
+    label: 'чесотка',
+    about: 'В городской тесноте и без бани к коже прилипает то, что потом сводят дёгтем.',
+    morale: 1,
+    pace: 1,
+    cure: 'баня и дёготь',
+    cause: { kind: 'crowd' },
+    chance: 0.02,
+  },
+  lice: {
+    label: 'вши',
+    about: 'Стыдно, зудит и переходит на всех сразу. В обозе и на постое — дело обычное.',
+    morale: 1.5,
+    pace: 1,
+    cure: 'баня и щёлок',
+    cause: { kind: 'crowd' },
+    chance: 0.03,
+  },
+  minerslung: {
+    label: 'рудничная немочь',
+    about: 'Каменная пыль садится в грудь: кашель сухой, а к сорока годам человека нет.',
+    morale: 1.5,
+    pace: 1.1,
+    cure: 'воздух и не под землю',
+    cause: { kind: 'place', archetype: 'mine' },
+    chance: 0.02,
+  },
+  worms: {
+    label: 'глисты',
+    about: 'Ночёвки в глуши, вода из лужи, мясо с костра. Ест за двоих и худеет.',
+    morale: 1,
+    pace: 1.05,
+    cure: 'полынь и горячая еда',
+    cause: { kind: 'wilds' },
+    chance: 0.02,
   },
 }
 
+/**
+ * Прежние пороги хворей — имена для тех, кто их уже знает.
+ *
+ * Числа живут теперь в самой таблице (`AILMENT_DEFS`): менять вероятность надо
+ * там, а здесь на неё только смотрят. Проверка этапа 64 меряет лихорадку именно
+ * этим именем.
+ */
+
 /** Сколько суток без зелени в море до цинги. */
-export const SCURVY_DAYS = 45
+export const SCURVY_DAYS = Math.round(1 / AILMENT_DEFS.scurvy.chance)
 /** Насколько вероятна лихорадка за сутки в топях. */
-export const FEVER_CHANCE = 0.03
+export const FEVER_CHANCE = AILMENT_DEFS.fever.chance
 /** Насколько вероятен понос за сутки в осаждённом или голодном месте. */
-export const FLUX_CHANCE = 0.02
+export const FLUX_CHANCE = AILMENT_DEFS.flux.chance
 
 /**
  * Карантин (Ж3).

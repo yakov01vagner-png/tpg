@@ -114,16 +114,7 @@ import { type CaptiveFate, SAP_DAYS, type SiegeMove } from './content/field'
 import { GOAL_CHANGE_FAME, MILESTONE_RENOWN } from './content/goals'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
-import {
-  AILMENT_DEFS,
-  type Ailment,
-  FEVER_CHANCE,
-  FLUX_CHANCE,
-  HERB_GOOD,
-  POTIONS,
-  POTIONS_BY_ID,
-  SCURVY_DAYS,
-} from './content/heal'
+import { AILMENT_DEFS, type Ailment, HERB_GOOD, POTIONS, POTIONS_BY_ID } from './content/heal'
 import { KIN_ASK, KIN_GIFT, UPBRINGING_MINUTES } from './content/home'
 import { TEMPER_LINES } from './content/lines'
 import { FACTION_FAVOUR, FACTION_SPITE, type FactionId, type LordDeedId } from './content/lords'
@@ -249,9 +240,12 @@ import {
 import { groundFor, orderNeeds, veteranShare, woundedOf } from './field'
 import { goalDef, goalOf, goalStepDone, milestoneKey } from './goal'
 import {
+  type SickWhere,
   ailmentDef,
+  ailmentHolds,
   ailmentOf,
   ailmentPace,
+  ailmentsHere,
   festerChance,
   festered,
   healerAt,
@@ -3931,20 +3925,18 @@ function gatherHerbs(state: GameState): CommandResult {
  * Болеют не от случая, а от места: цинга в море без зелени, лихорадка в топях,
  * кровавый понос там, где тесно и вода дурная. Болезнь держится, пока держится
  * причина, — и уходит сама, когда причина кончилась.
+ *
+ * С этапа 73 хворей двенадцать, и причина у каждой лежит в содержимом
+ * (`AILMENT_DEFS`): здесь только сборка того, где герой стоит, и один бросок.
  */
 function sicken(draft: Draft, days: number): void {
   if (days <= 0) return
-  const here = draft.base.world.locations[draft.locationId]
-  const atSea = draft.journey?.sea === true
+  const where = sickWhere(draft)
   const current = draft.ailment
   if (current) {
-    const cured =
-      (current.kind === 'scurvy' && !atSea) ||
-      (current.kind === 'fever' && here?.terrain !== 'marsh') ||
-      (current.kind === 'flux' &&
-        draft.siege === null &&
-        !plagueAt(draft.plagues, draft.locationId))
-    if (cured) {
+    // Хворь держится, пока держится причина: вышел из топей — и лихорадка
+    // отпускает сама, хоть и не в тот же день.
+    if (!ailmentHolds(current.kind, where)) {
       const [better, afterRoll] = rollChance(draft.rng, 0.12 * days)
       draft.rng = afterRoll
       if (better) {
@@ -3958,33 +3950,54 @@ function sicken(draft: Draft, days: number): void {
     draft.party = { ...draft.party, morale: Math.max(0, draft.party.morale - harm) }
     return
   }
-  // Цинга: столько суток в море без свежей еды.
-  if (atSea) {
-    const fresh = (draft.character.inventory.herbs ?? 0) + (draft.character.inventory.wine ?? 0)
-    const [sick, afterRoll] = rollChance(draft.rng, fresh > 0 ? 0 : days / SCURVY_DAYS)
-    draft.rng = afterRoll
-    if (sick) {
-      draft.ailment = { kind: 'scurvy', since: dayOf(draft.time) }
-      notice(draft, `${AILMENT_DEFS.scurvy.about}`, 'war')
-      return
-    }
+  // Чем здесь можно заболеть — говорит таблица (этап 73, Б6): двенадцать
+  // хворей, у каждой своя причина, и все они читаются одинаково. Бросок один на
+  // все разом: по броску на хворь — это двенадцать бросков в сутки ради одного
+  // события в месяц.
+  const risks = ailmentsHere(where)
+  if (risks.length === 0) return
+  let none = 1
+  for (const risk of risks) none *= (1 - risk.chance) ** days
+  const [sick, afterRoll] = rollChance(draft.rng, 1 - none)
+  draft.rng = afterRoll
+  if (!sick) return
+  const total = risks.reduce((sum, risk) => sum + risk.chance, 0)
+  const [roll, afterPick] = nextFloat(draft.rng)
+  draft.rng = afterPick
+  let edge = roll * total
+  for (const risk of risks) {
+    edge -= risk.chance
+    if (edge > 0) continue
+    draft.ailment = { kind: risk.ailment, since: dayOf(draft.time) }
+    notice(draft, AILMENT_DEFS[risk.ailment].about, 'war')
+    return
   }
-  if (here?.terrain === 'marsh') {
-    const [sick, afterRoll] = rollChance(draft.rng, FEVER_CHANCE * days)
-    draft.rng = afterRoll
-    if (sick) {
-      draft.ailment = { kind: 'fever', since: dayOf(draft.time) }
-      notice(draft, `${AILMENT_DEFS.fever.about}`, 'war')
-      return
-    }
-  }
-  if (draft.siege !== null || plagueAt(draft.plagues, draft.locationId)) {
-    const [sick, afterRoll] = rollChance(draft.rng, FLUX_CHANCE * days)
-    draft.rng = afterRoll
-    if (sick) {
-      draft.ailment = { kind: 'flux', since: dayOf(draft.time) }
-      notice(draft, `${AILMENT_DEFS.flux.about}`, 'war')
-    }
+}
+
+/**
+ * Где герой стоит — так, как это видят хвори.
+ *
+ * Одно место сборки на все двенадцать: иначе каждая новая хворь тянула бы за
+ * собой свою ветку в такте (этап 73, Б6).
+ */
+function sickWhere(draft: Draft): SickWhere {
+  const here = draft.base.world.locations[draft.locationId]
+  const settlement = draft.settlements[draft.locationId]
+  // Свежая еда в котомке — и цинги не будет: причина не в море, а в том, что в
+  // море нечего есть зелёного.
+  const fresh = (draft.character.inventory.herbs ?? 0) + (draft.character.inventory.wine ?? 0)
+  const people = settlement?.population ?? here?.population ?? 0
+  return {
+    atSea: draft.journey?.sea === true && fresh <= 0,
+    terrain: here?.terrain ?? null,
+    archetype: here?.archetype ?? null,
+    season: seasonOf(dayOf(draft.time)),
+    onRoad: draft.journey !== null,
+    besieged: draft.siege !== null || plagueAt(draft.plagues, draft.locationId) !== null,
+    hungry: draft.party.hungryDays >= 3,
+    crowded: people >= 12000 && !(settlement?.buildings.includes('bathhouse') ?? false),
+    // В глуши — значит не в месте: урочища и святыни живут вне списка мест.
+    inWilds: here === undefined,
   }
 }
 
@@ -7180,18 +7193,17 @@ function rite(state: GameState, riteId: string): CommandResult {
   const grace = graceFor(priest, def)
   draft.piety = Math.max(-100, Math.min(100, draft.piety + grace))
   notice(draft, `${priest.name}: «${welcome.says}» ${def.label}: на храм ${offering}.`)
-  // Исповедь снимает не только вину: место видит, что ты покаялся.
-  if (def.id === 'confession') {
-    draft.reputation = withPlaceRep(draft.reputation, state.locationId, 4)
+  // Чем отзывается обряд, сказано в нём самом (этап 73, Б6): исповедь снимает
+  // не только вину, отпевание поднимает дух, помазание — имя. Двенадцать
+  // обрядов — двенадцать строк в содержимом, а не двенадцать ветвей здесь.
+  const gives = def.gives
+  if (gives?.place) {
+    draft.reputation = withPlaceRep(draft.reputation, state.locationId, gives.place)
   }
-  // Отпевание — по тем, кто остался в поле: отряд наутро идёт ровнее.
-  if (def.id === 'funeral') {
-    draft.party = { ...draft.party, morale: Math.min(100, draft.party.morale + 8) }
+  if (gives?.morale) {
+    draft.party = { ...draft.party, morale: Math.min(100, draft.party.morale + gives.morale) }
   }
-  if (def.id === 'blessing') {
-    draft.reputation = withPlaceRep(draft.reputation, state.locationId, 8)
-    draft.renown += 1
-  }
+  if (gives?.renown) draft.renown += gives.renown
   practice(draft, 'concentration', 10)
   return close(draft)
 }

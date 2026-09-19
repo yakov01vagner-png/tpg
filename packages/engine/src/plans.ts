@@ -328,19 +328,33 @@ export function crownPlan(
   return said('rest', `${crown.title} ${crown.name} ничего не затевает: год без войны — тоже дело.`)
 }
 
+/**
+ * С кем у этой короны лучше всего.
+ *
+ * Близкие отношения разбираются своим счётом — по той же причине, что и у
+ * выбора врага: в мире, где все в ладу со всеми (а мир без войны к этому и
+ * приходит), «лучший сосед» иначе определялся бы порядком в списке королевств,
+ * и все восемь корон сватались бы к одной и той же.
+ */
 function bestRelation(
   world: World,
   politics: Politics,
   kingdomId: string,
   skip: readonly string[],
 ): string | null {
-  let best: string | null = null
+  const others = Object.keys(world.kingdoms).filter((id) => id !== kingdomId && !skip.includes(id))
   let most = Number.NEGATIVE_INFINITY
-  for (const id of Object.keys(world.kingdoms)) {
-    if (id === kingdomId || skip.includes(id)) continue
+  for (const id of others) {
     const value = politics.relations[pairOf(kingdomId, id)] ?? 0
-    if (value > most) {
-      most = value
+    if (value > most) most = value
+  }
+  const near = others.filter((id) => (politics.relations[pairOf(kingdomId, id)] ?? 0) >= most - TIE)
+  let best: string | null = null
+  let mark = Number.POSITIVE_INFINITY
+  for (const id of near) {
+    const own = mix(hashOf(`${kingdomId}|родство|${id}`))
+    if (own < mark) {
+      mark = own
       best = id
     }
   }
