@@ -28,6 +28,7 @@ import type { GameEvent, LogKind } from './events'
 import { describeEvent, kindOf } from './events'
 import type { Fame, Shame } from './fame'
 import type { Home } from './home'
+import type { LawId } from './inherit'
 import type { Journey } from './journey'
 import type { Knowledge } from './knowledge'
 import { startKnowledge } from './knowledge'
@@ -366,6 +367,8 @@ export interface GameState {
   readonly overtures?: readonly Overture[]
   /** Обещания корон: то, что можно сдержать и нарушить. */
   readonly pledges?: readonly Pledge[]
+  /** Закон о наследстве (этап 93): что станет с державой без тебя. */
+  readonly heirLaw?: LawId
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -479,6 +482,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     grievances: [],
     overtures: [],
     pledges: [],
+    heirLaw: 'eldest',
     factions: {},
     spellcraft: {},
     weather: [],

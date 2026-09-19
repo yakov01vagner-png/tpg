@@ -363,6 +363,18 @@ import {
   homesAt,
   kinOf,
 } from './home'
+import {
+  INHERIT,
+  type LawId,
+  claimantsOf,
+  heirLawOf,
+  heirUnder,
+  lawDef,
+  partitionOf,
+  regencyFor,
+  strifeOf,
+  successionView,
+} from './inherit'
 import type { Journey } from './journey'
 import { journeyLeft, legHoursFor, paceOf } from './journey'
 import type { Knowledge } from './knowledge'
@@ -1018,6 +1030,8 @@ export type Command =
   | { readonly type: 'openTalks'; readonly against: string; readonly mediator?: MediatorKind }
   | { readonly type: 'tableTerms'; readonly terms: readonly PeaceTerm[] }
   | { readonly type: 'endTalks' }
+  /** Наследство (этап 93): поставить закон. */
+  | { readonly type: 'setHeirLaw'; readonly law: LawId }
   /** Чужие послы (этап 91): принять, отказать, торговаться. */
   | { readonly type: 'answerOverture'; readonly id: string; readonly answer: AnswerId }
   /** Съезд корон (этап 83): созвать, купить голос. */
@@ -1504,6 +1518,8 @@ export function applyCommand(
       return endTalks(state)
     case 'answerOverture':
       return answerOverture(state, command.id, command.answer)
+    case 'setHeirLaw':
+      return setHeirLaw(state, command.law)
     case 'askLetter':
       return askLetter(state, command.against)
     case 'callCongress':
@@ -7885,6 +7901,9 @@ function retire(state: GameState): CommandResult {
       holdingsOf(draft.settlements, PLAYER).length,
     ),
   ]
+  // Отречение делит державу тем же законом, что и смерть (этап 93, Сл2):
+  // власть кончается одинаково, кто бы её ни передавал.
+  const divided = draft.realm ? divideRealm(draft, day) : null
   // Слава не наследуется целиком: сына знают по отцу вполовину.
   draft.renown = Math.floor(draft.renown / 2)
   // И слава по кругам тоже: круги помнят род, а не человека (этап 68).
@@ -7893,7 +7912,7 @@ function retire(state: GameState): CommandResult {
   draft.fame = halved
   notice(
     draft,
-    `Ты отошёл от дел. Теперь ты ${heir.name}, и всё, чему тебя учили, — при тебе. В летописи рода на одно колено больше.`,
+    `Ты отошёл от дел. Теперь ты ${heir.name}, и всё, чему тебя учили, — при тебе. В летописи рода на одно колено больше.${divided ? ` ${divided}` : ''}`,
     'people',
   )
   return close(draft)
@@ -9395,6 +9414,7 @@ interface Draft {
   grievances: readonly Grievance[]
   overtures: readonly Overture[]
   pledges: readonly Pledge[]
+  heirLaw: LawId
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9494,6 +9514,7 @@ function open(state: GameState): Draft {
     grievances: state.grievances ?? [],
     overtures: state.overtures ?? [],
     pledges: state.pledges ?? [],
+    heirLaw: state.heirLaw ?? 'eldest',
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9919,6 +9940,7 @@ function close(draft: Draft): CommandResult {
     grievances: draft.grievances,
     overtures: draft.overtures,
     pledges: draft.pledges,
+    heirLaw: draft.heirLaw,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -11787,6 +11809,32 @@ const COMPANY_BEAT = 10
 const NAVY_BEAT = 5
 
 /**
+ * Поставить закон о наследстве (этап 93, Сл2).
+ *
+ * Выбор делается заранее и стоит сразу: раздел радует знать и рвёт державу,
+ * первородство держит её целой и злит младших, единое наследство не делится
+ * вовсе — и держится только сильной рукой.
+ */
+function setHeirLaw(state: GameState, law: LawId): CommandResult {
+  if (!state.realm) return fail('requirements', 'Закон о наследстве ставит держава, а не человек.')
+  if (heirLawOf(state) === law) return fail('invalid', 'Такой закон и так стоит.')
+  const def = lawDef(law)
+
+  const draft = open(state)
+  advance(draft, hours(8))
+  draft.heirLaw = law
+  // Знать принимает закон по-своему: раздел ей по душе, неделимость — нет.
+  if (def.nobles !== 0 && vassalsOf(draft.base).length > 0) shiftVassals(draft, def.nobles, null)
+  const day = dayOf(draft.time)
+  notice(
+    draft,
+    `Закон о наследстве: ${def.label}. ${def.about} ${successionView({ ...draft.base, heirLaw: law }, day)}`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
  * Ответить чужому послу (этап 91, Ди1 и Ди2).
  *
  * Принять, отказать или торговаться. Согласие кладёт в мир то, о чём говорили,
@@ -13065,15 +13113,76 @@ function succeed(draft: Draft, day: number): void {
     return
   }
   const before = draft.character.name
+  // Что станет с державой, решает закон (этап 93): считается прежде, чем имя
+  // перейдёт, — по тому миру, который оставил отец.
+  const realm = draft.realm ? divideRealm(draft, day) : null
   draft.character = heirCharacter(draft.character, heir, day)
   draft.renown = Math.round(draft.renown / 4)
   draft.quests = []
   draft.party = { ...draft.party, morale: Math.max(30, draft.party.morale - 20) }
   notice(
     draft,
-    `${before} умирает. Имя и земли принимает ${heir.name} — славу придётся нажить заново.`,
+    `${before} умирает. Имя и земли принимает ${heir.name} — славу придётся нажить заново.${realm ? ` ${realm}` : ''}`,
   )
 }
+
+/**
+ * Раздел державы (этап 93, Сл2, Сл3 и Сл5).
+ *
+ * Земля уходит по закону: наследнику — его доля, остальным детям — их уделы, и
+ * уделы эти становятся чужой землёй, а не твоей. При малолетнем правит регент и
+ * берёт своё. Если у соперника довольно прав, своя знать расходится по
+ * сторонам — это смута, война внутри своего.
+ */
+function divideRealm(draft: Draft, day: number): string {
+  const plan = partitionOf(draft.base, day)
+  const heir = heirUnder(draft.base, day)
+  const words: string[] = [plan.says]
+  const mine = holdingsOf(draft.settlements, PLAYER)
+  // Уделы младших выходят из-под твоей руки: они теперь сами по себе.
+  let left = mine.length - plan.toHeir
+  if (left > 0) {
+    let places = draft.settlements
+    for (const one of [...mine].sort((a, b) => a.population - b.population)) {
+      if (left <= 0) break
+      const place = places[one.locationId]
+      if (!place) continue
+      places = { ...places, [one.locationId]: { ...place, owner: null } }
+      left -= 1
+    }
+    draft.settlements = places
+  }
+  if (heir) {
+    const regency = regencyFor(draft.base, heir, day)
+    if (regency) {
+      words.push(regency.says)
+      // Регент берёт своё с казны сразу: это видно по кошельку.
+      const skim = Math.round(draft.character.money * regency.skim)
+      if (skim > 0) addMoney(draft, -skim)
+      if (regency.kind !== 'faithful' && vassalsOf(draft.base).length > 0) {
+        shiftVassals(draft, REGENT_LOYALTY, null)
+      }
+    }
+  }
+  const strife = strifeOf(draft.base, day)
+  words.push(strife.says)
+  if (strife.vassals > 0) {
+    // Смута: часть вассалов уходит к сопернику, остальные шатаются.
+    const vassals = [...vassalsOf(draft.base)].sort((a, b) => a.loyalty - b.loyalty)
+    const leaving = new Set(vassals.slice(0, strife.vassals).map((one) => one.id))
+    draft.politics = {
+      ...draft.politics,
+      lords: draft.politics.lords.map((lord) =>
+        leaving.has(lord.id) ? { ...lord, kingdomId: null, loyalty: 0 } : lord,
+      ),
+    }
+    shiftVassals(draft, INHERIT.strifeLoyalty, null)
+  }
+  return words.join(' ')
+}
+
+/** Насколько нечестный регент роняет верность за время опеки. */
+const REGENT_LOYALTY = -6
 
 /** Мор слышно издалека: о нём говорят все, кого он миновал. */
 function plagueNews(
