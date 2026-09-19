@@ -12,6 +12,11 @@ export interface EquippedItem {
   readonly id: string
   /** Состояние 0..100. Изношенная вещь защищает хуже. */
   readonly condition: number
+  /**
+   * Клеймо: чья это работа, откуда и какова (этап 50). Есть только у вещей,
+   * сделанных руками, — купленная в лавке вещь ничья.
+   */
+  readonly mark?: { readonly maker: string; readonly place: string; readonly quality: number }
 }
 
 export type Equipment = Readonly<Partial<Record<SlotId, EquippedItem>>>

@@ -2,6 +2,8 @@ import {
   BUILDINGS,
   BUILDING_IDS,
   type BuildingId,
+  CECH_DUES,
+  CONTENT,
   type Command,
   type GameState,
   LIFE,
@@ -12,6 +14,7 @@ import {
   TROOP_IDS,
   VASSAL_SHARE,
   canApply,
+  cechAt,
   courtCase,
   dailyTax,
   dailyTolls,
@@ -29,6 +32,7 @@ import {
   loyaltyWord,
   ownOrder,
   rankLabel,
+  rankOfShifts,
   vassalsOf,
   warsOf,
 } from '@tpg/engine'
@@ -75,6 +79,8 @@ export function OwnSheet({ game }: { game: GameState }) {
       ) : null}
 
       <Affairs game={game} />
+
+      <CraftSection game={game} />
 
       <Section title={settlement && isOwnedByPlayer(settlement) ? 'Твоя земля' : 'Это место'}>
         {!settlement || !here ? <Empty text="Здесь нечем владеть." /> : null}
@@ -479,4 +485,64 @@ function Affairs({ game }: { game: GameState }) {
       ))}
     </Section>
   )
+}
+
+/**
+ * Ремесло (этап 50): цех города, свои ученики и то, чему выучился.
+ */
+function CraftSection({ game }: { game: GameState }) {
+  const cech = cechAt(game.world, game.settlements, game.locationId)
+  const workshop = game.enterprises.find(
+    (one) => one.kind === 'workshop' && one.locationId === game.locationId,
+  )
+  const learned = Object.entries(game.craft ?? {})
+    .map(([jobId, shifts]) => ({ jobId, shifts, rank: rankOfShifts(shifts) }))
+    .filter((one) => one.rank.id !== 'hand')
+    .sort((a, b) => b.shifts - a.shifts)
+  if (!cech && !workshop && learned.length === 0) return null
+  const member = game.cech
+  return (
+    <Section title="Ремесло" aside={member ? 'ты в цехе' : undefined}>
+      {learned.slice(0, 5).map((one) => (
+        <Row
+          key={one.jobId}
+          title={CONTENT.jobs[one.jobId]?.label ?? one.jobId}
+          subtitle={`${one.rank.label} · смен ${one.shifts}`}
+        />
+      ))}
+      {cech ? (
+        <Card
+          title={member?.locationId === game.locationId ? `${cech.label}: ты свой` : cech.label}
+          description={
+            member?.locationId === game.locationId
+              ? `Взнос ${CECH_DUES} в месяц. Работа мастера в городе — для своих.`
+              : `Без цеха к работе мастера здесь не встать. Вступный взнос ${CECH_DUES}.`
+          }
+          reason={reasonFor(
+            game,
+            member?.locationId === game.locationId ? { type: 'leaveCech' } : { type: 'joinCech' },
+          )}
+          onPress={() =>
+            dispatch(
+              member?.locationId === game.locationId ? { type: 'leaveCech' } : { type: 'joinCech' },
+            )
+          }
+        />
+      ) : null}
+      {workshop ? (
+        <Card
+          title={`Мастерская: учеников ${workshop.apprentices ?? 0}`}
+          description="Каждый прибавляет к обороту треть и примерно раз в месяц портит работу."
+          meta="взять ученика"
+          reason={reasonFor(game, { type: 'takeApprentice' })}
+          onPress={() => dispatch({ type: 'takeApprentice' })}
+        />
+      ) : null}
+    </Section>
+  )
+}
+
+function reasonFor(game: GameState, command: Command): string | undefined {
+  const check = canApply(game, command)
+  return check.ok ? undefined : check.message
 }

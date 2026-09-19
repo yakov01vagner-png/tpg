@@ -5,6 +5,7 @@ import type { ChainProgress } from './chain'
 import type { Character } from './character'
 import type { Companion } from './companion'
 import type { QuarterId } from './content/quarters'
+import type { CechMembership } from './craft'
 import type { Settlement } from './economy'
 import { createSettlements } from './economy'
 import type { Enterprise } from './enterprise'
@@ -112,6 +113,13 @@ export interface GameState {
    */
   readonly dealings?: Readonly<Record<string, Dealing>>
   /**
+   * Выучка в ремёслах (этап 50): сколько смен отстоял на каждой работе. Из
+   * этого числа выводится ступень — подёнщик, подмастерье, работник, мастер.
+   */
+  readonly craft?: Readonly<Record<string, number>>
+  /** Членство в цехе города (этап 50): одно на героя, как и орден. */
+  readonly cech?: CechMembership | null
+  /**
    * Отведённый мор (этап 41): где и до какого дня чары держат смерть вполовину.
    * Необязательно — сейвы до 0.5 чар не знают.
    */
@@ -178,6 +186,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     quarter: arrivalQuarter({ world, settlements }, locationId),
     knowledge: startKnowledge(world, locationId),
     dealings: {},
+    craft: {},
+    cech: null,
     party: EMPTY_PARTY,
     ship: null,
     guild: null,

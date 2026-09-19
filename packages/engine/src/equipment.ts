@@ -1,6 +1,7 @@
 import type { Character } from './character'
 import type { Equipment, EquippedItem, ItemDef, SlotId } from './content/equipment'
 import { HORSE_CARRY, ITEMS, ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
+import { qualityFactor } from './craft'
 import type { LocationArchetype } from './world/types'
 
 export type { Equipment, EquippedItem }
@@ -46,7 +47,9 @@ export function gearBonus(character: Character): GearBonus {
     const worn = character.equipment[slot]
     const item = worn ? ITEMS_BY_ID[worn.id] : null
     if (!worn || !item) continue
-    const factor = effectiveness(character, item, worn.condition)
+    // Качество работы (этап 50): грубая вещь бьёт хуже, работа мастера — лучше.
+    const factor =
+      effectiveness(character, item, worn.condition) * qualityFactor(worn.mark?.quality)
     attack += item.attack * factor
     defense += item.defense * factor
     weight += item.weight
@@ -71,8 +74,10 @@ export function withItem(equipment: Equipment, slot: SlotId, item: EquippedItem 
 }
 
 /** Починка: сколько стоит вернуть вещь в порядок. */
-export function repairCost(item: ItemDef, condition: number): number {
-  return Math.max(1, Math.round((item.price * (100 - condition)) / 100 / 2))
+export function repairCost(item: ItemDef, condition: number, quality?: number): number {
+  // Хорошую вещь чинить дороже: и работы больше, и портить жалко.
+  const worth = item.price * qualityFactor(quality)
+  return Math.max(1, Math.round((worth * (100 - condition)) / 100 / 2))
 }
 
 /** Что продают в этом месте: по виду места и, для именных вещей, по короне. */

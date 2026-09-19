@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createCharacter } from '../src/character'
 import { applyCommand } from '../src/commands'
 import { QUARTERS, QUARTER_POPULATION } from '../src/content/quarters'
+import { masterHires, masterOf } from '../src/craft'
 import { coursesAt, jobsAt } from '../src/place'
 import { activityOf, quarterFor, quartersOf, walkMinutes } from '../src/quarter'
 import { schoolAt } from '../src/school'
@@ -85,7 +86,8 @@ describe('У2: люди по кварталам', () => {
 
   it('не в том квартале — отказ с указанием, куда идти; в том — дело идёт', () => {
     const state = at(capital)
-    const job = jobsAt(state)[0]
+    // Работа, на которую берут: у иных хозяев свой разбор (этап 50).
+    const job = jobsAt(state).find((one) => masterHires(masterOf(capital, one), 0, 0).hires)
     expect(job).toBeDefined()
     if (!job) return
     const wrong = applyCommand(state, { type: 'work', jobId: job.id })

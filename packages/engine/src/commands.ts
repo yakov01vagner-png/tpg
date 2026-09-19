@@ -34,6 +34,7 @@ import { BUILDINGS } from './content/buildings'
 import type { ChainDef } from './content/chains'
 import type { CompanionDef, DeedId } from './content/companions'
 import { COMPANIONS, DEED_LABELS, TEMPERS } from './content/companions'
+import { CRAFT_MASTERS } from './content/craft'
 import type { SlotId } from './content/equipment'
 import { ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
 import type { GoodId } from './content/goods'
@@ -50,6 +51,24 @@ import type { TroopId } from './content/troops'
 import { TROOPS, TROOP_FOOD_PER_DAY } from './content/troops'
 import type { CourtChoice } from './court'
 import { courtCase, vassalsOf } from './court'
+import type { CechMembership } from './craft'
+import {
+  CECH_DUES,
+  CECH_DUES_DAYS,
+  cechAt,
+  cechLets,
+  cechPay,
+  experienceOf,
+  masterHires,
+  masterOf,
+  masterPay,
+  masterPraises,
+  masterTeaches,
+  qualityFrom,
+  qualityLabel,
+  rankOfShifts,
+  shiftsOf,
+} from './craft'
 import { tickDiplomacy } from './diplomacy'
 import {
   PRIME_AGE,
@@ -241,6 +260,11 @@ export type Command =
     }
   | { readonly type: 'takeOrder'; readonly merchantId: string }
   | { readonly type: 'askPrices'; readonly merchantId: string }
+  /** Цех города (этап 50): вступить и выйти. */
+  | { readonly type: 'joinCech' }
+  | { readonly type: 'leaveCech' }
+  /** Взять ученика в свою мастерскую (этап 50). */
+  | { readonly type: 'takeApprentice' }
   /** Уйти морем: своим судном, нанятым или попутным (этап 35). */
   | { readonly type: 'sail'; readonly toLocationId: string; readonly manner: Passage }
   /** Купить судно в порту, починить своё, продать своё. */
@@ -466,6 +490,12 @@ export function applyCommand(
       return takeOrder(state, command.merchantId)
     case 'askPrices':
       return askPrices(state, command.merchantId)
+    case 'joinCech':
+      return joinCech(state)
+    case 'leaveCech':
+      return leaveCech(state)
+    case 'takeApprentice':
+      return takeApprentice(state)
     case 'travel':
       return travel(state, command.toLocationId)
     case 'sail':
@@ -2211,13 +2241,27 @@ function craftItem(state: GameState, itemId: string): CommandResult {
   }
 
   const draft = open(state)
-  notice(draft, `Выковано: ${item.label.toLowerCase()}.`)
+  // Вещь выходит с клеймом (этап 50): чья работа, где сделана и какова.
+  const [roll, afterRoll] = nextFloat(draft.rng)
+  draft.rng = afterRoll
+  const rank = rankOfShifts(shiftsOf(state, 'forgeBlade') + shiftsOf(state, 'smithyHand'))
+  const quality = qualityFrom(skill, rank, roll)
+  const mark = {
+    maker: state.character.name,
+    place: here.name,
+    quality,
+  }
+  notice(draft, `Выковано: ${item.label.toLowerCase()} — ${qualityLabel(quality)}.`)
   advance(draft, hours(10))
   addFatigue(draft, 25)
   addGoods(draft, 'iron', -item.craft.iron)
   addGoods(draft, 'tools', -item.craft.tools)
   patch(draft, {
-    equipment: withItem(draft.character.equipment, item.slot, { id: item.id, condition: 100 }),
+    equipment: withItem(draft.character.equipment, item.slot, {
+      id: item.id,
+      condition: 100,
+      mark,
+    }),
   })
   practice(draft, 'engineering', 45)
   return close(draft)
@@ -2228,7 +2272,7 @@ function repairItem(state: GameState, slot: SlotId): CommandResult {
   const item = worn ? ITEMS_BY_ID[worn.id] : null
   if (!worn || !item) return fail('invalid', 'Тут нечего чинить.')
   if (worn.condition >= 100) return fail('invalid', 'Вещь и так цела.')
-  const cost = repairCost(item, worn.condition)
+  const cost = repairCost(item, worn.condition, worn.mark?.quality)
   if (state.character.money < cost) {
     return fail('noMoney', `Починка стоит ${cost}, есть ${state.character.money}.`)
   }
@@ -4013,16 +4057,155 @@ function work(state: GameState, jobId: string, content: Content): CommandResult 
     checkFatigue(state.character, job.fatigue)
   if (blocked) return blocked
 
+  // У работы есть хозяин (этап 50): он берёт или гонит, платит по-своему и
+  // по-своему учит. Но только там, где есть кому нанимать: в глуши работают
+  // сами на себя, и каменоломне всё равно, кто ты.
+  const shifts = shiftsOf(state, jobId)
+  const rank = rankOfShifts(shifts)
+  const hired = state.settlements[state.locationId] !== undefined
+  const master = hired ? masterOf(state.locationId, job) : null
+  if (master) {
+    const welcome = placeRep(state.reputation, state.locationId)
+    const hiring = masterHires(master, experienceOf(state), welcome)
+    if (!hiring.hires) {
+      return fail('requirements', `${master.name} (${craftMasterLabel(master)}): «${hiring.says}»`)
+    }
+  }
+  // И цех: выше подмастерья чужого к делу не поставят (этап 50, М6).
+  const cech = cechAt(state.world, state.settlements, state.locationId)
+  if (!cechLets(cech, state.cech ?? null, job, rank, state.locationId)) {
+    return fail(
+      'requirements',
+      `${cech?.label ?? 'Цех'} не пускает нецеховых к работе мастера. Вступай или иди подмастерьем.`,
+    )
+  }
+
   const draft = open(state)
   const efficiency = fatigueFactor(state.character.fatigue)
-  notice(draft, `Смена окончена: ${job.label.toLowerCase()}.`)
+  const pay = Math.max(
+    1,
+    Math.round(
+      job.pay *
+        rank.pay *
+        (master ? masterPay(master) : 1) *
+        cechPay(cech, state.cech ?? null, job, state.locationId),
+    ),
+  )
+  notice(draft, `Смена окончена: ${job.label.toLowerCase()} — ${rank.label}, ${pay}.`)
   advance(draft, job.durationMinutes)
-  addMoney(draft, job.pay)
+  addMoney(draft, pay)
   addFatigue(draft, job.fatigue)
+  const teaching = rank.practice * (master ? masterTeaches(master) : 1)
   for (const [skill, rawXp] of Object.entries(job.practice)) {
-    practice(draft, skill as SkillId, (rawXp ?? 0) * efficiency)
+    practice(draft, skill as SkillId, (rawXp ?? 0) * efficiency * teaching)
+  }
+  // Смена зачтена: из числа смен и растёт ступень.
+  draft.craft = { ...draft.craft, [jobId]: shifts + 1 }
+  const grown = rankOfShifts(shifts + 1)
+  if (grown.id !== rank.id) {
+    notice(
+      draft,
+      master
+        ? `${master.name}: «${masterPraises(master)}» Теперь ты ${grown.label}.`
+        : `Руки помнят: теперь ты ${grown.label}.`,
+    )
   }
   return close(draft)
+}
+
+function craftMasterLabel(master: ReturnType<typeof masterOf>): string {
+  return CRAFT_MASTERS[master.temper].label
+}
+
+/**
+ * Вступить в цех (этап 50, М6).
+ *
+ * Цех местный: он есть в ремесленном городе и кончается на его околице. Быть
+ * можно в одном — как и в ордене.
+ */
+function joinCech(state: GameState): CommandResult {
+  const cech = cechAt(state.world, state.settlements, state.locationId)
+  if (!cech) return fail('unavailableHere', 'Цеха здесь нет: ремесло тут домашнее.')
+  if (state.cech) {
+    return state.cech.locationId === state.locationId
+      ? fail('invalid', 'Ты уже в этом цехе.')
+      : fail('invalid', 'Ты состоишь в цехе другого города. В двух не бывают.')
+  }
+  if (state.character.money < CECH_DUES) {
+    return fail('noMoney', `Вступный взнос — ${CECH_DUES}.`)
+  }
+  const day = dayOf(state.time)
+  const draft = open(state)
+  addMoney(draft, -CECH_DUES)
+  advance(draft, hours(2))
+  draft.cech = {
+    locationId: state.locationId,
+    cechId: cech.id,
+    since: day,
+    paidUntil: day + CECH_DUES_DAYS,
+  }
+  notice(draft, `${cech.label} принял тебя. Взнос — ${CECH_DUES} раз в месяц.`)
+  return close(draft)
+}
+
+function leaveCech(state: GameState): CommandResult {
+  if (!state.cech) return fail('invalid', 'Ты ни в каком цехе не состоишь.')
+  const draft = open(state)
+  notice(draft, 'Ты вышел из цеха. Книгу закрыли без слов.')
+  draft.cech = null
+  return close(draft)
+}
+
+/**
+ * Взять ученика (этап 50, М3).
+ *
+ * Мастерская без людей — это вложенные деньги; с учениками это дело. Каждый
+ * прибавляет к обороту треть и портит работу примерно раз в месяц. Брать
+ * может тот, кто сам мастер: подёнщику учить нечему.
+ */
+const APPRENTICE_FEE = 120
+const APPRENTICE_LIMIT = 3
+
+function takeApprentice(state: GameState): CommandResult {
+  const workshop = state.enterprises.find(
+    (one) => one.kind === 'workshop' && one.locationId === state.locationId,
+  )
+  if (!workshop) return fail('unavailableHere', 'Здесь у тебя нет мастерской.')
+  const experience = experienceOf(state)
+  const rank = rankOfShifts(experience)
+  if (rank.id !== 'master') {
+    return fail('requirements', `Учить может мастер, а ты ${rank.label}. Смен всего ${experience}.`)
+  }
+  const apprentices = workshop.apprentices ?? 0
+  if (apprentices >= APPRENTICE_LIMIT) {
+    return fail('noRoom', 'Больше трёх учеников у верстака не поставишь.')
+  }
+  if (state.character.money < APPRENTICE_FEE) {
+    return fail('noMoney', `Ученика надо одеть и кормить: ${APPRENTICE_FEE}.`)
+  }
+  const draft = open(state)
+  addMoney(draft, -APPRENTICE_FEE)
+  advance(draft, hours(3))
+  draft.enterprises = draft.enterprises.map((one) =>
+    one.id === workshop.id ? { ...one, apprentices: apprentices + 1 } : one,
+  )
+  notice(draft, `Взят ученик: теперь их ${apprentices + 1}. Оборот прибавится, брака тоже.`)
+  return close(draft)
+}
+
+/** Взносы цеха: не платишь — вычёркивают. Считается сутками, как и в ордене. */
+function payCech(draft: Draft): void {
+  const member = draft.cech
+  if (!member) return
+  const today = dayOf(draft.time)
+  if (today < member.paidUntil) return
+  if (draft.character.money >= CECH_DUES) {
+    addMoney(draft, -CECH_DUES)
+    draft.cech = { ...member, paidUntil: today + CECH_DUES_DAYS }
+    return
+  }
+  notice(draft, 'Взнос в цех не уплачен: тебя вычеркнули из книги.')
+  draft.cech = null
 }
 
 function study(state: GameState, courseId: string, content: Content): CommandResult {
@@ -4293,6 +4476,8 @@ interface Draft {
   quarter: QuarterId | null
   knowledge: Knowledge | undefined
   dealings: Readonly<Record<string, Dealing>>
+  craft: Readonly<Record<string, number>>
+  cech: CechMembership | null
   battle: Battle | null
   politics: Politics
   /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
@@ -4333,6 +4518,8 @@ function open(state: GameState): Draft {
     quarter: state.quarter ?? null,
     knowledge: state.knowledge,
     dealings: state.dealings ?? {},
+    craft: state.craft ?? {},
+    cech: state.cech ?? null,
     battle: state.battle,
     politics: state.politics,
     world: state.world,
@@ -4485,6 +4672,10 @@ function close(draft: Draft): CommandResult {
           const where = draft.base.world.locations[event.locationId]?.name ?? 'в море'
           notice(draft, `Твоё судно не дошло до ${where}. Ни дела, ни корабля.`, 'trade')
         }
+        if (event.type === 'workshopSpoiled') {
+          const where = draft.base.world.locations[event.locationId]?.name ?? 'в мастерской'
+          notice(draft, `Ученик запорол работу в ${where}: убыток ${event.lost}.`, 'trade')
+        }
       }
     }
 
@@ -4537,6 +4728,8 @@ function close(draft: Draft): CommandResult {
     quarter: draft.quarter,
     ...(draft.knowledge ? { knowledge: draft.knowledge } : {}),
     dealings: draft.dealings,
+    craft: draft.craft,
+    cech: draft.cech,
     battle: draft.battle,
     politics: draft.politics,
     bands: draft.bands,
@@ -4722,6 +4915,7 @@ function payUpkeep(draft: Draft, days: number): void {
   collectHoldings(draft, days)
   paySailors(draft, days)
   payDues(draft)
+  payCech(draft)
   if (partySize(draft.party) === 0) return
 
   let unpaid = 0

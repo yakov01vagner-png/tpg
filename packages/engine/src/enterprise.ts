@@ -22,6 +22,9 @@ import { isSite } from './world/types'
  * другое — доход, который идёт без игрока, и потому требует человека: без
  * управляющего дело ведут вполсилы.
  */
+/** Как часто ученик портит работу: раз в месяц с небольшим на каждого. */
+const SPOIL_PER_APPRENTICE = 0.03
+
 export type EnterpriseKind = 'caravan' | 'workshop' | 'shipping'
 
 export interface Enterprise {
@@ -43,6 +46,11 @@ export interface Enterprise {
   readonly cargo: Readonly<Partial<Record<GoodId, number>>>
   /** Сколько принесло всего — чтобы игрок видел, окупилось ли. */
   readonly earned: number
+  /**
+   * Ученики в мастерской (этап 50, М3): каждый прибавляет к обороту, но брак
+   * у них чаще. Есть только у мастерских.
+   */
+  readonly apprentices?: number
   /**
    * Какое судно ходит этим делом (этап 36).
    *
@@ -93,6 +101,12 @@ export type EnterpriseEvent =
       readonly lost: number
     }
   | { readonly type: 'workshopIdle'; readonly id: string; readonly locationId: string }
+  | {
+      readonly type: 'workshopSpoiled'
+      readonly id: string
+      readonly locationId: string
+      readonly lost: number
+    }
   | {
       readonly type: 'shipRaided'
       readonly id: string
@@ -146,7 +160,29 @@ export function tickEnterprises(
       }
       // Чем дороже здесь готовое против сырья, тем выгоднее держать мастерскую.
       const margin = priceOf(world, place, 'tools') / Math.max(1, priceOf(world, place, 'iron'))
-      const gain = Math.round(enterprise.invested * WORKSHOP_RATE * hand * Math.min(2.5, margin))
+      // Ученики (этап 50): каждый прибавляет к обороту, но портит чаще.
+      const apprentices = enterprise.apprentices ?? 0
+      const gain = Math.round(
+        enterprise.invested *
+          WORKSHOP_RATE *
+          hand *
+          Math.min(2.5, margin) *
+          (1 + apprentices * 0.3),
+      )
+      const [spoiled, afterSpoil] = rollChance(generator, apprentices * SPOIL_PER_APPRENTICE)
+      generator = afterSpoil
+      if (spoiled) {
+        const lost = Math.round(gain * 1.5)
+        income -= lost
+        events.push({
+          type: 'workshopSpoiled',
+          id: enterprise.id,
+          locationId: enterprise.locationId,
+          lost,
+        })
+        next.push({ ...enterprise, earned: enterprise.earned - lost })
+        continue
+      }
       income += gain
       next.push({ ...enterprise, earned: enterprise.earned + gain })
       continue

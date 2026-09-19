@@ -1,6 +1,7 @@
 import {
   type AttributeId,
   CARAVAN_COST,
+  CRAFT_MASTERS,
   type Command,
   GOODS,
   type GameState,
@@ -18,7 +19,12 @@ import {
   formatWindowShort,
   isComplete,
   jobsAt,
+  masterOf,
+  masterPay,
+  nextCraftRank,
   offersAt,
+  rankOfShifts,
+  shiftsOf,
 } from '@tpg/engine'
 import { ScrollView, StyleSheet } from 'react-native'
 import { Icon } from '../art/icons'
@@ -53,13 +59,20 @@ export function EarnSheet({ game }: { game: GameState }) {
         <Section key={attribute} title={`Работа ${GROUP_TITLES[attribute]}`}>
           {group.map((job) => {
             const command: Command = { type: 'work', jobId: job.id }
+            // Ступень выучки и хозяин работы (этап 50): платят по ступени, а
+            // берут — по тому, что мастер о тебе видит.
+            const shifts = shiftsOf(game, job.id)
+            const rank = rankOfShifts(shifts)
+            const master = masterOf(game.locationId, job)
+            const ahead = nextCraftRank(shifts)
+            const pay = Math.round(job.pay * rank.pay * masterPay(master))
             return (
               <Card
                 key={job.id}
                 glyph={<Icon name={mainSkill(job.practice)} size={20} color={palette.dim} />}
                 title={job.label}
-                description={job.description}
-                meta={`${formatDuration(job.durationMinutes)} · +${job.pay}${job.window ? ` · ${formatWindowShort(job.window)}` : ''}`}
+                description={`${job.description}\n${master.name}, ${CRAFT_MASTERS[master.temper].label}. Ты ${rank.label}${ahead ? `, до ступени «${ahead.rank.label}» ещё ${ahead.left} смен` : ''}.`}
+                meta={`${formatDuration(job.durationMinutes)} · +${pay}${job.window ? ` · ${formatWindowShort(job.window)}` : ''}`}
                 reason={reasonFor(command)}
                 onPress={() => dispatch(command)}
               />

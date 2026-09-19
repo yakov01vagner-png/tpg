@@ -106,6 +106,10 @@ export function activityOf(command: Command): Activity | null {
     case 'craftItem':
     case 'repairItem':
     case 'foundWorkshop':
+    // Цех сидит в ремесленных рядах (этап 50).
+    case 'joinCech':
+    case 'leaveCech':
+    case 'takeApprentice':
       return 'craft'
     case 'hire':
     case 'recruitCompanion':

@@ -41,7 +41,9 @@ describe('работа', () => {
     const before = game()
     const after = ok(applyCommand(before, { type: 'work', jobId: 'unloadCarts' }))
 
-    expect(after.character.money).toBe(before.character.money + 12)
+    // Плата — базовая, помноженная на ступень и на нрав хозяина (этап 50).
+    expect(after.character.money).toBeGreaterThan(before.character.money)
+    expect(after.character.money).toBeLessThan(before.character.money + 20)
     expect(after.time).toBe(before.time + hours(8))
     expect(after.character.fatigue).toBe(35)
     expect(after.character.skills.hardLabour.xp).toBeGreaterThan(0)
