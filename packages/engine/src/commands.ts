@@ -111,6 +111,7 @@ import {
   type ShameId,
 } from './content/fame'
 import { type CaptiveFate, SAP_DAYS, type SiegeMove } from './content/field'
+import { GOAL_CHANGE_FAME, MILESTONE_RENOWN } from './content/goals'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import {
@@ -234,6 +235,7 @@ import {
 import type { GameEvent, LogKind } from './events'
 import { FAIR_TRADE_BONUS, fairAt, feastAt } from './fair'
 import {
+  ALL_CIRCLES,
   type Fame,
   type Shame,
   circleDef,
@@ -245,6 +247,7 @@ import {
   withDeed,
 } from './fame'
 import { groundFor, orderNeeds, veteranShare, woundedOf } from './field'
+import { goalDef, goalOf, goalStepDone, milestoneKey } from './goal'
 import {
   ailmentDef,
   ailmentOf,
@@ -611,6 +614,7 @@ export type Command =
   /** Встать лагерем там, где нет крыши. */
   | { readonly type: 'camp'; readonly manner?: CampManner }
   | { readonly type: 'hunt' }
+  | { readonly type: 'setGoal'; readonly goalId: string }
   | { readonly type: 'hireSinger'; readonly circle: Circle }
   | { readonly type: 'watchJesters' }
   | { readonly type: 'askFaction'; readonly kingdomId: string; readonly factionId: FactionId }
@@ -946,6 +950,8 @@ export function applyCommand(
       return camp(state, command.manner ?? 'sleep')
     case 'hunt':
       return hunt(state)
+    case 'setGoal':
+      return setGoal(state, command.goalId)
     case 'hireSinger':
       return hireSinger(state, command.circle)
     case 'watchJesters':
@@ -4322,6 +4328,61 @@ function shameOn(draft: Draft, id: ShameId): void {
   if (draft.shames.some((one) => one.id === id)) return
   draft.shames = [...draft.shames, { id, since: dayOf(draft.time), covered: 0 }]
   notice(draft, `${shameDef(id).says}`, 'people')
+}
+
+/**
+ * Выбрать или сменить цель жизни (этап 70, Ц1 и Ц6).
+ *
+ * Цель ничего не запрещает: она называет, ради чего всё это. Сменить её можно —
+ * но мир замечает: бросил меч ради книги — и говорить о тебе станут иначе.
+ */
+function setGoal(state: GameState, goalId: string): CommandResult {
+  const goal = goalDef(goalId)
+  if (!goal) return fail('unknownAction', 'Такой цели нет.')
+  if (state.goal === goalId) return fail('invalid', 'Ты и так идёшь к этому.')
+
+  const draft = open(state)
+  const before = goalOf(state)
+  draft.goal = goalId
+  advance(draft, hours(1))
+  if (before) {
+    // Смена цели — тоже поступок: круги, которым ты был нужен прежним, это
+    // отмечают.
+    const cooled: Record<string, number> = { ...draft.fame }
+    for (const circle of ALL_CIRCLES) {
+      const value = cooled[circle] ?? 0
+      if (value > 0) cooled[circle] = Math.max(0, value + GOAL_CHANGE_FAME)
+    }
+    draft.fame = cooled
+    notice(
+      draft,
+      `Ты оставил прежнее («${before.label}») ради нового: ${goal.label}. Те, кто знал тебя прежним, это заметят.`,
+      'people',
+    )
+  } else {
+    notice(draft, `${goal.label}. «${goal.says}»`, 'people')
+  }
+  return close(draft)
+}
+
+/**
+ * Вехи (этап 70, Ц2).
+ *
+ * Веха не назначается — она замечается: первая земля, первый лен, свадьба,
+ * ранг. Проверяется по тому, что уже есть в состоянии, и отмечается один раз.
+ */
+function markMilestones(draft: Draft): void {
+  const goal = goalOf(draft.base)
+  if (!goal) return
+  const taken = new Set(draft.milestones)
+  for (const [index, step] of goal.steps.entries()) {
+    const key = milestoneKey(goal.id, index)
+    if (taken.has(key)) continue
+    if (!goalStepDone(draft.base, step)) continue
+    draft.milestones = [...draft.milestones, key]
+    draft.renown += MILESTONE_RENOWN
+    notice(draft, `Веха: ${step.label}. Это и есть то, ради чего.`, 'people')
+  }
 }
 
 function siegeLift(state: GameState): CommandResult {
@@ -8100,6 +8161,8 @@ interface Draft {
   renown: number
   fame: Fame
   shames: readonly Shame[]
+  goal: string | null
+  milestones: readonly string[]
   house: readonly Generation[]
   marks: Marks
   reputation: Reputation
@@ -8170,6 +8233,8 @@ function open(state: GameState): Draft {
     renown: state.renown,
     fame: state.fame ?? {},
     shames: state.shames ?? [],
+    goal: state.goal ?? null,
+    milestones: state.milestones ?? [],
     house: state.house ?? [],
     marks: state.marks ?? {},
     reputation: state.reputation,
@@ -8236,6 +8301,9 @@ function blessedHarvest(draft: Draft): void {
 }
 
 function close(draft: Draft): CommandResult {
+  // Вехи замечаются после всякого дела (этап 70, Ц2): не счётчик, а взгляд на
+  // то, что в мире уже есть.
+  markMilestones(draft)
   // Мир живёт вместе с игровым временем: сколько суток прошло, столько поселения
   // и досчитывают. Никаких фоновых таймеров — только детерминированный догон.
   const daysPassed = dayOf(draft.time) - dayOf(draft.base.time)
@@ -8495,6 +8563,8 @@ function close(draft: Draft): CommandResult {
     renown: draft.renown,
     fame: draft.fame,
     shames: draft.shames,
+    goal: draft.goal,
+    milestones: draft.milestones,
     house: draft.house,
     marks: draft.marks,
     reputation: draft.reputation,

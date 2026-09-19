@@ -1,4 +1,5 @@
 import {
+  ALL_GOALS,
   ARTIFACTS,
   BUILDINGS,
   CAMP_HOURS,
@@ -70,6 +71,7 @@ import {
   fordShut,
   formatDuration,
   gameHere,
+  goalProgress,
   healerAt,
   healerDef,
   healerPrice,
@@ -99,6 +101,7 @@ import {
   matchesAt,
   moodWord,
   mutinous,
+  nextStepWords,
   offeringFor,
   offersAt,
   orderById,
@@ -1241,6 +1244,8 @@ function SeaSection({
         })}
       </Section>
 
+      <Purpose game={game} dispatch={dispatch} />
+
       <FairCrowd game={game} dispatch={dispatch} />
 
       <Sickbed game={game} dispatch={dispatch} />
@@ -1858,5 +1863,59 @@ function FairCrowd({
         </Section>
       ) : null}
     </>
+  )
+}
+
+/**
+ * Ради чего (этап 70).
+ *
+ * Цель ничего не запрещает: она называет, ради чего всё это, и говорит, куда
+ * следующий шаг. Пока цели нет — предлагает выбрать; когда есть — показывает
+ * вехи и ближайшую невзятую.
+ */
+function Purpose({
+  game,
+  dispatch,
+}: {
+  game: GameState
+  dispatch: (command: Command) => void
+}) {
+  const progress = goalProgress(game)
+  const next = nextStepWords(game)
+  if (!progress) {
+    return (
+      <Section title="Ради чего" aside={`${ALL_GOALS.length}`}>
+        <Dim>
+          Цель ничего не запрещает и ничего не даёт даром: она называет, ради чего всё это, и
+          показывает, куда следующий шаг.
+        </Dim>
+        {ALL_GOALS.map((goal) => (
+          <Card
+            key={goal.id}
+            title={goal.label}
+            description={goal.about}
+            meta={`${goal.steps.length} вехи`}
+            reason={reasonOf(canApply(game, { type: 'setGoal', goalId: goal.id }))}
+            onPress={() => dispatch({ type: 'setGoal', goalId: goal.id })}
+          />
+        ))}
+      </Section>
+    )
+  }
+  return (
+    <Section title="Ради чего" aside={`${progress.done} из ${progress.total}`}>
+      <Panel tone="gold">
+        <Body>{progress.goal.label}</Body>
+        <Dim>{progress.goal.about}</Dim>
+        {next ? <Dim tone="gold">{`Дальше: ${next}`}</Dim> : <Dim tone="gold">Всё взято.</Dim>}
+      </Panel>
+      {progress.steps.map((one) => (
+        <Row
+          key={one.step.label}
+          title={one.step.label}
+          subtitle={one.done ? 'взято' : `${one.have} из ${one.step.need}`}
+        />
+      ))}
+    </Section>
   )
 }

@@ -286,6 +286,13 @@ export interface GameState {
    * переходит наследнику; места отмечаются тем, что в них было.
    * Необязательно — сейвы до 0.6 этого не знают.
    */
+  /**
+   * Ради чего (этап 70): выбранная цель жизни и взятые вехи. Цель ничего не
+   * запрещает — она называет, ради чего всё это, и по ней видно следующий шаг.
+   * Необязательно — сейвы до 0.6 целей не знают.
+   */
+  readonly goal?: string | null
+  readonly milestones?: readonly string[]
   readonly house?: readonly Generation[]
   readonly marks?: Marks
   readonly log: readonly LogEntry[]
@@ -351,6 +358,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     shames: [],
     house: [],
     marks: {},
+    goal: null,
+    milestones: [],
     reputation: NO_REPUTATION,
     realm: null,
     quests: [],

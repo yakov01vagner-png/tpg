@@ -113,7 +113,7 @@ describe('И4: летопись рода', () => {
         age: 56,
         family: {
           ...base.character.family,
-          children: [{ name: 'Добрыня', bornDay: 1, bent: 'sword' }],
+          children: [{ name: 'Добрыня', bornDay: 1, heir: true }],
         },
       },
     }
