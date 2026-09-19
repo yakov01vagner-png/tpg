@@ -45,6 +45,7 @@ import type { Ship } from './ship'
 import type { Siege } from './siege'
 import type { GameTime } from './time'
 import { WORLD_START } from './time'
+import type { Debt, QueuedWork } from './treasury'
 import type { Oath } from './vassal'
 import type { Politics } from './war'
 import { createPolitics } from './war'
@@ -274,6 +275,13 @@ export interface GameState {
    * только то, что ты кому-то обещал; всё остальное выводится из мира.
    */
   readonly charters?: Charters
+  /**
+   * Долги державы (этап 77): у кого занято, сколько выросло и когда платили.
+   * Счёт прихода и расхода не хранится — он считается из мира.
+   */
+  readonly debts?: readonly Debt[]
+  /** Очередь строек державы (этап 77, К5): что и где строится по порядку. */
+  readonly queue?: readonly QueuedWork[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -363,6 +371,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     oaths: {},
     offices: {},
     charters: {},
+    debts: [],
+    queue: [],
     factions: {},
     spellcraft: {},
     weather: [],

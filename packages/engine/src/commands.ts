@@ -526,6 +526,25 @@ import {
   seasonOf,
 } from './time'
 import {
+  type Debt,
+  EMPTY_PURSE,
+  type LenderId,
+  type QueuedWork,
+  type RaiseWay,
+  canRaise,
+  creditLimit,
+  debtTo,
+  debtsOf,
+  ledger,
+  lenderAngry,
+  lenderDef,
+  lends,
+  queueOf,
+  raiseCost,
+  raiseDef,
+  worksPrice,
+} from './treasury'
+import {
   type Oath,
   RAISE_MOOD,
   answersCall,
@@ -757,6 +776,16 @@ export type Command =
   | { readonly type: 'swearOath'; readonly lordId: string; readonly locationId: string }
   /** Созвать вассалов по присяге (этап 74, В3). */
   | { readonly type: 'summonVassals' }
+  /** Казна державы (этап 77): занять, отдать, поставить людей, строить. */
+  | { readonly type: 'borrow'; readonly lender: LenderId; readonly amount: number }
+  | { readonly type: 'repay'; readonly lender: LenderId; readonly amount: number }
+  | {
+      readonly type: 'raiseMen'
+      readonly locationId: string
+      readonly way: RaiseWay
+      readonly men: number
+    }
+  | { readonly type: 'queueWork'; readonly locationId: string; readonly building: BuildingId }
   /** Закон державы (этап 76): вольность городу и ответ недоимщику. */
   | { readonly type: 'grantCharter'; readonly locationId: string }
   | {
@@ -1161,6 +1190,14 @@ export function applyCommand(
       return swearOath(state, command.lordId, command.locationId)
     case 'summonVassals':
       return summonVassals(state)
+    case 'borrow':
+      return borrow(state, command.lender, command.amount)
+    case 'repay':
+      return repay(state, command.lender, command.amount)
+    case 'raiseMen':
+      return raiseMen(state, command.locationId, command.way, command.men)
+    case 'queueWork':
+      return queueWork(state, command.locationId, command.building)
     case 'grantCharter':
       return grantCharter(state, command.locationId)
     case 'answerArrears':
@@ -5526,6 +5563,150 @@ function summonVassals(state: GameState): CommandResult {
 }
 
 /**
+ * Занять (этап 77, К4).
+ *
+ * Дают не всякому и не сколько попросишь: купеческий дом смотрит на имя, храм —
+ * на благочестие, гильдия — на то, знают ли тебя вообще. Потолок считается от
+ * годового прихода державы, а не из воздуха: занимают под землю, а не под
+ * обещание.
+ */
+function borrow(state: GameState, lender: LenderId, amount: number): CommandResult {
+  if (!Number.isInteger(amount) || amount <= 0) return fail('invalid', 'Сколько именно?')
+  const def = lenderDef(lender)
+  if (!lends(state, lender)) return fail('shunned', `${def.label}: «${def.refuses}»`)
+  const day = dayOf(state.time)
+  const limit = creditLimit(state, state.world, lender, day)
+  if (amount > limit) {
+    return fail('requirements', `${def.label} даст не больше ${limit}: считают по твоей земле.`)
+  }
+  const draft = open(state)
+  addMoney(draft, amount)
+  const current = debtTo(draft, lender)
+  draft.debts = [
+    ...debtsOf(draft).filter((one) => one.lender !== lender),
+    {
+      lender,
+      owed: (current?.owed ?? 0) + amount,
+      sinceDay: current?.sinceDay ?? day,
+      paidDay: day,
+    },
+  ]
+  advance(draft, hours(2))
+  notice(draft, `${def.label}: «${def.gives}» Взято ${amount}.`, 'money')
+  return close(draft)
+}
+
+/** Отдать долг: хоть сколько-нибудь, лишь бы не молчать. */
+function repay(state: GameState, lender: LenderId, amount: number): CommandResult {
+  if (!Number.isInteger(amount) || amount <= 0) return fail('invalid', 'Сколько именно?')
+  const debt = debtTo(state, lender)
+  if (!debt) return fail('invalid', 'Этому ты ничего не должен.')
+  if (state.character.money < amount) return fail('noMoney', 'Столько у тебя нет.')
+  const paid = Math.min(amount, Math.ceil(debt.owed))
+  const draft = open(state)
+  addMoney(draft, -paid)
+  const day = dayOf(draft.time)
+  const left = Math.max(0, debt.owed - paid)
+  draft.debts =
+    left <= 0.5
+      ? debtsOf(draft).filter((one) => one.lender !== lender)
+      : debtsOf(draft).map((one) =>
+          one.lender === lender ? { ...one, owed: left, paidDay: day } : one,
+        )
+  advance(draft, hours(1))
+  notice(
+    draft,
+    left <= 0.5
+      ? `${lenderDef(lender).label}: долг закрыт.`
+      : `${lenderDef(lender).label}: отдано ${paid}, осталось ${Math.round(left)}.`,
+    'money',
+  )
+  return close(draft)
+}
+
+/**
+ * Поставить людей под ружьё (этап 77, К3).
+ *
+ * Три способа и три разные цены за одну и ту же тысячу: ополчение берут даром и
+ * платят за это памятью мест, набор берут за серебро, дружину — за серебро и за
+ * жалованье навсегда. Люди встают в гарнизон того места, где их взяли.
+ */
+function raiseMen(state: GameState, locationId: string, way: RaiseWay, men: number): CommandResult {
+  if (!Number.isInteger(men) || men <= 0) return fail('invalid', 'Сколько именно?')
+  const settlement = state.settlements[locationId]
+  if (!settlement || settlement.owner !== PLAYER) return fail('notYours', 'Это не твоя земля.')
+  const def = raiseDef(way)
+  const possible = canRaise(state, settlement, way, state.character.money)
+  if (possible <= 0) {
+    return fail(
+      way === 'levy' ? 'requirements' : 'noMoney',
+      way === 'levy' ? 'Брать некого: людей в месте не осталось.' : 'На это нет денег.',
+    )
+  }
+  const taken = Math.min(men, possible)
+  const cost = raiseCost(way, taken)
+  if (state.character.money < cost) return fail('noMoney', `Нужно ${cost}.`)
+  const limit = garrisonLimit(state.world, settlement)
+  if (garrisonSize(settlement) + taken > limit) {
+    return fail('requirements', `В гарнизон здесь больше ${limit} не поместится.`)
+  }
+
+  const draft = open(state)
+  if (cost > 0) addMoney(draft, -cost)
+  const troop: TroopId = way === 'levy' ? 'militia' : way === 'hire' ? 'spearman' : 'manAtArms'
+  draft.settlements = {
+    ...draft.settlements,
+    [locationId]: {
+      ...settlement,
+      recruits: way === 'levy' ? Math.max(0, settlement.recruits - taken) : settlement.recruits,
+      garrison: {
+        ...settlement.garrison,
+        [troop]: (settlement.garrison[troop] ?? 0) + taken,
+      },
+    },
+  }
+  if (def.mood !== 0) {
+    draft.reputation = withPlaceRep(draft.reputation, locationId, def.mood * taken)
+  }
+  advance(draft, hours(6))
+  const name = state.world.locations[locationId]?.name ?? 'место'
+  notice(
+    draft,
+    `${name}: ${def.label} — ${taken} человек${cost > 0 ? `, ${cost} из казны` : ' и ни монеты'}.`,
+    'war',
+  )
+  return close(draft)
+}
+
+/**
+ * Поставить стройку в очередь державы (этап 77, К5).
+ *
+ * Строит не место, а держава: очередь идёт по порядку, платит казна, и пока
+ * денег нет, стройка ждёт. Обоз и надзор стоят сверх цены самой постройки.
+ */
+function queueWork(state: GameState, locationId: string, building: BuildingId): CommandResult {
+  const settlement = state.settlements[locationId]
+  if (!settlement || settlement.owner !== PLAYER) return fail('notYours', 'Это не твоя земля.')
+  if (settlement.buildings.includes(building)) return fail('invalid', 'Это здесь уже стоит.')
+  if (queueOf(state).some((one) => one.locationId === locationId && one.building === building)) {
+    return fail('invalid', 'Это уже в очереди.')
+  }
+  if (freeSlots(state.world, settlement) <= 0) {
+    return fail('requirements', 'Здесь больше строить негде.')
+  }
+  const draft = open(state)
+  draft.queue = [...queueOf(draft), { locationId, building, paid: 0 }]
+  advance(draft, hours(1))
+  const name = state.world.locations[locationId]?.name ?? 'место'
+  notice(
+    draft,
+    `В очередь: ${BUILDINGS[building].label.toLowerCase()} в ${name} — ${worksPrice(building)} серебром.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
  * Дать городу вольность (этап 76, З4).
  *
  * Город платит разом и дальше живёт по договору: судит сам, держит свою стражу
@@ -8643,6 +8824,8 @@ interface Draft {
   oaths: Readonly<Record<string, Oath>>
   offices: Offices
   charters: Charters
+  debts: readonly Debt[]
+  queue: readonly QueuedWork[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -8718,6 +8901,8 @@ function open(state: GameState): Draft {
     oaths: state.oaths ?? {},
     offices: state.offices ?? {},
     charters: state.charters ?? {},
+    debts: state.debts ?? [],
+    queue: state.queue ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9002,6 +9187,9 @@ function close(draft: Draft): CommandResult {
       }
     }
 
+    // Казна державы (этап 77): долги растут сами, очередь строек идёт по мере
+    // денег, а пустая казна видна в мире.
+    tickTreasury(draft, daysPassed)
     // Закон державы ложится на людей (этап 76, З5) и подводит итог раз в год (З6).
     realmLife(draft, daysPassed)
     // Свои люди возвращаются из поездок (этап 75, Д5): с серебром, с людьми,
@@ -9090,6 +9278,8 @@ function close(draft: Draft): CommandResult {
     oaths: draft.oaths,
     offices: draft.offices,
     charters: draft.charters,
+    debts: draft.debts,
+    queue: draft.queue,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -9321,6 +9511,101 @@ function warNews(
  * помнится, вольность помнится дольше. Раз в год — итог: сколько принесло,
  * сколько съело и кто этим недоволен.
  */
+/**
+ * Казна державы за сутки (этап 77, К4, К5 и К6).
+ *
+ * Долг растёт сам и не ждёт, пока о нём вспомнят; очередь строек идёт по мере
+ * денег — казна платит понемногу, и стройка стоит, пока платить нечем; пустая
+ * казна расходит гарнизоны и портит память тех мест, где им не платят.
+ */
+function tickTreasury(draft: Draft, days: number): void {
+  const day = dayOf(draft.time)
+
+  // 1. Долги растут, и заимодавцы помнят, когда им платили в последний раз.
+  if (debtsOf(draft).length > 0) {
+    draft.debts = debtsOf(draft).map((debt) => ({
+      ...debt,
+      owed: debt.owed * (1 + lenderDef(debt.lender).rate) ** days,
+    }))
+    for (const debt of debtsOf(draft)) {
+      if (!lenderAngry(debt, day)) continue
+      if ((day - debt.paidDay) % 30 !== 0) continue
+      notice(draft, `${lenderDef(debt.lender).label}: «${lenderDef(debt.lender).angry}»`, 'money')
+    }
+  }
+
+  // 2. Очередь строек державы: казна платит, сколько может, и первой — первую.
+  const queue = queueOf(draft)
+  if (queue.length > 0) {
+    const first = queue[0]
+    if (first) {
+      const settlement = draft.settlements[first.locationId]
+      const price = worksPrice(first.building)
+      const canPay = Math.min(
+        draft.character.money,
+        Math.ceil(price / 20) * days,
+        price - first.paid,
+      )
+      if (!settlement || settlement.buildings.includes(first.building)) {
+        draft.queue = queue.slice(1)
+      } else if (canPay > 0) {
+        addMoney(draft, -canPay)
+        const paid = first.paid + canPay
+        if (paid >= price) {
+          draft.settlements = {
+            ...draft.settlements,
+            [first.locationId]: {
+              ...settlement,
+              buildings: [...settlement.buildings, first.building],
+            },
+          }
+          draft.queue = queue.slice(1)
+          const name = draft.base.world.locations[first.locationId]?.name ?? 'место'
+          notice(
+            draft,
+            `Стройка державы кончена: ${BUILDINGS[first.building].label.toLowerCase()} в ${name}.`,
+            'world',
+          )
+        } else {
+          draft.queue = [{ ...first, paid }, ...queue.slice(1)]
+        }
+      }
+    }
+  }
+
+  // 3. Пустая казна (К6): гарнизону не платят — гарнизон расходится, и место
+  //    это видит. Разорение державы должно быть видно в мире, а не в числе.
+  const sheet = ledger(draft.base, draft.base.world, day)
+  if (draft.character.money > 0 || sheet.garrison <= 0) return
+  const places = { ...draft.settlements }
+  let melted = 0
+  for (const settlement of holdingsOf(places, PLAYER)) {
+    const size = garrisonSize(settlement)
+    if (size <= 0) continue
+    const gone = Math.max(1, Math.round(size * EMPTY_PURSE.garrisonMelt * days))
+    const garrison: Record<string, number> = { ...settlement.garrison }
+    let left = gone
+    for (const troop of Object.keys(garrison) as TroopId[]) {
+      const had = garrison[troop] ?? 0
+      const takes = Math.min(had, left)
+      garrison[troop] = had - takes
+      left -= takes
+      if (left <= 0) break
+    }
+    places[settlement.locationId] = { ...settlement, garrison }
+    draft.reputation = withPlaceRep(
+      draft.reputation,
+      settlement.locationId,
+      EMPTY_PURSE.placeMood * days,
+    )
+    melted += gone - left
+  }
+  if (melted > 0) {
+    draft.settlements = places
+    notice(draft, `Жалованье не плачено: гарнизоны потеряли ${melted} человек.`, 'war')
+  }
+}
+
 function realmLife(draft: Draft, days: number): void {
   const mine = holdingsOf(draft.settlements, PLAYER)
   if (mine.length === 0 || days <= 0) return
