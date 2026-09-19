@@ -74,8 +74,10 @@ describe('П1 и П2: свой посол и то, с чем его шлют', (
       `послать можно: ${choices.map((one) => `${one.name} (${one.kind}, ${one.skill})`).join(', ')}`,
     )
     expect(choices.length).toBeGreaterThan(0)
+    const first = choices[0]
+    if (!first) return
     const sent = ok(
-      applyCommand(state, { type: 'sendEnvoy', to, errand: 'alliance', envoyId: choices[0]?.id }),
+      applyCommand(state, { type: 'sendEnvoy', to, errand: 'alliance', envoyId: first.id }),
     )
     const embassy = embassiesOf(sent)[0]
     console.log(
