@@ -42,6 +42,7 @@ import type { Reputation } from './reputation'
 import { NO_REPUTATION } from './reputation'
 import type { Rng } from './rng'
 import { createRng } from './rng'
+import type { RoyalMarriage } from './royal'
 import type { Ship } from './ship'
 import type { Siege } from './siege'
 import type { GameTime } from './time'
@@ -303,6 +304,11 @@ export interface GameState {
    * бумага, которая объясняет, почему оно там.
    */
   readonly treaties?: readonly Treaty[]
+  /**
+   * Браки с чужими домами (этап 81): единственное, что в родстве корон надо
+   * помнить. Сами дома — супруги, дети, наследники — выводятся из короны и дня.
+   */
+  readonly marriages?: readonly RoyalMarriage[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -398,6 +404,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     claims: [],
     embassies: [],
     treaties: [],
+    marriages: [],
     factions: {},
     spellcraft: {},
     weather: [],

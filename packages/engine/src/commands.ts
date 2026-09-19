@@ -450,6 +450,16 @@ import {
   wagonsOf,
 } from './road'
 import {
+  type RoyalMarriage,
+  bloodClaims,
+  childless,
+  dowryFor,
+  marriagesOf,
+  marriedTo,
+  royalHouse,
+  yearsToSuccession,
+} from './royal'
+import {
   SELF_TAUGHT_FEE,
   canGrantHere,
   isSelfTaught,
@@ -549,6 +559,7 @@ import {
   coronationPlan,
   hirePrice,
   recognisedBy,
+  recognitionOf,
   styleOf,
   titleOf,
 } from './title'
@@ -602,7 +613,7 @@ import {
   titleForFiefs,
 } from './vassal'
 import type { Lord } from './war'
-import { allied, pairOf } from './war'
+import { allied, pairOf, relationOf } from './war'
 import type { Politics } from './war'
 import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
@@ -832,6 +843,8 @@ export type Command =
       readonly secret?: SecretId
       readonly guarantor?: string
     }
+  /** Заявить право на чужой трон по крови (этап 81, Р4). */
+  | { readonly type: 'claimThrone'; readonly kingdomId: string }
   /** Порвать договор (этап 80, Г3). */
   | { readonly type: 'breakTreaty'; readonly treatyId: string }
   /** Титул (этап 78): венчаться на царство и заявить право на чужую землю. */
@@ -1256,6 +1269,8 @@ export function applyCommand(
         ...(command.secret ? { secret: command.secret } : {}),
         ...(command.guarantor ? { guarantor: command.guarantor } : {}),
       })
+    case 'claimThrone':
+      return claimThrone(state, command.kingdomId)
     case 'breakTreaty':
       return breakTreaty(state, command.treatyId)
     case 'crownSelf':
@@ -9072,6 +9087,7 @@ interface Draft {
   claims: readonly Claim[]
   embassies: readonly Embassy[]
   treaties: readonly Treaty[]
+  marriages: readonly RoyalMarriage[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9153,6 +9169,7 @@ function open(state: GameState): Draft {
     claims: state.claims ?? [],
     embassies: state.embassies ?? [],
     treaties: state.treaties ?? [],
+    marriages: state.marriages ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9437,6 +9454,8 @@ function close(draft: Draft): CommandResult {
       }
     }
 
+    // Колена корон сменяются сами (этап 81, Р3): у соседей новый государь.
+    tickSuccession(draft, daysPassed)
     // Договоры кончаются сами, а тайное становится явным (этап 80, Г2 и Г5).
     tickTreaties(draft, daysPassed)
     // Посольства возвращаются с ответом (этап 79, П1).
@@ -9538,6 +9557,7 @@ function close(draft: Draft): CommandResult {
     claims: draft.claims,
     embassies: draft.embassies,
     treaties: draft.treaties,
+    marriages: draft.marriages,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -9783,6 +9803,39 @@ function warNews(
  * узнаёшь в тот день, когда это случилось. Тайная статья живёт, пока о ней
  * знают двое, — и чем дольше она живёт, тем больше людей успело узнать.
  */
+/**
+ * Смена колена на чужих коронах (этап 81, Р3).
+ *
+ * Государь правит свой век и уступает место наследнику; у наследника свой нрав,
+ * и половину отцовых обид он не наследует. Бездетный дом — событие для всех
+ * соседей: на такой трон найдётся кому заявить право.
+ */
+function tickSuccession(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  const before = day - days
+  for (const kingdomId of Object.keys(draft.base.world.kingdoms)) {
+    const now = royalHouse(draft.base.world, kingdomId, day)
+    const was = royalHouse(draft.base.world, kingdomId, before)
+    if (now.reign === was.reign) continue
+    // Новый государь наследует половину отцовых обид — не больше.
+    const relation = relationOf(draft.politics, PLAYER, kingdomId)
+    draft.politics = withRelation(draft.politics, PLAYER, kingdomId, -Math.round(relation / 2))
+    notice(
+      draft,
+      `${kingdomName(draft.base, kingdomId)}: ${was.title} ${was.name} умер, на престоле ${now.name}. ${now.says}`,
+      'world',
+    )
+    if (now.heir === null) {
+      notice(
+        draft,
+        `У ${kingdomName(draft.base, kingdomId)} нет наследника: соседи уже считают, чьё право сильнее.`,
+        'world',
+      )
+    }
+  }
+}
+
 function tickTreaties(draft: Draft, days: number): void {
   const treaties = treatiesOf(draft)
   if (treaties.length === 0 || days <= 0) return
@@ -9853,6 +9906,45 @@ function treatyKindOf(errand: EmbassyErrand): TreatyKind | null {
   if (errand === 'passage') return 'passage'
   if (errand === 'mediation') return 'peace'
   return null
+}
+
+/**
+ * Заявить право на чужой трон (этап 81, Р4).
+ *
+ * Родство само по себе прав не даёт: правом оно становится там, где корона
+ * осталась без наследника. Тогда женатый на её дочери говорит первым, а дальняя
+ * родня — второй, и спор этот решается не грамотой.
+ */
+function claimThrone(state: GameState, kingdomId: string): CommandResult {
+  if (!state.realm) return fail('requirements', 'Право на трон заявляет держава.')
+  const day = dayOf(state.time)
+  const claim = bloodClaims(state, day).find((one) => one.kingdomId === kingdomId)
+  if (!claim) {
+    return fail(
+      'requirements',
+      childless(state.world, kingdomId, day)
+        ? 'Тебе не на что сослаться: с этим домом ты не в родстве.'
+        : 'У этой короны есть наследник: право говорить не твоё.',
+    )
+  }
+  const capital = state.world.kingdoms[kingdomId]?.capitalId
+  const provinceId = capital ? state.world.locations[capital]?.provinceId : undefined
+  if (!provinceId) return fail('invalid', 'Непонятно, о какой земле речь.')
+
+  const draft = open(state)
+  draft.claims = [
+    ...claimsOf(draft),
+    { provinceId, against: kingdomId, kind: 'inherit', sinceDay: day },
+  ]
+  draft.politics = withRelation(draft.politics, PLAYER, kingdomId, -18)
+  // Прочие короны это слышат: право на трон — дело всех домов сразу.
+  for (const id of Object.keys(state.world.kingdoms)) {
+    if (id === kingdomId) continue
+    draft.politics = withRelation(draft.politics, PLAYER, id, -4)
+  }
+  advance(draft, hours(6))
+  notice(draft, `Право на престол ${kingdomName(state, kingdomId)} заявлено. ${claim.why}`, 'world')
+  return close(draft)
 }
 
 /**
@@ -9988,6 +10080,33 @@ function applyEmbassy(draft: Draft, embassy: Embassy, day: number): void {
     if (embassy.guarantor) {
       draft.politics = withRelation(draft.politics, PLAYER, embassy.guarantor, 6)
     }
+  }
+  if (embassy.errand === 'marriage') {
+    // Сватовство кончается приданым (этап 81, Р2): за невесту платят, и цена
+    // считается от того, чего она стоит, — по земле её короны.
+    const equal = recognitionOf(draft.base, to, day).standing === 'equal'
+    const dowry = dowryFor(draft.base, to, day, equal)
+    const house = royalHouse(draft.base.world, to, day)
+    if (draft.character.money < dowry) {
+      notice(
+        draft,
+        `Сватовство расстроилось: за невесту просят ${dowry}, а в казне ${draft.character.money}.`,
+        'world',
+      )
+      return
+    }
+    addMoney(draft, -dowry)
+    draft.marriages = [
+      ...marriagesOf(draft).filter((one) => one.kingdomId !== to),
+      {
+        kingdomId: to,
+        who: draft.character.family.spouse ? 'child' : 'self',
+        name: house.heir?.name ?? house.spouse ?? house.name,
+        sinceDay: day,
+        dowry,
+      },
+    ]
+    notice(draft, `Приданое ${dowry} уплачено. Дома породнились.`, 'world')
   }
   if (embassy.errand === 'alliance' || embassy.errand === 'marriage') {
     draft.politics = {
