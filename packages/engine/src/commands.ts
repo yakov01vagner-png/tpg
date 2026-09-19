@@ -185,6 +185,7 @@ import {
 } from './content/lore'
 import { ROWS_BY_ID } from './content/merchants'
 import { NAVY_WORDS, WARSHIP_DEFS, type WarshipKind } from './content/navy'
+import type { AnswerId } from './content/overture'
 import type { MediatorKind, PeaceTerm } from './content/peace'
 import type { QuarterId } from './content/quarters'
 import {
@@ -465,6 +466,20 @@ import {
   rankLabel,
   rankOf,
 } from './order'
+import type { Overture, Pledge } from './overture'
+import {
+  OVERTURE,
+  OVERTURE_WORDS,
+  coalitionAgainst,
+  counterWeight,
+  isLiar,
+  overtureDef,
+  overtureLedger,
+  overturesOf,
+  overturesToday,
+  pledgesOf,
+  wordOf,
+} from './overture'
 import type { Party } from './party'
 import {
   DESERTION_MORALE,
@@ -1002,6 +1017,8 @@ export type Command =
   | { readonly type: 'openTalks'; readonly against: string; readonly mediator?: MediatorKind }
   | { readonly type: 'tableTerms'; readonly terms: readonly PeaceTerm[] }
   | { readonly type: 'endTalks' }
+  /** Чужие послы (этап 91): принять, отказать, торговаться. */
+  | { readonly type: 'answerOverture'; readonly id: string; readonly answer: AnswerId }
   /** Съезд корон (этап 83): созвать, купить голос. */
   | {
       readonly type: 'callCongress'
@@ -1484,6 +1501,8 @@ export function applyCommand(
       return tableTerms(state, command.terms)
     case 'endTalks':
       return endTalks(state)
+    case 'answerOverture':
+      return answerOverture(state, command.id, command.answer)
     case 'askLetter':
       return askLetter(state, command.against)
     case 'callCongress':
@@ -9366,6 +9385,8 @@ interface Draft {
   talks: Talks | null
   peaces: readonly PeaceRecord[]
   grievances: readonly Grievance[]
+  overtures: readonly Overture[]
+  pledges: readonly Pledge[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9463,6 +9484,8 @@ function open(state: GameState): Draft {
     talks: state.talks ?? null,
     peaces: state.peaces ?? [],
     grievances: state.grievances ?? [],
+    overtures: state.overtures ?? [],
+    pledges: state.pledges ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9753,6 +9776,8 @@ function close(draft: Draft): CommandResult {
 
     // Войско ест каждый день, а донесения идут своим ходом (этап 84, Ка3 и Ка5).
     tickCampaign(draft, daysPassed)
+    // Чужие послы приезжают сами и уезжают, не дождавшись (этап 91).
+    tickOvertures(draft, daysPassed)
     // Обиды зреют в поводы, а нарушенные миры уходят в летопись (этап 88).
     tickPeace(draft, daysPassed)
     // Флот ест содержание, суда сходят со стапеля, запертые гавани беднеют
@@ -9884,6 +9909,8 @@ function close(draft: Draft): CommandResult {
     talks: draft.talks,
     peaces: draft.peaces,
     grievances: draft.grievances,
+    overtures: draft.overtures,
+    pledges: draft.pledges,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -11741,6 +11768,179 @@ function tickPeace(draft: Draft, days: number): void {
       draft.peaces = peacesOf(draft).map((one) =>
         one === record ? { ...one, brokenDay: day } : one,
       )
+    }
+  }
+}
+
+/**
+ * Ответить чужому послу (этап 91, Ди1 и Ди2).
+ *
+ * Принять, отказать или торговаться. Согласие кладёт в мир то, о чём говорили,
+ * и обещание, которое другая сторона может не сдержать (Ди3). Торг — это не
+ * уговоры, а положение: уступают тому, кому нужнее согласие.
+ */
+function answerOverture(state: GameState, id: string, answer: AnswerId): CommandResult {
+  const overture = overturesOf(state).find((one) => one.id === id)
+  if (!overture) return fail('invalid', 'Такого посла у дверей нет.')
+  const day = dayOf(state.time)
+  if (overture.untilDay < day) return fail('invalid', OVERTURE_WORDS.left)
+  const def = overtureDef(overture.kind)
+
+  const draft = open(state)
+  advance(draft, hours(4))
+  practice(draft, 'persuasion', 15)
+  const from = overture.fromKingdom
+
+  if (answer === 'refuse') {
+    draft.overtures = overturesOf(draft).filter((one) => one.id !== id)
+    // Отказ грозящему стоит отношений; отказ просящему — почти ничего.
+    const bite = overture.kind === 'threat' ? -10 : overture.kind === 'tribute' ? -6 : -3
+    draft.politics = withRelation(draft.politics, PLAYER, from, bite)
+    notice(
+      draft,
+      `${kingdomName(draft.base, from)}: отказано. ${overture.kind === 'threat' && !overture.backed ? OVERTURE_WORDS.hollow : ''}`.trim(),
+      'world',
+    )
+    return close(draft)
+  }
+
+  if (answer === 'counter') {
+    const chance = counterWeight(draft.base, draft.base.world, overture, day)
+    const [yields, afterRoll] = rollChance(draft.rng, chance)
+    draft.rng = afterRoll
+    if (!yields) {
+      draft.overtures = overturesOf(draft).filter((one) => one.id !== id)
+      notice(
+        draft,
+        `${kingdomName(draft.base, from)} не уступил и уехал: вернутся не раньше чем через ${OVERTURE.returnDays} сут. (${Math.round(chance * 100)} из ста)`,
+        'world',
+      )
+      return close(draft)
+    }
+    // Уступка: просят меньше и ждут дольше.
+    draft.overtures = overturesOf(draft).map((one) =>
+      one.id === id
+        ? {
+            ...one,
+            silver: Math.round(one.silver * (1 - OVERTURE.counterEase)),
+            untilDay: one.untilDay + 20,
+            says: `${one.says} Уступили: теперь ${Math.round(one.silver * (1 - OVERTURE.counterEase))}.`,
+          }
+        : one,
+    )
+    notice(
+      draft,
+      `${kingdomName(draft.base, from)} уступил: просят на треть меньше. (${Math.round(chance * 100)} из ста)`,
+      'world',
+    )
+    return close(draft)
+  }
+
+  // Согласие: то, о чём говорили, ложится в мир.
+  draft.overtures = overturesOf(draft).filter((one) => one.id !== id)
+  if (overture.kind === 'alliance' || overture.kind === 'marriage') {
+    draft.politics = {
+      ...draft.politics,
+      alliances: [
+        ...draft.politics.alliances.filter(
+          (one) => !((one.a === PLAYER && one.b === from) || (one.a === from && one.b === PLAYER)),
+        ),
+        { a: PLAYER, b: from, since: day, byMarriage: overture.kind === 'marriage' },
+      ],
+    }
+    draft.politics = withRelation(draft.politics, PLAYER, from, 15)
+  }
+  if (overture.kind === 'tribute' || overture.kind === 'threat') {
+    draft.politics = {
+      ...draft.politics,
+      tributes: [
+        ...draft.politics.tributes.filter((one) => !(one.from === PLAYER && one.to === from)),
+        {
+          from: PLAYER,
+          to: from,
+          perDay: Math.max(1, Math.round(overture.silver / 60)),
+          untilDay: day + 1800,
+        },
+      ],
+    }
+  }
+  if (overture.kind === 'passage') addMoney(draft, overture.silver)
+  if (overture.kind === 'join') {
+    const about = overture.aboutId
+    if (about && about !== PLAYER && !atWar(draft.politics, PLAYER, about)) {
+      draft.politics = {
+        ...draft.politics,
+        wars: [
+          ...draft.politics.wars,
+          { a: PLAYER, b: about, since: day, reason: `союзная война с ${from}` },
+        ],
+      }
+    }
+  }
+  // Всякое согласие — это обещание с обеих сторон (Ди3 и Ди4).
+  draft.pledges = [
+    ...pledgesOf(draft),
+    { kingdomId: from, kind: overture.kind, sinceDay: day, untilDay: day + 365, kept: null },
+  ]
+  notice(draft, `${kingdomName(draft.base, from)}: ${def.label} принят. ${def.gives}.`, 'world')
+  return close(draft)
+}
+
+/**
+ * Сутки чужой дипломатии (этап 91).
+ *
+ * Короны приезжают сами, ждут ответа сорок пять суток и уезжают; данное слово
+ * проверяется временем — союзник, не пришедший на зов, ломает своё имя, и это
+ * видно всем (Ди3 и Ди4). Против выросшего сходятся сами (Ди5).
+ */
+function tickOvertures(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  // Приехавшие: одно предложение от короны за сезон, без броска.
+  const standing = overturesOf(draft).filter((one) => one.untilDay >= day)
+  const known = new Set(standing.map((one) => one.id))
+  const arrived: Overture[] = []
+  for (const one of overturesToday(draft.base, draft.base.world, day)) {
+    if (known.has(one.id)) continue
+    arrived.push(one)
+    notice(draft, `Посол: ${one.says}`, 'world')
+  }
+  const left = overturesOf(draft).filter((one) => one.untilDay < day)
+  for (const one of left) {
+    notice(draft, `${kingdomName(draft.base, one.fromKingdom)}: ${OVERTURE_WORDS.left}`, 'world')
+  }
+  draft.overtures = [...standing, ...arrived]
+
+  // Слово проверяется временем: союзник, который не воюет твоей войной,
+  // обещания не сдержал.
+  const rows = pledgesOf(draft)
+  if (rows.length > 0) {
+    draft.pledges = rows.map((pledge) => {
+      if (pledge.kept !== null || pledge.untilDay > day) return pledge
+      const helped =
+        pledge.kind === 'alliance' || pledge.kind === 'join'
+          ? draft.politics.wars.some(
+              (war) =>
+                (war.a === pledge.kingdomId || war.b === pledge.kingdomId) &&
+                warsOf(draft.politics, PLAYER).length > 0,
+            )
+          : allied(draft.politics, PLAYER, pledge.kingdomId)
+      if (!helped) {
+        notice(
+          draft,
+          `${kingdomName(draft.base, pledge.kingdomId)} слова не сдержал: ${overtureDef(pledge.kind).label} остался словами.`,
+          'world',
+        )
+      }
+      return { ...pledge, kept: helped }
+    })
+  }
+
+  // Против выросшего сходятся сами (Ди5): раз в год об этом говорят вслух.
+  if (day % 180 === 0) {
+    const coalition = coalitionAgainst(draft.base, draft.base.world, day)
+    if (coalition.giant === PLAYER && coalition.members.length > 1) {
+      notice(draft, `О тебе говорят в чужих столицах: ${coalition.says}`, 'world')
     }
   }
 }

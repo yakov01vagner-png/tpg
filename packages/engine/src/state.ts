@@ -37,6 +37,7 @@ import type { Dealing } from './merchant'
 import type { Blockade, Letter, Warship } from './navy'
 import type { Offices } from './office'
 import type { Interdict, Membership } from './order'
+import type { Overture, Pledge } from './overture'
 import type { Party } from './party'
 import { EMPTY_PARTY } from './party'
 import type { Grievance, PeaceRecord, Talks } from './peace'
@@ -361,6 +362,10 @@ export interface GameState {
   readonly peaces?: readonly PeaceRecord[]
   /** Обиды, которые зреют в повод новой войны. */
   readonly grievances?: readonly Grievance[]
+  /** Чужие предложения, которые ждут ответа (этап 91). */
+  readonly overtures?: readonly Overture[]
+  /** Обещания корон: то, что можно сдержать и нарушить. */
+  readonly pledges?: readonly Pledge[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -472,6 +477,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     talks: null,
     peaces: [],
     grievances: [],
+    overtures: [],
+    pledges: [],
     factions: {},
     spellcraft: {},
     weather: [],
