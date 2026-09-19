@@ -25,6 +25,7 @@ import { type Settlement, localNeed, priceOf, withStock } from './economy'
 import { foodSecurity } from './life'
 import { crownOf, crownWarlust, deedWeight, lordBonds, lordMemory, temperDeeds } from './lordlife'
 import { MERCHANT_POPULATION, type Merchant, merchantGone, merchantsAt } from './merchant'
+import { GAMBIT_DEFS, crownGame, gambitWords } from './mind'
 import type { GameState } from './state'
 import { DAYS_PER_YEAR } from './time'
 import { pairOf } from './war'
@@ -751,6 +752,16 @@ export function worldAims(state: GameState, locationId: string = state.locationI
       who: `${world.kingdoms[kingdomId]?.name ?? kingdomId}: ${crown.title} ${crown.name}`,
       wants: crownWantLabel(plan.want),
       why: plan.why,
+    })
+    // Замысел — на один шаг, партия — на годы (этап 89, И1 и И6). Обе видны в
+    // сводке, и вторая объясняет, зачем корона делает то, что делает сегодня.
+    const gambit = crownGame(state, world, kingdomId, day)
+    cards.push({
+      id: `aim:game:${kingdomId}`,
+      kind: 'crown',
+      who: `${world.kingdoms[kingdomId]?.name ?? kingdomId}: партия на годы`,
+      wants: GAMBIT_DEFS[gambit.aim].label,
+      why: gambitWords(gambit, world),
     })
     const mage = archmageAim(state.politics, kingdomId)
     if (mage && kingdomId === here) {

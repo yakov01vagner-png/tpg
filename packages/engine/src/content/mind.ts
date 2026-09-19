@@ -1,0 +1,120 @@
+/**
+ * ИИ как игрок (этап 89) — содержимое.
+ *
+ * У корон в 0.6 был замысел на один шаг: чего она хочет сегодня (этап 72).
+ * Партия — это замысел на годы: цель, дорога к ней и понимание, по силам ли
+ * она. Здесь лежат нравы, из которых складывается, как корона считает, и то,
+ * насколько криво она видит чужую силу.
+ */
+
+/** Долгие цели короны (И1). */
+export const GAMBITS = ['grow', 'wed', 'coin', 'hold', 'humble'] as const
+export type GambitAim = (typeof GAMBITS)[number]
+
+export const GAMBIT_DEFS: Record<
+  GambitAim,
+  {
+    readonly label: string
+    readonly about: string
+    /** Сколько лет корона держится такой цели. */
+    readonly years: number
+    /** Во сколько раз сильнее себя она согласна видеть противника. */
+    readonly daring: number
+  }
+> = {
+  grow: {
+    label: 'вырасти',
+    about: 'Взять землю у соседа — не набегом, а по частям и с подготовкой.',
+    years: 8,
+    daring: 0.9,
+  },
+  wed: {
+    label: 'породниться',
+    about: 'Брать не войной, а родством: чужая земля приходит с наследником.',
+    years: 12,
+    daring: 0.4,
+  },
+  coin: {
+    label: 'разбогатеть',
+    about: 'Дороги, пошлины и дань: война дорога, а серебро воюет само.',
+    years: 10,
+    daring: 0.5,
+  },
+  hold: {
+    label: 'удержать своё',
+    about: 'Ничего не затевать, пока не срослось то, что уже взято.',
+    years: 6,
+    daring: 0.2,
+  },
+  humble: {
+    label: 'сбить сильного',
+    about: 'Не вырасти самому, а не дать вырасти тому, кто уже вырос.',
+    years: 9,
+    daring: 1.3,
+  },
+}
+
+/** Шаги партии (И1): дорога к цели, а не сама цель. */
+export const STEPS = ['friend', 'marry', 'money', 'arms', 'claim', 'strike', 'wait'] as const
+export type StepId = (typeof STEPS)[number]
+
+export const STEP_DEFS: Record<StepId, { readonly label: string; readonly about: string }> = {
+  friend: { label: 'найти союзника', about: 'Один против троих не начинает никто.' },
+  marry: { label: 'сговорить брак', about: 'Родство дешевле войска и живёт дольше.' },
+  money: { label: 'собрать казну', about: 'Война начинается с денег и ими же кончается.' },
+  arms: { label: 'собрать войско', about: 'Люди под знамёнами, прежде чем повод.' },
+  claim: { label: 'заявить право', about: 'Сначала бумага, потом копья: повод должен быть.' },
+  strike: { label: 'ударить', about: 'То, ради чего была вся дорога.' },
+  wait: { label: 'ждать', about: 'Самый частый шаг всякой долгой партии.' },
+}
+
+/** Как корона говорит с другой силой (И3). */
+export const CROWN_TONES = ['demand', 'deal', 'defer'] as const
+export type ToneId = (typeof CROWN_TONES)[number]
+
+export const TONE_DEFS: Record<
+  ToneId,
+  { readonly label: string; readonly about: string; readonly asks: number }
+> = {
+  demand: {
+    label: 'свысока',
+    about: 'Со слабым не торгуются: ему говорят, что он отдаст.',
+    asks: 1.5,
+  },
+  deal: { label: 'на равных', about: 'С равным считаются: за уступку просят уступку.', asks: 1 },
+  defer: {
+    label: 'уступчиво',
+    about: 'С сильным говорят мягко и просят меньше, чем хотели бы.',
+    asks: 0.6,
+  },
+}
+
+export const MIND = {
+  /** Во сколько раз сила противника должна превышать свою, чтобы говорить снизу. */
+  strongLine: 1.35,
+  /** И во сколько раз быть меньше, чтобы говорить сверху. */
+  weakLine: 0.75,
+  /** Насколько корона ошибается в чужой силе, если сосед. */
+  nearError: 0.12,
+  /** И насколько — если далеко. */
+  farError: 0.45,
+  /** Сколько переходов считается «по соседству». */
+  nearHops: 4,
+  /** Сколько лет держится партия, прежде чем её пересматривают. */
+  reviewYears: 4,
+  /** Во что считается место при счёте силы. */
+  placeWeight: 10,
+  /** И человек в поле. */
+  manWeight: 0.6,
+  /** И судно на плаву. */
+  shipWeight: 8,
+  /** И союзник. */
+  allyWeight: 0.35,
+} as const
+
+export const MIND_WORDS = {
+  beyond: 'не по силам: такую войну не начинают',
+  unequal: 'пока не по плечу: с такими не роднятся на равных',
+  ready: 'по силам: дорога пройдена',
+  blind: 'о дальних землях судят по слухам',
+} as const
