@@ -20,6 +20,7 @@ import type { Enterprise } from './enterprise'
 import type { Law } from './estate'
 import type { GameEvent, LogKind } from './events'
 import { describeEvent, kindOf } from './events'
+import type { Fame, Shame } from './fame'
 import type { Home } from './home'
 import type { Journey } from './journey'
 import type { Knowledge } from './knowledge'
@@ -197,6 +198,14 @@ export interface GameState {
   readonly captives?: readonly Captive[]
   /** Слава: победы, за которые корона может пожаловать землю. */
   readonly renown: number
+  /**
+   * Слава по кругам (этап 68, Ф3): простой люд, купцы, знать, церковь, воины.
+   * Одно число славы не годилось: они считают доброе и дурное по-своему.
+   * Необязательно — сейвы до 0.6 кругов не знают.
+   */
+  readonly fame?: Fame
+  /** Позор: история, которую надо перекрыть делом (этап 68, Ф6). */
+  readonly shames?: readonly Shame[]
   /** Что о тебе помнят места и лорды. */
   readonly reputation: Reputation
   /**
@@ -330,6 +339,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     siege: null,
     captives: [],
     renown: 0,
+    fame: {},
+    shames: [],
     reputation: NO_REPUTATION,
     realm: null,
     quests: [],

@@ -102,12 +102,16 @@ export function templeAccepts(
   priest: Priest,
   piety: number,
   rite: RiteDef,
+  churchFame = 0,
 ): { readonly accepts: boolean; readonly says: string } {
-  if (piety <= EXCOMMUNICATED && rite.id !== 'confession') {
+  // Слава у церкви открывает и закрывает (этап 68, Ф4): «Благочестивому»
+  // служат и со малой верой, «Безбожному» откажут и с изрядной.
+  const standing = piety + churchFame / 3
+  if (standing <= EXCOMMUNICATED && rite.id !== 'confession') {
     return { accepts: false, says: PRIEST_TEMPERS[priest.temper].refuses[0] ?? '' }
   }
   // Ревностный не служит тому, кто ходит в храм раз в жизни и с кровью на руках.
-  if (PRIEST_TEMPERS[priest.temper].grace > 1.1 && piety < -25 && rite.needsBishop) {
+  if (PRIEST_TEMPERS[priest.temper].grace > 1.1 && standing < -25 && rite.needsBishop) {
     return { accepts: false, says: PRIEST_TEMPERS[priest.temper].refuses[0] ?? '' }
   }
   return { accepts: true, says: PRIEST_TEMPERS[priest.temper].greets[0] ?? '' }

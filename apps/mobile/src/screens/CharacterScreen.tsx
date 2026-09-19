@@ -2,20 +2,28 @@ import {
   ATTRIBUTE_IDS,
   ATTRIBUTE_LABELS,
   type AttributeId,
+  CIRCLES,
   type Command,
   type GameState,
   ITEMS_BY_ID,
   MAGIC_RANKS,
   PRIME_AGE,
+  SHAME_COVER,
   SLOT_IDS,
   SLOT_LABELS,
   type SkillId,
   ageOf,
+  bynameOf,
   canApply,
+  circleDef,
   dayOf,
   eligibleRank,
+  fameOf,
+  fameWord,
+  fullName,
   gearBonus,
   heirOf,
+  shameDef,
   skillXpToNext,
   skillsOfAttribute,
   unrecognizedGap,
@@ -48,8 +56,11 @@ export function CharacterScreen({ game }: { game: GameState }) {
         <View style={styles.portraitRow}>
           <Portrait seed={hero.name} age={hero.age} size={72} overrides={heroFace(hero.tags)} />
           <View style={styles.portraitText}>
-            <Title>{hero.name}</Title>
+            {/* Имя с прозвищем (этап 68, Ф1): мир зовёт тебя по делам, и это
+                то, как о тебе говорят за глаза. */}
+            <Title>{fullName(game)}</Title>
             <Dim>{hero.family.house}</Dim>
+            {bynameOf(game) ? <Dim tone="gold">{bynameOf(game)?.about}</Dim> : null}
           </View>
         </View>
         <Stats>
@@ -62,6 +73,22 @@ export function CharacterScreen({ game }: { game: GameState }) {
           <Stat label="Ранг магии" value={recognized} />
           <Stat label="Слава" value={`${game.renown}`} tone="gold" />
         </Stats>
+        <Section title="Слава по кругам">
+          {CIRCLES.map((circle) => (
+            <Row
+              key={circle}
+              title={circleDef(circle).label}
+              subtitle={`${circleDef(circle).about} — ${fameWord(fameOf(game, circle))} (${fameOf(game, circle)})`}
+            />
+          ))}
+          {(game.shames ?? []).map((one) => (
+            <Row
+              key={one.id}
+              title={`Позор: ${shameDef(one.id).label}`}
+              subtitle={`${shameDef(one.id).says} Перекрыто ${one.covered} из ${SHAME_COVER}.`}
+            />
+          ))}
+        </Section>
         {gap > 0 && earned ? (
           <Dim tone="gold">
             {`Сила обгоняет титул: по навыку тянешь на «${MAGIC_RANKS[earned].label}», но признания нет.`}

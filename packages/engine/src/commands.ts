@@ -101,6 +101,14 @@ import {
 } from './content/estate'
 import { FEAST_DOINGS, PILGRIM_DAYS, PILGRIM_PIETY, RITES_BY_ID } from './content/faith'
 import { EXCOMMUNICATED } from './content/faith'
+import {
+  type Circle,
+  SHAME_DEFS,
+  SINGER_FAME,
+  SINGER_HOURS,
+  SINGER_PRICE,
+  type ShameId,
+} from './content/fame'
 import { type CaptiveFate, SAP_DAYS, type SiegeMove } from './content/field'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
@@ -224,6 +232,17 @@ import {
 } from './estate'
 import type { GameEvent, LogKind } from './events'
 import { FAIR_TRADE_BONUS, fairAt, feastAt } from './fair'
+import {
+  type Fame,
+  type Shame,
+  circleDef,
+  coverShames,
+  fameOf,
+  shameBefore,
+  shameDef,
+  singerAt,
+  withDeed,
+} from './fame'
 import { groundFor, orderNeeds, veteranShare, woundedOf } from './field'
 import {
   ailmentDef,
@@ -591,6 +610,7 @@ export type Command =
   /** Встать лагерем там, где нет крыши. */
   | { readonly type: 'camp'; readonly manner?: CampManner }
   | { readonly type: 'hunt' }
+  | { readonly type: 'hireSinger'; readonly circle: Circle }
   | { readonly type: 'watchJesters' }
   | { readonly type: 'askFaction'; readonly kingdomId: string; readonly factionId: FactionId }
   | { readonly type: 'meetEnvoy'; readonly answer: 'yes' | 'no' | 'press' }
@@ -925,6 +945,8 @@ export function applyCommand(
       return camp(state, command.manner ?? 'sleep')
     case 'hunt':
       return hunt(state)
+    case 'hireSinger':
+      return hireSinger(state, command.circle)
     case 'watchJesters':
       return watchJesters(state)
     case 'askFaction':
@@ -2252,6 +2274,9 @@ function battleFlee(state: GameState): CommandResult {
   advance(draft, 30)
   addFatigue(draft, 12)
   notice(draft, 'Отход.')
+  // Уход с поля — позор, а не минус к числу (этап 68, Ф6): перекрыть его можно
+  // только победой, и не одной.
+  if (partySize(state.party) >= 6) shameOn(draft, 'fled')
   return close(draft)
 }
 
@@ -2548,7 +2573,10 @@ function seizePlace(draft: Draft, locationId: string, mode: 'storm' | 'terms'): 
     if (gained > 1) {
       notice(draft, `С ним пошла вся провинция: мест стало на ${gained} больше.`, 'world')
     }
-    if (stormed) seeDeed(draft, 'sack')
+    if (stormed) {
+      seeDeed(draft, 'sack')
+      shameOn(draft, 'burned')
+    }
     draft.reputation = withPlaceRep(draft.reputation, locationId, stormed ? -45 : -8)
     if (taken.owner && !taken.owner.startsWith('crown:') && taken.owner !== PLAYER) {
       draft.reputation = withLordRep(draft.reputation, taken.owner, stormed ? -25 : -18)
@@ -4247,6 +4275,54 @@ function pickpockets(draft: Draft): void {
   notice(draft, `В толпе срезали кошель: ${lost}. Вора искать поздно.`, 'money')
 }
 
+/**
+ * Нанять певца (этап 68, Ф5).
+ *
+ * Славу нельзя купить, а рассказ о ней — можно. Певец не врёт: он выбирает, о
+ * чём петь, и поёт это там, где слушают. Круг решает, кому эта песня в уши.
+ */
+function hireSinger(state: GameState, circle: Circle): CommandResult {
+  const settlement = state.settlements[state.locationId]
+  if (!settlement || settlement.population < 400) {
+    return fail('unavailableHere', 'Петь тут некому и незачем: слушателей нет.')
+  }
+  if (state.character.money < SINGER_PRICE) {
+    return fail('noMoney', `Певец просит ${SINGER_PRICE}, у тебя ${state.character.money}.`)
+  }
+  const shame = shameBefore(state, circle)
+
+  const draft = open(state)
+  addMoney(draft, -SINGER_PRICE)
+  advance(draft, hours(SINGER_HOURS))
+  const singer = singerAt(state.locationId, dayOf(draft.time))
+  // Песня прибавляет славы тому кругу, для которого её заказали. Но позор
+  // песней не перекрывают: о нём люди помнят своё.
+  draft.fame = {
+    ...draft.fame,
+    [circle]: Math.max(-100, Math.min(100, fameOf(draft, circle) + SINGER_FAME)),
+  }
+  notice(
+    draft,
+    `${singer} поёт о тебе для ${circleDef(circle).label}: ${circleDef(circle).about}`,
+    'people',
+  )
+  if (shame) {
+    notice(
+      draft,
+      `Но «${shameDef(shame.id).label}» песней не перекрыть: ${shameDef(shame.id).says}`,
+      'people',
+    )
+  }
+  return close(draft)
+}
+
+/** Записать позор: не минус к славе, а история (этап 68, Ф6). */
+function shameOn(draft: Draft, id: ShameId): void {
+  if (draft.shames.some((one) => one.id === id)) return
+  draft.shames = [...draft.shames, { id, since: dayOf(draft.time), covered: 0 }]
+  notice(draft, `${shameDef(id).says}`, 'people')
+}
+
 function siegeLift(state: GameState): CommandResult {
   if (!state.siege) return fail('invalid', 'Ты никого не осаждаешь.')
   const draft = open(state)
@@ -4847,6 +4923,7 @@ function abandonQuest(state: GameState, questId: string): CommandResult {
   const draft = open(state)
   notice(draft, 'Дело брошено. Об этом узнают.')
   seeDeed(draft, 'abandonQuest')
+  shameOn(draft, 'broke')
   draft.reputation = withPlaceRep(draft.reputation, quest.issuerLocationId, -8)
   if (quest.merchantId) failedOrder(draft, quest.merchantId)
   draft.quests = draft.quests.filter((candidate) => candidate.id !== questId)
@@ -5350,6 +5427,18 @@ export function companionsAt(
  * скажет слово, кто-то уйдёт — и об этом будет строка в летописи.
  */
 function seeDeed(draft: Draft, deed: DeedId): void {
+  // Пять слав вместо одной (этап 68, Ф3): круги считают то же дело по-своему.
+  draft.fame = withDeed(draft.fame, deed)
+  // И позор перекрывается делом того же круга, а не деньгами (Ф6).
+  const covering = coverShames(draft.shames, deed)
+  if (covering.covered.length > 0) {
+    draft.shames = covering.shames
+    for (const id of covering.covered) {
+      notice(draft, `«${shameDef(id).label}» тебе больше не вспоминают.`, 'people')
+    }
+  } else if (covering.shames !== draft.shames) {
+    draft.shames = covering.shames
+  }
   // И церковь смотрит (этап 51): разорение и брошенное слово — грех, накормить
   // голодного и пощадить пленных — нет. Вера здесь счёт, а не украшение.
   const sin = PIETY_DEEDS[deed] ?? 0
@@ -6993,7 +7082,7 @@ function rite(state: GameState, riteId: string): CommandResult {
     return fail('unavailableHere', `${priest.name} такого не служит: тут нужен владыка.`)
   }
   const piety = pietyOf(state)
-  const welcome = templeAccepts(priest, piety, def)
+  const welcome = templeAccepts(priest, piety, def, fameOf(state, 'church'))
   if (!welcome.accepts) return fail('shunned', `${priest.name}: «${welcome.says}»`)
   const offering = offeringFor(priest, def)
   if (state.character.money < offering) {
@@ -7986,6 +8075,8 @@ interface Draft {
   interdicts: readonly Interdict[]
   brotherhood: Brotherhood | null
   renown: number
+  fame: Fame
+  shames: readonly Shame[]
   reputation: Reputation
   realm: { name: string; sinceDay?: number } | null
   quests: readonly Quest[]
@@ -8052,6 +8143,8 @@ function open(state: GameState): Draft {
     interdicts: state.interdicts ?? [],
     brotherhood: state.brotherhood ?? null,
     renown: state.renown,
+    fame: state.fame ?? {},
+    shames: state.shames ?? [],
     reputation: state.reputation,
     realm: state.realm,
     quests: state.quests,
@@ -8373,6 +8466,8 @@ function close(draft: Draft): CommandResult {
     interdicts: draft.interdicts,
     brotherhood: draft.brotherhood,
     renown: draft.renown,
+    fame: draft.fame,
+    shames: draft.shames,
     reputation: draft.reputation,
     realm: draft.realm,
     quests: draft.quests,
@@ -8620,8 +8715,11 @@ function payUpkeep(draft: Draft, days: number): void {
   if (unfed > 0) notice(draft, `Отряд голодал ${unfed} сут.`)
   // Спутники видят и то, как ты держишь людей: исправная плата за неделю —
   // повод для доброго слова, голод — для худого.
-  if (unfed > 0) seeDeed(draft, 'starve')
-  else if (unpaid === 0 && days >= 7) seeDeed(draft, 'payWell')
+  if (unfed > 0) {
+    seeDeed(draft, 'starve')
+    // Свои голодали при твоих деньгах — такое помнят как позор.
+    if (draft.character.money > 100) shameOn(draft, 'starved')
+  } else if (unpaid === 0 && days >= 7) seeDeed(draft, 'payWell')
   if (deserted > 0) notice(draft, `Ушло по-тихому: ${deserted}.`)
 }
 

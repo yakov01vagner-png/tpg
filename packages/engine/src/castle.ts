@@ -9,6 +9,7 @@ import {
   LORD_TEMPERS,
   LORD_TEMPER_IDS,
 } from './content/castle'
+import { fameOf } from './fame'
 import { PLAYER } from './holding'
 import { lordRep } from './reputation'
 import type { GameState } from './state'
@@ -103,7 +104,7 @@ export interface Reception {
 }
 
 export function receptionFor(
-  state: Pick<GameState, 'reputation' | 'renown' | 'service' | 'character'>,
+  state: Pick<GameState, 'reputation' | 'renown' | 'service' | 'character' | 'fame'>,
   lord: Lord,
   gift = 0,
 ): Reception {
@@ -120,6 +121,9 @@ export function receptionFor(
     (liege ? 0.5 : 0) +
     Math.min(0.5, state.renown * 0.05) +
     Math.max(-0.5, Math.min(0.5, favour / 100)) +
+    // Слава у знати открывает и закрывает двери (этап 68, Ф4): «Выскочку»
+    // пустят неохотно, «Высокородного» — как своего.
+    Math.max(-0.5, Math.min(0.5, fameOf(state, 'noble') / 120)) +
     (gift * temper.gift) / 400
   const admits = own || standing >= temper.closed
   const wait = own || liege ? 0 : Math.round((1 + temper.closed * 5) * (admits ? 1 : 2))
