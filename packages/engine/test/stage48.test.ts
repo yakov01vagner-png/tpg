@@ -146,7 +146,11 @@ describe('Б3: бюджет', () => {
     const hour = fastest(() => {
       game = ok(applyCommand(game, { type: 'tick', minutes: 60 }))
     }, 50)
-    const grid = fastest(() => worldGrid(world, MAP_SIZE), 3)
+    // Сетку мерим шесть раз, а не три: при полном прогоне (74 файла разом)
+    // счёт делят десятки процессов, и лучшая из трёх попыток выходила на 48 мс
+    // там, где одна и та же работа в одиночку стоит 28. Мерить надо цену
+    // работы, а не давку в очереди за счётом.
+    const grid = fastest(() => worldGrid(world, MAP_SIZE), 6)
     const raw = serialize(game)
     const parse = fastest(() => deserialize(raw), 5)
     console.log(

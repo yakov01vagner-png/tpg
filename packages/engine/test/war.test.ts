@@ -59,12 +59,29 @@ describe('разбой душит подвоз', () => {
   const mines = Object.values(world.locations).filter((one) => one.archetype === 'mine')
   const minePop = (settlements: Record<string, (typeof start)[string]>) =>
     mines.reduce((sum, mine) => sum + (settlements[mine.id]?.population ?? 0), 0)
-  /** Тот же мир, но по дорогам страшно ездить и, если сказано, земля выжата. */
+  /**
+   * Тот же мир, но по дорогам страшно ездить и, если сказано, земля выжата.
+   *
+   * Разбой приходится держать за руку. Сам по себе он гаснет: сытое место
+   * ставит стражу, и за двести суток девять десятых сходят к нулю. Пока мир
+   * голодал (до этапа 57), голод подкармливал разбой и держал его сам; теперь
+   * подвоз налажен, и однажды заданный разбой к середине счёта исчезает —
+   * вместе с тем, что этот счёт мерит. Потому banditry заново прижимается
+   * каждые двадцать суток: это мир, где дороги стоят долго, а не одну весну.
+   */
   const under = (banditry: number, strain: number) => {
-    const places: Record<string, (typeof start)[string]> = {}
+    let places: Record<string, (typeof start)[string]> = {}
     for (const [id, settlement] of Object.entries(start))
       places[id] = { ...settlement, banditry, strain }
-    return tickDays(world, places, 400).settlements
+    let famines = 0
+    for (let day = 0; day < 400; day += 20) {
+      const result = tickDays(world, places, 20)
+      famines += result.events.filter((event) => event.type === 'famine').length
+      places = {}
+      for (const [id, settlement] of Object.entries(result.settlements))
+        places[id] = { ...settlement, banditry, strain }
+    }
+    return { settlements: places, famines }
   }
 
   it('на сытой земле разбой обозы тощит, но рудников не пустошит', () => {
@@ -74,37 +91,42 @@ describe('разбой душит подвоз', () => {
     const calm = under(0, 0)
     const troubled = under(0.9, 0)
     console.log(
-      `за 400 суток на сытой земле: в рудниках ${minePop(calm).toFixed(0)} против ${minePop(troubled).toFixed(0)}`,
+      `за 400 суток на сытой земле: людей ${totalPopulation(calm.settlements).toFixed(0)} против ${totalPopulation(troubled.settlements).toFixed(0)}, ` +
+        `голодных случаев ${calm.famines} против ${troubled.famines}, ` +
+        `в рудниках ${minePop(calm.settlements).toFixed(0)} против ${minePop(troubled.settlements).toFixed(0)}`,
     )
-    expect(minePop(troubled)).toBeLessThanOrEqual(minePop(calm))
-    // Десятая часть, а не двадцатая: с версии 0.4 подвоз идёт дальше — между
-    // рудником и хлебной деревней лежит земля, — и разбой отъедает от него
-    // больше. Голодом это всё ещё не становится.
-    expect(minePop(troubled)).toBeGreaterThan(minePop(calm) * 0.9)
+    // Что-то он всё же отъедает: на сытой земле — меньше процента людей.
+    expect(totalPopulation(troubled.settlements)).toBeLessThan(totalPopulation(calm.settlements))
+    expect(totalPopulation(troubled.settlements)).toBeGreaterThan(
+      totalPopulation(calm.settlements) * 0.99,
+    )
+    // А рудник, которому свой хлеб не растят вовсе, стоит нетронутым: округа
+    // довозит ему и сквозь разбой.
+    expect(minePop(troubled.settlements)).toBe(minePop(calm.settlements))
   })
 
   it('на выжатой земле тот же разбой оборачивается голодом', () => {
-    // А вот когда урожай сел, запаса в округе больше нет — и первыми ложатся
-    // те, кто своей еды не растит. Это и есть связка «голод и разбой кормят
-    // друг друга»: поодиночке ни то ни другое рудник не берёт, вместе — вдвое.
+    // А вот когда урожай сел, запаса в округе больше нет — и тот же разбой
+    // перестаёт быть поборами на дороге. Это и есть связка «голод и разбой
+    // кормят друг друга»: поодиночке ни то ни другое мир не берёт, вместе —
+    // впятеро больше голодных случаев и шестая часть роста.
     const calm = under(0, 1)
     const troubled = under(0.9, 1)
     console.log(
-      `за 400 суток на выжатой земле: всего людей ${totalPopulation(calm).toFixed(0)} против ${totalPopulation(troubled).toFixed(0)}, ` +
-        `в рудниках ${minePop(calm).toFixed(0)} против ${minePop(troubled).toFixed(0)}`,
+      `за 400 суток на выжатой земле: всего людей ${totalPopulation(calm.settlements).toFixed(0)} против ${totalPopulation(troubled.settlements).toFixed(0)}, ` +
+        `голодных случаев ${calm.famines} против ${troubled.famines}, ` +
+        `в рудниках ${minePop(calm.settlements).toFixed(0)} против ${minePop(troubled.settlements).toFixed(0)}`,
     )
-    expect(totalPopulation(troubled)).toBeLessThan(totalPopulation(calm))
-    expect(minePop(troubled)).toBeLessThan(minePop(calm))
-    // Главным стала не дорога, а год: с версии 0.5 у года есть времена (этап
-    // 37), и выжатая земля сама по себе отнимает у рудников треть — с шести
-    // тысяч девятисот до четырёх с половиной. Разбой поверх этого отнимает ещё
-    // несколько процентов: связка «голод и разбой» осталась, но первым теперь
-    // идёт голод, а не разбой.
-    const fed = under(0, 0)
-    console.log(
-      `рудники: сытая земля ${minePop(fed).toFixed(0)}, выжатая ${minePop(calm).toFixed(0)}, выжатая с разбоем ${minePop(troubled).toFixed(0)}`,
-    )
-    expect(minePop(calm)).toBeLessThan(minePop(fed) * 0.8)
+    expect(totalPopulation(troubled.settlements)).toBeLessThan(totalPopulation(calm.settlements))
+    // Вдвое больше голода, чем на выжатой земле без разбоя, и втрое — чем на
+    // сытой земле с тем же разбоем: ни земля, ни дорога по отдельности мир не
+    // валят, а вместе валят.
+    const fed = under(0.9, 0)
+    expect(troubled.famines).toBeGreaterThan(calm.famines * 2)
+    expect(troubled.famines).toBeGreaterThan(fed.famines * 3)
+    // И первыми ложатся те, кто своей еды не растит: рудник теряет седьмую
+    // часть людей там, где на сытой земле тот же разбой не брал ни одного.
+    expect(minePop(troubled.settlements)).toBeLessThan(minePop(calm.settlements))
   })
 })
 

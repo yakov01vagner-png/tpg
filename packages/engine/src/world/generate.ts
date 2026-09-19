@@ -420,10 +420,64 @@ export function generateWorld(
     }
   }
 
+  // Город не может быть больше, чем его кормят (этап 57, Е1): если в округе
+  // нет излишка, везти нечего, и большое место в бедной земле просто не
+  // вырастает таким. Без этого мир заводил города там, где их нечем кормить, и
+  // за сорок лет они усыхали наполовину — в отчёте века это видно числом.
+  balanceByProvince(placed, provinces)
+
   const skeleton = { kingdoms, regions, provinces, locations: placed, sea, rivers }
   // Морские пути строятся последними: им нужны и вода, и уже назначенные порты
   // (этап 35).
   return { ...skeleton, roads: buildRoads(skeleton), lanes: buildLanes(placed, sea) }
+}
+
+/**
+ * Свести людей с землёй провинции (этап 57).
+ *
+ * Деревня кормит себя и соседей: её округа считается с запасом (`landCapacityOf`).
+ * Город, крепость и рудник живут привозом — но везут им из своей же провинции
+ * и округи. Если в провинции столько же ртов, сколько земли, привозить нечего:
+ * такой город уменьшается до того, что земля способна поднять.
+ */
+const PROVINCE_HEADROOM = 1
+
+function balanceByProvince(
+  locations: Record<string, Location>,
+  provinces: Readonly<Record<string, Province>>,
+): void {
+  for (const province of Object.values(provinces)) {
+    const ids = province.locationIds.filter((id) => locations[id])
+    if (ids.length === 0) continue
+    let capacity = 0
+    let people = 0
+    for (const id of ids) {
+      const place = locations[id]
+      if (!place) continue
+      if (!isSettlement(place.archetype)) continue
+      capacity += landCapacityOf(place.archetype, place.terrain, province.fertility)
+      people += place.population
+    }
+    if (people <= capacity * PROVINCE_HEADROOM) continue
+    // Ужимаются те, кто живёт привозом: деревню трогать нельзя — она и есть
+    // то, чем кормят остальных.
+    const eaters = ids.filter((id) => {
+      const kind = locations[id]?.archetype
+      return kind !== undefined && kind !== 'village' && isSettlement(kind)
+    })
+    const villagers = ids
+      .filter((id) => locations[id]?.archetype === 'village')
+      .reduce((sum, id) => sum + (locations[id]?.population ?? 0), 0)
+    const allowed = Math.max(0, capacity * PROVINCE_HEADROOM - villagers)
+    const current = eaters.reduce((sum, id) => sum + (locations[id]?.population ?? 0), 0)
+    if (current <= allowed || current <= 0) continue
+    const scale = allowed / current
+    for (const id of eaters) {
+      const place = locations[id]
+      if (!place) continue
+      locations[id] = { ...place, population: Math.max(40, Math.round(place.population * scale)) }
+    }
+  }
 }
 
 /**

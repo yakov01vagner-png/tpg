@@ -221,10 +221,13 @@ export function initialStock(
  */
 export const STORE_DAYS: Record<LocationArchetype, number> = {
   village: 110,
-  town: 100,
-  city: 90,
-  capital: 90,
-  port: 60,
+  town: 110,
+  // Житница (этап 57, Е2): город и столица держат запас на зиму и весну, а не
+  // на три месяца. Своего поля у них нет, и запас — единственное, что стоит
+  // между весной и голодом.
+  city: 130,
+  capital: 140,
+  port: 80,
   fortress: 120,
   monastery: 90,
   mine: 45,

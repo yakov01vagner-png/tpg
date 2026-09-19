@@ -15,6 +15,7 @@ import { nextFloat } from './rng'
 import { titheFor, titheSupport } from './temple'
 import type { Season } from './time'
 import { daysToHarvest, seasonOf } from './time'
+import { kingdomOf } from './world/queries'
 import type { LocationArchetype, PlaceKind, Terrain, World } from './world/types'
 import { isSettlement } from './world/types'
 
@@ -233,11 +234,14 @@ const SPOILAGE = 0.85
  * Во сколько раз быстрее растёт место, которое отстраивают.
  *
  * Не прирост, а возвращение: на пепелище зовут соседскую молодёжь, сажают
- * пришлых, прощают подати на три года. Втрое — это то, при чём сожжённая
- * деревня поднимается за поколение, а не за век, и при этом война всё ещё
- * дороже мира.
+ * пришлых, прощают подати на три года. Вдесятеро — это то, при чём город,
+ * потерявший людей в голодную весну, возвращает их за несколько лет, а не за
+ * век (этап 57, Е3). Втрое было мало: голод отнимал у города восемь процентов
+ * в год, а возвращалось три, и за сорок лет от него оставалась половина.
+ * Война всё ещё дороже мира: разорённое место поднимается людьми, которых
+ * больше нигде не прибавилось.
  */
-const REBUILD_SPEED = 3
+const REBUILD_SPEED = 10
 
 /** Насколько быстро усталость догоняет ту, какой заслуживает нынешняя пашня. */
 const STRAIN_SPEED = 0.0025
@@ -265,6 +269,11 @@ const GROWTH_HEADROOM = 0.85
  */
 function growthRoom(world: World, locationId: string, ceiling: number): number {
   const founded = world.locations[locationId]?.population ?? 0
+  const kind = world.locations[locationId]?.archetype
+  // Рудник, крепость и обитель не растут сами: сколько людей им положено,
+  // столько и держат. Иначе накормленная короной крепость за сорок лет
+  // удваивалась — гарнизон, который сам себя рожает (этап 57).
+  if (kind === 'mine' || kind === 'fortress' || kind === 'monastery') return founded
   return Math.max(ceiling * GROWTH_HEADROOM, founded)
 }
 
@@ -451,6 +460,7 @@ export function tickDays(
     // под ней на две сотни душ. Десятина берётся с людей её провинции — это
     // перенос, а не подарок: сколько пришло в обитель, столько ушло из округи.
     current = collectTithe(world, current, config)
+    current = fillGranaries(world, current, config, today)
     current = share(world, current, byProvince, config.provinceTransfer, config, today)
     current = share(world, current, byRegion, config.regionTransfer, config, today)
     current = share(world, current, byKingdom, config.kingdomTransfer, config, today)
@@ -598,7 +608,12 @@ function produceAndEat(
       // порты теряли пятую часть — набег уносил людей быстрее, чем их успевало
       // народиться, и никто не возвращал их назад (долг версии 0.3).
       const founded = world.locations[id]?.population ?? 0
-      const ruined = settlement.owner !== null && population < founded * 0.9
+      // Место зовёт людей, пока не вернуло своё (этап 57, Е3): прежний порог
+      // в девять десятых оставлял городу дыру, которую он не мог закрыть —
+      // у самого предела прибавка нулевая, и всякая голодная весна опускала
+      // город на ступеньку без возврата. За сорок лет это стоило городам
+      // сорока пяти процентов людей.
+      const ruined = settlement.owner !== null && population < founded
       const speed = config.growth * (ruined ? REBUILD_SPEED : 1)
       if (population < room) population += population * speed * (1 - population / room)
     }
@@ -698,6 +713,121 @@ function collectTithe(
   return next
 }
 
+/**
+ * Житницы (этап 57, Е2).
+ *
+ * У большого места нет своего поля: город и столица кормятся привозом, а
+ * привоз идёт не сам по себе — его собирают податями в натуре и свозят в
+ * городской амбар. Крепость и рудник живут тем же: им платят жалованье, на
+ * которое покупают хлеб у округи.
+ *
+ * Считается как перенос: сколько пришло в амбар, столько ушло из деревень —
+ * и только из тех, у кого сверх своего прокорма есть излишек.
+ */
+const GRANARY_KINDS: readonly LocationArchetype[] = [
+  'town',
+  'city',
+  'capital',
+  'port',
+  'fortress',
+  'mine',
+]
+/** Какую долю недостачи амбар закрывает за сутки. */
+const GRANARY_RATE = 0.12
+
+function fillGranaries(
+  world: World,
+  settlements: Record<string, Settlement>,
+  config: LifeConfig,
+  day: number,
+): Record<string, Settlement> {
+  const next = settlements
+  const byKingdom = new Map<string, string[]>()
+  for (const id of Object.keys(next)) {
+    const kingdomId = kingdomOf(world, id)?.id ?? 'none'
+    const list = byKingdom.get(kingdomId) ?? []
+    list.push(id)
+    byKingdom.set(kingdomId, list)
+  }
+
+  for (const [, ids] of byKingdom) {
+    const hungry = ids.filter((id) => {
+      const kind = world.locations[id]?.archetype
+      if (!kind || !isSettlement(kind) || !GRANARY_KINDS.includes(kind as LocationArchetype)) {
+        return false
+      }
+      const one = next[id]
+      if (!one || one.population <= 0) return false
+      const wanted = one.population * config.foodPerPerson * keepDays(one, config, day)
+      return foodStock(one) < wanted
+    })
+    if (hungry.length === 0) continue
+    // Корона наполняет по чину: сперва престол, потом города, потом крепости и
+    // городки. Пока очередь была случайной, престол оставался без хлеба, если
+    // до него добрались последним.
+    const queue = [...hungry].sort((a, b) => {
+      const kindA = world.locations[a]?.archetype
+      const kindB = world.locations[b]?.archetype
+      const pullA =
+        kindA && isSettlement(kindA) ? (IMPORT_PULL[kindA as LocationArchetype] ?? 1) : 1
+      const pullB =
+        kindB && isSettlement(kindB) ? (IMPORT_PULL[kindB as LocationArchetype] ?? 1) : 1
+      return pullB - pullA
+    })
+
+    for (const id of queue) {
+      const receiver = next[id]
+      if (!receiver) continue
+      const wanted = receiver.population * config.foodPerPerson * keepDays(receiver, config, day)
+      let need = (wanted - foodStock(receiver)) * GRANARY_RATE
+      if (need <= 0) continue
+      for (const donorId of ids) {
+        if (need <= 0) break
+        if (donorId === id) continue
+        const donor = next[donorId]
+        if (!donor || donor.population <= 0) continue
+        // Подать берут с излишка, а не с последнего: голодная деревня податей
+        // не платит.
+        const eats = donor.population * config.foodPerPerson
+        const spare = Math.max(0, donor.stock.grain - eats * 30)
+        if (spare <= 0) continue
+        // По разбойной дороге подать не доезжает — как и всякий обоз.
+        const safety = (1 - donor.banditry * 0.5) * (1 - (receiver.banditry ?? 0) * 0.5)
+        const give = Math.min(spare * 0.05 * safety, need)
+        if (give <= 0) continue
+        next[donorId] = takeGrain(donor, give)
+        need -= give
+      }
+      const got = (wanted - foodStock(receiver)) * GRANARY_RATE - need
+      if (got > 0) {
+        const now = next[id]
+        if (now) {
+          next[id] = { ...now, stock: { ...now.stock, grain: now.stock.grain + got } }
+        }
+      }
+    }
+  }
+  return next
+}
+
+/**
+ * Насколько сильно место тянет привоз (этап 57, Е1).
+ *
+ * Обоз идёт туда, где за хлеб платят и где его ждут: в город и столицу — в
+ * первую очередь, в рудник и крепость — потому что им иначе не жить, в
+ * деревню — в последнюю: у неё своё поле.
+ */
+export const IMPORT_PULL: Record<LocationArchetype, number> = {
+  village: 1,
+  town: 1.3,
+  city: 1.8,
+  capital: 2,
+  port: 1.4,
+  mine: 1.7,
+  fortress: 1.7,
+  monastery: 1.2,
+}
+
 function share(
   world: World,
   settlements: Record<string, Settlement>,
@@ -715,7 +845,13 @@ function share(
     for (const id of group) {
       const settlement = next[id]
       if (!settlement || settlement.population <= 0) continue
-      const wanted =
+      // Отдают по тому, сколько надо дожить до нового хлеба; просят по тому,
+      // сколько место вообще держит (этап 57). Пока и то и другое считалось
+      // одним числом, город весной переставал просить ровно тогда, когда у
+      // него кончался хлеб: до жатвы оставалось мало дней, и «нужно» падало
+      // вместе с ними.
+      const wanted = settlement.population * config.foodPerPerson * stockDays(settlement, config)
+      const giving =
         settlement.population * config.foodPerPerson * keepDays(settlement, config, day)
       const have = foodStock(settlement)
       // По опасным дорогам возят осторожнее и меньше.
@@ -723,10 +859,17 @@ function share(
       // Возят хлеб, а не рыбу: рыба не доезжает. С версии 0.5 у берега появился
       // свой улов, и если бы его развозили по всему королевству, приморская
       // провинция кормила бы горы — мир переставал голодать вовсе.
-      if (have > wanted * 1.2) {
-        const spare = Math.min(have - wanted * 1.2, settlement.stock.grain)
+      if (have > giving * 1.2) {
+        const spare = Math.min(have - giving * 1.2, settlement.stock.grain)
         if (spare > 0) donors.push({ id, surplus: spare * rate * safety })
-      } else if (have < wanted) receivers.push({ id, deficit: wanted - have })
+      } else if (have < wanted) {
+        // Город тянет сильнее деревни (этап 57): он платит, и обоз идёт к нему
+        // первым. Без этого большое место сидело на том же ручейке, что и
+        // хутор, а весной теряло людей — за сорок лет города усыхали вдвое.
+        const kind = world.locations[id]?.archetype
+        const pull = kind && isSettlement(kind) ? (IMPORT_PULL[kind as LocationArchetype] ?? 1) : 1
+        receivers.push({ id, deficit: (wanted - have) * pull })
+      }
     }
     if (donors.length === 0 || receivers.length === 0) continue
 
