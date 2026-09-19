@@ -9,6 +9,7 @@ import type { ChainProgress } from './chain'
 import type { Character } from './character'
 import type { Generation, Marks } from './chronicle'
 import type { Companion } from './companion'
+import type { Congress, CongressRecord } from './congress'
 import type { BuildingId } from './content/buildings'
 import { PLAIN_LAW } from './content/estate'
 import type { Ailment } from './content/heal'
@@ -317,6 +318,13 @@ export interface GameState {
   readonly spies?: readonly Spy[]
   /** Пущенные слухи (этап 82, С6): против кого и до какого дня. */
   readonly rumours?: readonly { readonly against: string; readonly untilDay: number }[]
+  /**
+   * Созванный съезд корон (этап 83): он живёт в состоянии, пока не собрался, —
+   * и там же лежит то, что уплачено за голоса.
+   */
+  readonly congress?: Congress | null
+  /** Чем кончались съезды: для летописи века. */
+  readonly congresses?: readonly CongressRecord[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -415,6 +423,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     marriages: [],
     spies: [],
     rumours: [],
+    congress: null,
+    congresses: [],
     factions: {},
     spellcraft: {},
     weather: [],

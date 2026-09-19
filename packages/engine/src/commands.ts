@@ -67,6 +67,19 @@ import {
   wishOf,
   witness,
 } from './companion'
+import {
+  CONGRESS_COST,
+  type Congress,
+  type CongressQuestion,
+  type CongressRecord,
+  congressPlan,
+  congressQuestions,
+  congressesOf,
+  questionDef,
+  tally,
+  voteOf,
+  votePrice,
+} from './congress'
 import type { Availability, Content, Requirements } from './content'
 import { CONTENT } from './content'
 import { DEBATE_MINUTES, DEBATE_XP, STUDENT_UPKEEP } from './content/books'
@@ -859,6 +872,13 @@ export type Command =
       readonly secret?: SecretId
       readonly guarantor?: string
     }
+  /** Съезд корон (этап 83): созвать, купить голос. */
+  | {
+      readonly type: 'callCongress'
+      readonly question: CongressQuestion
+      readonly about?: string
+    }
+  | { readonly type: 'buyVote'; readonly kingdomId: string }
   /** Соглядатаи (этап 82): завести, отозвать, купить советника, пустить слух. */
   | { readonly type: 'plantSpy'; readonly kingdomId: string; readonly seat: SpySeat }
   | { readonly type: 'recallSpy'; readonly kingdomId: string }
@@ -1290,6 +1310,10 @@ export function applyCommand(
         ...(command.secret ? { secret: command.secret } : {}),
         ...(command.guarantor ? { guarantor: command.guarantor } : {}),
       })
+    case 'callCongress':
+      return callCongress(state, command.question, command.about)
+    case 'buyVote':
+      return buyVote(state, command.kingdomId)
     case 'plantSpy':
       return plantSpy(state, command.kingdomId, command.seat)
     case 'recallSpy':
@@ -9119,6 +9143,8 @@ interface Draft {
   marriages: readonly RoyalMarriage[]
   spies: readonly Spy[]
   rumours: readonly { against: string; untilDay: number }[]
+  congress: Congress | null
+  congresses: readonly CongressRecord[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9203,6 +9229,8 @@ function open(state: GameState): Draft {
     marriages: state.marriages ?? [],
     spies: state.spies ?? [],
     rumours: state.rumours ?? [],
+    congress: state.congress ?? null,
+    congresses: state.congresses ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9487,6 +9515,8 @@ function close(draft: Draft): CommandResult {
       }
     }
 
+    // Съезд собирается в назначенный день (этап 83, Е4).
+    holdCongress(draft)
     // Соглядатаев берут за руку, а слухи стихают (этап 82, С4 и С6).
     tickSpies(draft, daysPassed)
     // Колена корон сменяются сами (этап 81, Р3): у соседей новый государь.
@@ -9595,6 +9625,8 @@ function close(draft: Draft): CommandResult {
     marriages: draft.marriages,
     spies: draft.spies,
     rumours: draft.rumours,
+    congress: draft.congress,
+    congresses: draft.congresses,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -9854,6 +9886,122 @@ function warNews(
  * вернее его возьмут. Взятого не спасают — за него отвечает тот, кто его послал:
  * отношение, имя, а иногда и война.
  */
+/**
+ * Съезд собирается (этап 83, Е4 и Е5).
+ *
+ * Голоса считаются в день съезда: из замыслов корон, из отношений и из того, что
+ * уплачено. Решение связывает и тех, кто был против, — потому оно и дороже
+ * договора: нарушить его значит пойти против всех сразу.
+ */
+function holdCongress(draft: Draft): void {
+  const congress = draft.congress
+  if (!congress) return
+  const day = dayOf(draft.time)
+  if (congress.meetDay > day) return
+  const count = tally(draft.base, draft.base.world, congress, day)
+  const def = questionDef(congress.question)
+  draft.congress = null
+  draft.congresses = [
+    ...congressesOf(draft),
+    {
+      day,
+      question: congress.question,
+      passed: count.passed,
+      guests: congress.guests.length,
+      ...(congress.about ? { about: congress.about } : {}),
+    },
+  ]
+  if (!count.passed) {
+    notice(
+      draft,
+      `Съезд разошёлся ни с чем: за ${def.label} ${count.yes} голосов из ${count.needs}.`,
+      'world',
+    )
+    return
+  }
+  notice(
+    draft,
+    `Съезд решил: ${def.label} — ${count.yes} голосов против ${count.no}. ${def.does}.`,
+    'world',
+  )
+  draft.renown += 3
+  const day0 = day
+
+  if (congress.question === 'peace') {
+    // Общий мир: кончаются все войны, какие идут между приехавшими.
+    const kept = draft.politics.wars.filter(
+      (war) => !(congress.guests.includes(war.a) || congress.guests.includes(war.b)),
+    )
+    const ended = draft.politics.wars.length - kept.length
+    draft.politics = { ...draft.politics, wars: kept }
+    if (ended > 0)
+      notice(draft, `Кончено войн: ${ended}. Начавший снова начнёт против всех.`, 'war')
+    return
+  }
+  if (congress.question === 'commonFoe' && congress.about) {
+    // Союз против сильного: приехавшие встают вместе, и ты с ними.
+    const foe = congress.about
+    draft.politics = {
+      ...draft.politics,
+      alliances: [
+        ...draft.politics.alliances,
+        ...congress.guests
+          .filter((id) => id !== foe)
+          .map((id) => ({ a: PLAYER, b: id, since: day0, byMarriage: false })),
+      ],
+    }
+    for (const id of congress.guests) {
+      if (id === foe) continue
+      draft.politics = withRelation(draft.politics, id, foe, -20)
+    }
+    notice(
+      draft,
+      `Против ${kingdomName(draft.base, foe)} сошлись ${congress.guests.length - 1} корон и ты.`,
+      'war',
+    )
+    return
+  }
+  if (congress.question === 'partition' && congress.about) {
+    // Раздел выморочной земли: право появляется у приехавших, у тебя — прежде всех.
+    const empty = congress.about
+    const capital = draft.base.world.kingdoms[empty]?.capitalId
+    const provinceId = capital ? draft.base.world.locations[capital]?.provinceId : undefined
+    if (provinceId) {
+      draft.claims = [
+        ...claimsOf(draft),
+        { provinceId, against: empty, kind: 'inherit', sinceDay: day0 },
+      ]
+      notice(
+        draft,
+        `Земля ${kingdomName(draft.base, empty)} расписана заранее: твоё право признано при свидетелях.`,
+        'world',
+      )
+    }
+    return
+  }
+  if (congress.question === 'roads') {
+    // Торговое согласие со всеми, кто приехал.
+    draft.treaties = [
+      ...treatiesOf(draft),
+      ...congress.guests.map((id) => ({
+        id: `treaty:съезд:${id}:${day0}`,
+        a: PLAYER,
+        b: id,
+        kind: 'trade' as const,
+        sinceDay: day0,
+        untilDay: day0 + treatyDef('trade').days,
+      })),
+    ]
+    notice(draft, `Торговое согласие с ${congress.guests.length} коронами.`, 'trade')
+    return
+  }
+  // Спор о вере: уступившие теплеют к тебе, прочие холодеют ко всем.
+  for (const id of congress.guests) {
+    const vote = voteOf(draft.base, draft.base.world, id, congress.question, congress.about, day)
+    draft.politics = withRelation(draft.politics, PLAYER, id, vote > 0 ? 12 : -10)
+  }
+}
+
 function tickSpies(draft: Draft, days: number): void {
   if (days <= 0) return
   const day = dayOf(draft.time)
@@ -10005,6 +10153,77 @@ function treatyKindOf(errand: EmbassyErrand): TreatyKind | null {
   if (errand === 'passage') return 'passage'
   if (errand === 'mediation') return 'peace'
   return null
+}
+
+/**
+ * Созвать съезд корон (этап 83, Е1 и Е2).
+ *
+ * Вопрос берётся из мира, а не из головы: кончить войны, поделить выморочную
+ * землю, назвать общего врага, договориться о дорогах или о вере. Съезд стоит
+ * дорого и собирается сорок суток — за это время голоса можно ещё купить.
+ */
+function callCongress(state: GameState, question: CongressQuestion, about?: string): CommandResult {
+  if (!state.realm) return fail('requirements', 'Съезд собирает держава, а не человек.')
+  if (state.congress) return fail('invalid', 'Один съезд уже созван: дождись его.')
+  const day = dayOf(state.time)
+  const asked = congressQuestions(state, state.world, day).find((one) => one.question === question)
+  if (!asked) return fail('requirements', 'Об этом сейчас съезд не собирают: нет повода.')
+  const plan = congressPlan(state, state.world, day)
+  if (plan.guests.length === 0)
+    return fail('requirements', 'Ехать к тебе некому: тебя не признают.')
+  if (state.character.money < plan.cost) {
+    return fail('noMoney', `Стол, кров и дары обойдутся в ${plan.cost}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -plan.cost)
+  draft.congress = {
+    question,
+    calledDay: day,
+    meetDay: day + CONGRESS_COST.days,
+    guests: plan.guests,
+    absent: plan.absent,
+    bribes: {},
+    ...((about ?? asked.about) ? { about: about ?? asked.about } : {}),
+  }
+  advance(draft, hours(8))
+  notice(
+    draft,
+    `Съезд созван: ${questionDef(question).label}. Едут ${plan.guests.length}, не едут ${plan.absent.length}. Собираются через ${CONGRESS_COST.days} суток.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Купить голос (этап 83, Е3).
+ *
+ * Голос того, кто и так за, стоит дешевле; голос того, кто против, — вдвое. Это
+ * и есть торг: съезд решает не правда, а то, сколько у тебя серебра и терпения.
+ */
+function buyVote(state: GameState, kingdomId: string): CommandResult {
+  const congress = state.congress
+  if (!congress) return fail('invalid', 'Съезд не созван.')
+  if (!congress.guests.includes(kingdomId)) return fail('invalid', 'Он и так не едет.')
+  if (congress.bribes[kingdomId]) return fail('invalid', 'Этому уже уплачено.')
+  const day = dayOf(state.time)
+  const lean = voteOf(state, state.world, kingdomId, congress.question, congress.about, day)
+  const price = votePrice(state, state.world, kingdomId, lean)
+  if (state.character.money < price) return fail('noMoney', `Его голос стоит ${price}.`)
+
+  const draft = open(state)
+  addMoney(draft, -price)
+  draft.congress = {
+    ...congress,
+    bribes: { ...congress.bribes, [kingdomId]: price },
+  }
+  advance(draft, hours(4))
+  notice(
+    draft,
+    `${kingdomName(state, kingdomId)}: за голос уплачено ${price}. ${lean > 0 ? 'Он и так был за.' : 'Он был против.'}`,
+    'world',
+  )
+  return close(draft)
 }
 
 /**
