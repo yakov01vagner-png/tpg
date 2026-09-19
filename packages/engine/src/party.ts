@@ -21,9 +21,23 @@ export interface Party {
    * латник в тряпье и латник в броне — разные латники.
    */
   readonly gear: number
+  /**
+   * Сколько людей в отряде уже были в бою (этап 58, Б5).
+   *
+   * Ветеран — не разряд у каждого, а число: один бой делает ветераном всякого,
+   * кто ушёл с поля живым. Отряд из ветеранов бьёт крепче и держится дольше, и
+   * потому набранное заново ополчение — не то же самое войско.
+   * Необязательно: сейвы до 0.6 ветеранов не знают.
+   */
+  readonly veterans?: number
 }
 
-export const EMPTY_PARTY: Party = { units: {}, morale: 60, hungryDays: 0, gear: 0 }
+export const EMPTY_PARTY: Party = { units: {}, morale: 60, hungryDays: 0, gear: 0, veterans: 0 }
+
+/** Ветераны не могут быть многочисленнее самого отряда. */
+export function veteransOf(party: Party): number {
+  return Math.min(partySize(party), Math.max(0, party.veterans ?? 0))
+}
 
 export const MORALE_MAX = 100
 /** Ниже этого начинают уходить по ночам. */

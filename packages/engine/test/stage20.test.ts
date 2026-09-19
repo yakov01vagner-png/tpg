@@ -215,10 +215,12 @@ describe('пограничье можно взять', () => {
 
     let current = ok(applyCommand(besieged, { type: 'siegeAssault' }))
     for (let round = 0; round < 30 && current.battle?.outcome === 'ongoing'; round += 1) {
+      // У стен не обходят (этап 58): фланга там нет, и приказ обойти теперь
+      // спрашивает командования, которого у этого героя нет.
       const orders = {
         vanguard: 'charge',
         archers: 'shoot',
-        flank: 'flank',
+        flank: 'charge',
         reserve: 'charge',
         mages: 'fireball',
       } as const

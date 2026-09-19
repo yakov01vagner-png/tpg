@@ -11,7 +11,12 @@ import {
   type Units,
   bestSpell,
   canApply,
+  engagedShare,
+  groundOf,
+  orderNeeds,
+  skillLevel,
   unitsSize,
+  veteranShare,
 } from '@tpg/engine'
 import { useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
@@ -23,10 +28,10 @@ import { moraleWord } from './PeopleScreen'
 
 /** Приказы, которые имеет смысл давать конкретной группе. */
 const ORDERS_FOR: Record<GroupId, readonly OrderId[]> = {
-  vanguard: ['hold', 'charge', 'fallBack'],
+  vanguard: ['hold', 'charge', 'fallBack', 'feint', 'rally'],
   archers: ['shoot', 'hold', 'fallBack'],
-  flank: ['flank', 'charge', 'hold'],
-  reserve: ['hold', 'charge', 'fallBack'],
+  flank: ['flank', 'charge', 'hold', 'feint'],
+  reserve: ['hold', 'charge', 'fallBack', 'rally'],
   mages: ['fireball', 'curse', 'ward'],
 }
 
@@ -55,12 +60,19 @@ export function BattleScreen({ game }: { game: GameState }) {
   const enemySize = unitsSize(battle.enemy.units)
   const log = [...battle.log].reverse().slice(0, 6)
 
+  // Приказ по чину (этап 58, Б4): чего не умеешь, того и не предложат.
+  const command = skillLevel(game.character, 'command')
   const cycle = (group: GroupId) => {
-    const allowed = ORDERS_FOR[group]
+    const allowed = ORDERS_FOR[group].filter((order) => orderNeeds(order) <= command)
     const index = allowed.indexOf(orders[group])
     const next = allowed[(index + 1) % allowed.length] ?? allowed[0]
     if (next) setOrders({ ...orders, [group]: next })
   }
+  // Ширина строя и выучка: два числа, которые решают бой до приказов.
+  const ground = groundOf(battle.ground)
+  const ownSize = GROUP_IDS.reduce((sum, id) => sum + unitsSize(battle.groups[id]), 0)
+  const reach = Math.round(engagedShare(ground, ownSize) * 100)
+  const veterans = Math.round(veteranShare(ownSize, battle.veterans ?? 0) * 100)
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -77,7 +89,7 @@ export function BattleScreen({ game }: { game: GameState }) {
       <View style={styles.field}>
         <Icon name={battle.terrain} size={18} color={palette.faint} />
         <Text style={styles.fieldText}>
-          {`${TERRAIN_LABELS[battle.terrain]}${
+          {`${groundOf(battle.ground).label} · ${TERRAIN_LABELS[battle.terrain]}${
             battle.wallBonus > 1
               ? ` · их стены ×${battle.wallBonus.toFixed(1)}`
               : battle.ownWalls > 1
@@ -85,6 +97,14 @@ export function BattleScreen({ game }: { game: GameState }) {
                 : ''
           } · раунд ${battle.round}`}
         </Text>
+        {reach < 100 ? (
+          <Text style={styles.fieldText}>
+            {`${ground.label.toLowerCase()}: в сшибку доходит ${reach} из ста${ground.flanks ? '' : ', обходить негде'}`}
+          </Text>
+        ) : null}
+        {veterans > 0 ? (
+          <Text style={styles.fieldText}>{`ветеранов ${veterans} из ста`}</Text>
+        ) : null}
         {battle.strain > 0 ? (
           <Text style={[styles.fieldText, battle.strain > 70 && { color: palette.danger }]}>
             {`истощение ${battle.strain}`}

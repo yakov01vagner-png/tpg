@@ -2,6 +2,8 @@ import {
   BUILDINGS,
   BUILDING_IDS,
   type BuildingId,
+  CAPTIVE_FATES,
+  CAPTIVE_FATE_LABELS,
   CECH_DUES,
   CONTENT,
   type Command,
@@ -9,6 +11,7 @@ import {
   LIFE,
   MAGIC_RANKS,
   PLAYER,
+  SIEGE_MOVE_LABELS,
   SPOUSE_TEMPERS,
   type Settlement,
   TROOPS,
@@ -17,6 +20,7 @@ import {
   ageOf,
   atHome,
   bentWords,
+  bribePrice,
   canApply,
   canRetire,
   cechAt,
@@ -41,8 +45,10 @@ import {
   ownOrder,
   rankLabel,
   rankOfShifts,
+  sapLeft,
   spouseSays,
   spouseTemper,
+  surrenderChance,
   upbringingOf,
   vassalsOf,
   warsOf,
@@ -91,6 +97,8 @@ export function OwnSheet({ game }: { game: GameState }) {
 
       <Affairs game={game} />
 
+      <Captives game={game} />
+
       <CraftSection game={game} />
 
       <HomeSection game={game} />
@@ -99,24 +107,7 @@ export function OwnSheet({ game }: { game: GameState }) {
         {!settlement || !here ? <Empty text="Здесь нечем владеть." /> : null}
         {settlement && here && !isOwnedByPlayer(settlement) ? (
           game.siege?.locationId === game.locationId ? (
-            <>
-              <Card
-                title="Ждать под стенами"
-                description={`Осада идёт ${game.siege.days} сут. В городе тает хлеб.`}
-                meta="3 сут"
-                reason={reasonFor({ type: 'siegeWait', days: 3 })}
-                onPress={() => dispatch({ type: 'siegeWait', days: 3 })}
-              />
-              <Card
-                title="Идти на приступ"
-                description="Стены считаются в бою как оборона. Голодный гарнизон держится хуже."
-                meta="штурм"
-                reason={reasonFor({ type: 'siegeAssault' })}
-                onPress={() => dispatch({ type: 'siegeAssault' })}
-                tone="danger"
-              />
-              <Card title="Снять осаду" onPress={() => dispatch({ type: 'siegeLift' })} />
-            </>
+            <SiegeMoves game={game} settlement={settlement} />
           ) : (
             <Card
               title="Обложить город"
@@ -628,6 +619,106 @@ function HomeSection({ game }: { game: GameState }) {
           tone="gold"
         />
       ) : null}
+    </Section>
+  )
+}
+
+/**
+ * Осада как дело (этап 58, Б2).
+ *
+ * Пять ходов вместо трёх: стоять, копать, требовать сдачи, купить ворота,
+ * лезть. У каждого своя цена и свой риск, и видно, что он обещает.
+ */
+function SiegeMoves({ game, settlement }: { game: GameState; settlement: Settlement }) {
+  const siege = game.siege
+  if (!siege) return null
+  const reasonFor = (command: Command): string | undefined => {
+    const check = canApply(game, command)
+    return check.ok ? undefined : check.message
+  }
+  const price = bribePrice(game, settlement)
+  const chance = Math.round(surrenderChance(settlement, siege) * 100)
+  return (
+    <>
+      <Panel tone={siege.breached ? 'gold' : undefined}>
+        <Dim>
+          {siege.breached
+            ? `Осада идёт ${siege.days} сут. В стене пролом: приступ пойдёт вдвое легче.`
+            : `Осада идёт ${siege.days} сут. Подкопа осталось ${sapLeft(siege)} сут.`}
+        </Dim>
+      </Panel>
+      <Card
+        title={SIEGE_MOVE_LABELS.wait.label}
+        description={SIEGE_MOVE_LABELS.wait.about}
+        meta="3 сут"
+        reason={reasonFor({ type: 'siegeWait', days: 3 })}
+        onPress={() => dispatch({ type: 'siegeWait', days: 3 })}
+      />
+      {siege.breached ? null : (
+        <Card
+          title={SIEGE_MOVE_LABELS.sap.label}
+          description={SIEGE_MOVE_LABELS.sap.about}
+          meta="3 сут"
+          reason={reasonFor({ type: 'siegeSap', days: 3 })}
+          onPress={() => dispatch({ type: 'siegeSap', days: 3 })}
+        />
+      )}
+      <Card
+        title={SIEGE_MOVE_LABELS.parley.label}
+        description={SIEGE_MOVE_LABELS.parley.about}
+        meta={`${chance} из ста`}
+        reason={reasonFor({ type: 'siegeParley' })}
+        onPress={() => dispatch({ type: 'siegeParley' })}
+      />
+      <Card
+        title={SIEGE_MOVE_LABELS.bribe.label}
+        description={SIEGE_MOVE_LABELS.bribe.about}
+        meta={`−${price}`}
+        reason={reasonFor({ type: 'siegeBribe' })}
+        onPress={() => dispatch({ type: 'siegeBribe' })}
+      />
+      <Card
+        title={SIEGE_MOVE_LABELS.assault.label}
+        description={SIEGE_MOVE_LABELS.assault.about}
+        meta="штурм"
+        reason={reasonFor({ type: 'siegeAssault' })}
+        onPress={() => dispatch({ type: 'siegeAssault' })}
+        tone="danger"
+      />
+      <Card
+        title={SIEGE_MOVE_LABELS.lift.label}
+        description={SIEGE_MOVE_LABELS.lift.about}
+        onPress={() => dispatch({ type: 'siegeLift' })}
+      />
+    </>
+  )
+}
+
+/** Пленные лорды (этап 58, Б6): четыре решения, и каждое мир помнит. */
+function Captives({ game }: { game: GameState }) {
+  const captives = game.captives ?? []
+  if (captives.length === 0) return null
+  const day = dayOf(game.time)
+  return (
+    <Section title="Пленные">
+      {captives.map((captive) => (
+        <View key={captive.id}>
+          <Panel>
+            <Body>{`${captive.name}, ${captive.title.toLowerCase()}`}</Body>
+            <Dim>{`В плену ${day - captive.since} сут. Выкуп: ${captive.ransom}.`}</Dim>
+          </Panel>
+          {CAPTIVE_FATES.map((fate) => (
+            <Card
+              key={fate}
+              title={CAPTIVE_FATE_LABELS[fate].label}
+              description={CAPTIVE_FATE_LABELS[fate].about}
+              meta={fate === 'ransom' ? `+${captive.ransom}` : undefined}
+              onPress={() => dispatch({ type: 'captiveFate', captiveId: captive.id, fate })}
+              tone={fate === 'execute' ? 'danger' : undefined}
+            />
+          ))}
+        </View>
+      ))}
     </Section>
   )
 }

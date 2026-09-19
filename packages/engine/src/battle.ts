@@ -1,4 +1,14 @@
+import type { GroundId } from './content/field'
+import type { GoodId } from './content/goods'
 import { TROOPS, type TroopId } from './content/troops'
+import {
+  engagedShare,
+  groundOf,
+  spoilsGoods,
+  veteranNerve,
+  veteranPower,
+  veteranShare,
+} from './field'
 import type { Party } from './party'
 import { partySize } from './party'
 import type { Rng } from './rng'
@@ -32,6 +42,8 @@ export const ORDER_IDS = [
   'shoot',
   'flank',
   'fallBack',
+  'feint',
+  'rally',
   'fireball',
   'curse',
   'ward',
@@ -44,6 +56,8 @@ export const ORDER_LABELS: Record<OrderId, string> = {
   shoot: 'Стрелять',
   flank: 'Обойти с фланга',
   fallBack: 'Отойти',
+  feint: 'Обманный отход',
+  rally: 'Ободрить строй',
   fireball: 'Ударить огнём',
   curse: 'Наслать порчу',
   ward: 'Укрыть своих',
@@ -70,8 +84,15 @@ export interface Battle {
   readonly outcome: BattleOutcome
   readonly terrain: Terrain
   readonly log: readonly string[]
-  /** Заполняется, когда бой окончен. */
-  readonly spoils: { readonly money: number; readonly prisoners: number }
+  /**
+   * Заполняется, когда бой окончен. С версии 0.6 добыча считается вещами: с
+   * чужого строя снимают железо, с обоза берут хлеб (этап 58, Б3).
+   */
+  readonly spoils: {
+    readonly money: number
+    readonly prisoners: number
+    readonly goods?: Readonly<Partial<Record<GoodId, number>>>
+  }
   /**
    * Что стоит на кону: для штурма — место, которое переходит победителю; для
    * обороны — своё место и гарнизон, который встал в строй рядом с отрядом.
@@ -87,6 +108,18 @@ export interface Battle {
   readonly foeId: string | null
   /** Поединок: один на бой. */
   readonly duel: 'none' | 'won' | 'lost'
+  /**
+   * Место боя (этап 58): брод, лес, перевал, стены. Решает, сколько людей
+   * доходит до сшибки, видно ли стрелку цель и есть ли куда обходить.
+   * Необязательно — сейвы до 0.6 боёв без поля не знают.
+   */
+  readonly ground?: GroundId
+  /** Сколько в строю тех, кто уже был в бою (этап 58, Б5). */
+  readonly veterans?: number
+  /** Свои павшие по родам: из них потом встанут раненые (этап 58, Б3). */
+  readonly fallen?: Units
+  /** С чем враг вышел на поле: по разнице считают, что с него снимут. */
+  readonly enemyStartUnits?: Units
 }
 
 export type BattleStake =
@@ -154,6 +187,8 @@ export interface BattleOptions {
   readonly wallBonus?: number
   readonly ownWalls?: number
   readonly foeId?: string | null
+  readonly ground?: GroundId
+  readonly veterans?: number
 }
 
 export function startBattle(
@@ -169,15 +204,22 @@ export function startBattle(
     foeId: options.foeId ?? null,
     duel: 'none',
     strain: 0,
+    ground: options.ground ?? 'open',
+    veterans: options.veterans ?? 0,
+    fallen: {},
     enemy,
     enemyStart: unitsSize(enemy.units),
+    enemyStartUnits: enemy.units,
     groups: formUp(party),
     morale: party.morale,
     fatigue: 0,
     round: 0,
     outcome: 'ongoing',
     terrain,
-    log: [`${enemy.name} — ${unitsSize(enemy.units)} против ${partySize(party)}.`],
+    log: [
+      `${enemy.name} — ${unitsSize(enemy.units)} против ${partySize(party)}.`,
+      `${groundOf(options.ground).label}. ${groundOf(options.ground).about}`,
+    ],
     spoils: { money: 0, prisoners: 0 },
   }
 }
@@ -191,6 +233,11 @@ const ORDER_EFFECT: Record<OrderId, { attack: number; defense: number }> = {
   shoot: { attack: 1.2, defense: 0.75 },
   flank: { attack: 1.6, defense: 0.55 },
   fallBack: { attack: 0.15, defense: 1.4 },
+  // Обманный отход: группа почти не бьёт и почти не прикрывает — она выманивает.
+  // Цену за это платит тот, кто бросился следом.
+  feint: { attack: 0.2, defense: 0.9 },
+  // Ободрить: в этом раунде группа не воюет, зато строй перестаёт сыпаться.
+  rally: { attack: 0.1, defense: 1.3 },
   // Маги в общий счёт силы не входят: их дело считается отдельно.
   fireball: { attack: 0, defense: 0.6 },
   curse: { attack: 0, defense: 0.6 },
@@ -248,6 +295,11 @@ export function resolveRound(
   let wardBonus = 1
   let strainAdded = 0
   const strainFactor = Math.max(0.2, 1 - battle.strain / 110)
+  // Место боя (этап 58): оно решает, сколько людей доходит до сшибки, видно ли
+  // стрелку цель и есть ли куда обходить.
+  const ground = groundOf(battle.ground)
+  let feinting = 0
+  let rallying = 0
 
   for (const id of GROUP_IDS) {
     const units = battle.groups[id]
@@ -291,12 +343,23 @@ export function resolveRound(
     if (order === 'shoot' && power.ranged === 0) {
       log.push(`${GROUP_LABELS[id]}: стрелять нечем.`)
     }
+    if (order === 'feint') feinting += unitsSize(units)
+    if (order === 'rally') rallying += unitsSize(units)
+    // Укрытие: в лесу и за стенами стрела находит цель вдвое реже.
+    const seen = order === 'shoot' ? 1 - ground.cover : 1
+    if (order === 'flank' && !ground.flanks) {
+      // Обходить негде: у брода и на перевале фланга нет вовсе.
+      log.push(`${GROUP_LABELS[id]}: обходить негде — ${ground.label.toLowerCase()}.`)
+      attack += power.attack * effect.attack * 0.25
+      defense += power.defense * effect.defense * 0.8
+      continue
+    }
     if (order === 'flank' && !engaged) {
       // Обход работает, только когда врага кто-то держит перед собой.
       log.push(`${GROUP_LABELS[id]} заходит в пустоту: враг не связан боем.`)
-      attack += power.attack * effect.attack * 0.4
+      attack += power.attack * effect.attack * 0.4 * seen
     } else {
-      attack += power.attack * effect.attack
+      attack += power.attack * effect.attack * seen
     }
     defense += power.defense * effect.defense
   }
@@ -305,8 +368,22 @@ export function resolveRound(
   const fatiguePenalty = 1 - battle.fatigue / 250
   const moraleFactor = 0.6 + battle.morale / 250
   const gear = context.gear ?? 1
+  const ownSizeNow = groupsSize(battle.groups)
+  const enemySizeNow = unitsSize(battle.enemy.units)
+  // Ширина строя: до сшибки доходит столько, сколько вмещает место. В узком
+  // месте перевес в числе перестаёт быть перевесом — и это, а не множитель
+  // конницы, главное, что рельеф делает с боем (этап 58, Б1).
+  const ownReach = engagedShare(ground, ownSizeNow)
+  const enemyReach = engagedShare(ground, enemySizeNow)
+  // Выучка боем: ветеран бьёт крепче новобранца (этап 58, Б5).
+  const veterans = veteranShare(ownSizeNow, battle.veterans ?? 0)
   attack =
-    (attack * gear + (context.heroAttack ?? 0)) * commandBonus * fatiguePenalty * moraleFactor
+    (attack * gear + (context.heroAttack ?? 0)) *
+    commandBonus *
+    fatiguePenalty *
+    moraleFactor *
+    ownReach *
+    veteranPower(veterans)
   // Свои стены считаются так же, как чужие при штурме: камень помогает тому,
   // кто за ним стоит.
   defense =
@@ -323,8 +400,23 @@ export function resolveRound(
   const enemyEffect = ORDER_EFFECT[enemyOrder]
   const enemyMoraleFactor = 0.6 + battle.enemy.morale / 250
   const enemyFatiguePenalty = 1 - battle.enemy.fatigue / 250
+  // Обманный отход (этап 58, Б4): кто бросился следом за отступающими, бьёт
+  // воздух. Против того, кто стоит на месте, обман не работает вовсе.
+  const feintWorks = feinting > 0 && enemyOrder === 'charge'
+  if (feinting > 0) {
+    log.push(
+      feintWorks
+        ? 'Обманный отход: они бросились в пустоту и открыли бок.'
+        : 'Обманный отход: они не двинулись с места. Обманывать некого.',
+    )
+  }
   const enemyAttack =
-    enemyPower.attack * enemyEffect.attack * enemyMoraleFactor * enemyFatiguePenalty
+    enemyPower.attack *
+    enemyEffect.attack *
+    enemyMoraleFactor *
+    enemyFatiguePenalty *
+    enemyReach *
+    (feintWorks ? 0.5 : 1)
   // Стены считаются здесь: штурм — тот же бой, только обороне помогает камень.
   const enemyDefense =
     enemyPower.defense *
@@ -384,12 +476,17 @@ export function resolveRound(
   // чем кончаются люди. Сравниваем доли, а не головы: двое из троих — разгром,
   // двое из сотни — царапина.
   const MORALE_PER_LOSS = 35
+  // Ободрить строй: в этом раунде группа не воюет, зато перестаёт сыпаться.
+  const rallied =
+    rallying > 0 ? 6 + Math.min(6, Math.round((rallying / Math.max(1, ownSize)) * 12)) : 0
+  if (rallied > 0) log.push('Ты идёшь по строю и говоришь то, что нужно. Ряды выравниваются.')
   const ownShare = ownSize > 0 ? ownLosses / ownSize : 0
   const enemyShare = enemySize > 0 ? enemyLosses / enemySize : 0
   const morale = clampMorale(
     battle.morale -
-      ownShare * MORALE_PER_LOSS -
+      ownShare * MORALE_PER_LOSS * veteranNerve(veterans) -
       backlashMorale +
+      rallied +
       (enemyShare > ownShare ? 4 : 0) -
       outnumberedPenalty(ownSize, enemySize),
   )
@@ -398,7 +495,8 @@ export function resolveRound(
       enemyShare * MORALE_PER_LOSS +
       (ownShare > enemyShare ? 4 : 0) -
       outnumberedPenalty(enemySize, ownSize) -
-      enemyMoraleHit,
+      enemyMoraleHit -
+      (feintWorks ? 7 : 0),
   )
 
   const nextEnemy: BattleSide = {
@@ -417,9 +515,15 @@ export function resolveRound(
     outcome = morale > enemyMorale ? 'won' : 'lost'
   }
 
+  // Свои павшие складываются по родам: из них после боя встанут раненые.
+  const fallen = addUnits(
+    battle.fallen ?? {},
+    lostUnits(unformUp(battle.groups), unformUp(groupsAfterBacklash)),
+  )
+
   let spoils = battle.spoils
   if (outcome === 'won') {
-    const [captured, afterCapture] = capture(nextEnemy, battle.enemyStart, generator)
+    const [captured, afterCapture] = capture(nextEnemy, battle, generator)
     generator = afterCapture
     spoils = captured
     log.push(
@@ -436,6 +540,7 @@ export function resolveRound(
       ...battle,
       enemy: nextEnemy,
       groups: groupsAfterBacklash,
+      fallen,
       strain,
       morale,
       fatigue: Math.min(100, battle.fatigue + 8),
@@ -509,7 +614,7 @@ export function resolveDuel(battle: Battle, hero: DuelHero, rng: Rng): DuelResul
   const enemy: BattleSide = { ...battle.enemy, morale: enemyMorale }
   if (enemyMorale < ROUT_MORALE) {
     outcome = 'won'
-    const [captured, afterCapture] = capture(enemy, battle.enemyStart, generator)
+    const [captured, afterCapture] = capture(enemy, battle, generator)
     generator = afterCapture
     spoils = captured
     log.push(`Они бегут, не приняв боя. Добычи на ${spoils.money}.`)
@@ -554,7 +659,14 @@ export function fleeBattle(battle: Battle, rng: Rng): RoundResult {
   const size = groupsSize(battle.groups)
   const share = size > 0 ? mounted / size : 0
   const [roll, next] = nextFloat(rng)
-  const lossShareOnFlight = Math.max(0.05, 0.3 - share * 0.25) * (0.7 + roll * 0.6)
+  // Цена отхода — от места: из леса уходят почти без потерь, с перевала не
+  // уходят почти никак (этап 58, Б1).
+  const wayOut = groundOf(battle.ground).escape
+  // Выше семи десятых не поднимаем: отход — не разгром, даже с перевала.
+  const lossShareOnFlight = Math.min(
+    0.7,
+    (Math.max(0.05, 0.3 - share * 0.25) * (0.7 + roll * 0.6)) / Math.max(0.2, wayOut),
+  )
   const losses = Math.min(size, Math.round(size * lossShareOnFlight))
   const [groups, afterLosses] = takeGroupLosses(battle.groups, losses, null, next)
 
@@ -687,15 +799,37 @@ function takeGroupLosses(
 
 function capture(
   enemy: BattleSide,
-  enemyStart: number,
+  battle: Battle,
   rng: Rng,
-): [{ money: number; prisoners: number }, Rng] {
+): [{ money: number; prisoners: number; goods: Readonly<Partial<Record<GoodId, number>>> }, Rng] {
   const survivors = unitsSize(enemy.units)
   const [roll, afterRoll] = nextFloat(rng)
   const prisoners = Math.round(survivors * (0.2 + roll * 0.3))
   const [lucky, afterLucky] = rollChance(afterRoll, 0.5)
-  const money = Math.round(enemyStart * (lucky ? 6 : 3.5))
-  return [{ money, prisoners }, afterLucky]
+  const money = Math.round(battle.enemyStart * (lucky ? 6 : 3.5))
+  // Трофеи по счёту (этап 58, Б3): с чужого строя снимают то, что на нём было,
+  // а не «добычу на столько-то». Считаем по павшим: с уцелевших не снимешь.
+  const goods = spoilsGoods(lostUnits(battle.enemyStartUnits ?? {}, enemy.units))
+  return [{ money, prisoners, goods }, afterLucky]
+}
+
+/** Кого недостаёт: было минус осталось, по родам. */
+export function lostUnits(before: Units, after: Units): Units {
+  const lost: Record<string, number> = {}
+  for (const [id, count] of Object.entries(before)) {
+    const left = after[id as TroopId] ?? 0
+    const gone = (count ?? 0) - left
+    if (gone > 0) lost[id] = gone
+  }
+  return lost
+}
+
+export function addUnits(a: Units, b: Units): Units {
+  const sum: Record<string, number> = { ...a } as Record<string, number>
+  for (const [id, count] of Object.entries(b)) {
+    sum[id] = (sum[id] ?? 0) + (count ?? 0)
+  }
+  return sum
 }
 
 /**

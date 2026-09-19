@@ -1,6 +1,7 @@
 import type { Band } from './band'
 import { musterBands } from './band'
 import type { Battle } from './battle'
+import type { Captive } from './captive'
 import type { ChainProgress } from './chain'
 import type { Character } from './character'
 import type { Companion } from './companion'
@@ -28,6 +29,7 @@ import { NO_REPUTATION } from './reputation'
 import type { Rng } from './rng'
 import { createRng } from './rng'
 import type { Ship } from './ship'
+import type { Siege } from './siege'
 import type { GameTime } from './time'
 import { WORLD_START } from './time'
 import type { Politics } from './war'
@@ -173,8 +175,16 @@ export interface GameState {
   readonly bands: readonly Band[]
   /** Королевство, которому игрок служит за жалованье. */
   readonly service: string | null
-  /** Идущая осада: место и сколько суток войско стоит под стенами. */
-  readonly siege: { readonly locationId: string; readonly days: number } | null
+  /**
+   * Идущая осада: место, сутки под стенами, подкоп и пролом (этап 58).
+   * Подкоп и пролом необязательны — сейвы до 0.6 осад без подкопа не знают.
+   */
+  readonly siege: Siege | null
+  /**
+   * Взятые в бою лорды (этап 58, Б6): за них платят, им навязывают присягу,
+   * их отпускают или вешают. Необязательно — сейвы до 0.6 плена не знают.
+   */
+  readonly captives?: readonly Captive[]
   /** Слава: победы, за которые корона может пожаловать землю. */
   readonly renown: number
   /** Что о тебе помнят места и лорды. */
@@ -241,6 +251,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     bands,
     service: null,
     siege: null,
+    captives: [],
     renown: 0,
     reputation: NO_REPUTATION,
     realm: null,
