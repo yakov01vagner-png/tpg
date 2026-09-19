@@ -29,6 +29,7 @@ import { startKnowledge } from './knowledge'
 import type { Artifact, Spellcraft, Weather } from './lore'
 import { EMPTY_PRICE_LOG, type PriceLog } from './market'
 import type { Dealing } from './merchant'
+import type { Offices } from './office'
 import type { Interdict, Membership } from './order'
 import type { Party } from './party'
 import { EMPTY_PARTY } from './party'
@@ -262,6 +263,11 @@ export interface GameState {
    * `kingdomId === PLAYER`; в состоянии лежит только договор с ним.
    */
   readonly oaths?: Readonly<Record<string, Oath>>
+  /**
+   * Двор (этап 75): кто какую должность держит и с какого дня. Умение и имя —
+   * у самого человека, а не у должности.
+   */
+  readonly offices?: Offices
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -349,6 +355,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     maims: [],
     lordDeeds: {},
     oaths: {},
+    offices: {},
     factions: {},
     spellcraft: {},
     weather: [],

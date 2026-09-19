@@ -1,4 +1,5 @@
 import {
+  type Advice,
   BUILDINGS,
   BUILDING_IDS,
   type BuildingId,
@@ -7,6 +8,7 @@ import {
   CECH_DUES,
   CONTENT,
   type Command,
+  type CourtParty,
   GUARD_HIRE,
   type GameState,
   INN_COST,
@@ -16,6 +18,7 @@ import {
   LEVY_LEVELS,
   LIFE,
   MAGIC_RANKS,
+  OFFICES,
   PLAYER,
   SIEGE_MOVE_LABELS,
   SPOUSE_TEMPERS,
@@ -36,14 +39,18 @@ import {
   callWord,
   canApply,
   canRetire,
+  candidatesFor,
   caravanMaster,
   caravanTemperDef,
   cechAt,
+  councilAdvice,
   courtCase,
+  courtParties,
   dailyTax,
   dailyTolls,
   dayOf,
   daysAway,
+  errandsFor,
   foodSecurity,
   freeSlots,
   garrisonLimit,
@@ -65,6 +72,9 @@ import {
   oathAsks,
   oathOf,
   oathWords,
+  officeDef,
+  officeErrandDef,
+  officerAt,
   ownOrder,
   ownRoads,
   patrolCost,
@@ -264,6 +274,9 @@ function Court({
   // Кого можно взять под руку здесь и сейчас: безземельные и те, кто своей
   // короне больше не верит (этап 74, В2).
   const candidates = swearCandidates(game).slice(0, 3)
+  const today = Math.floor(game.time / 1440) + 1
+  const council = councilAdvice(game, today)
+  const parties = courtParties(game, today)
   return (
     <Section
       title="Двор"
@@ -347,6 +360,69 @@ function Court({
           tone="danger"
         />
       ) : null}
+      <Dim>
+        Двор:{' '}
+        {OFFICES.map((id) => {
+          const officer = officerAt(game, id)
+          return `${officeDef(id).label} — ${officer ? officer.name : 'пусто'}`
+        }).join(' · ')}
+      </Dim>
+      {OFFICES.map((id) => {
+        const officer = officerAt(game, id)
+        const def = officeDef(id)
+        const best = candidatesFor(game, id)[0]
+        if (!officer) {
+          return best ? (
+            <Card
+              key={id}
+              title={`Назначить ${def.label}: ${best.name}`}
+              description={`${def.about} ${def.does}.`}
+              meta={`умение ${best.skill}, жалованье ${def.wage} в сутки`}
+              reason={reasonFor({ type: 'appoint', officeId: id, holderId: best.id })}
+              onPress={() => dispatch({ type: 'appoint', officeId: id, holderId: best.id })}
+            />
+          ) : null
+        }
+        const errand = errandsFor(id)[0]
+        return (
+          <Row
+            key={id}
+            title={`${def.label} ${officer.name}`}
+            subtitle={
+              officer.awayUntil !== undefined
+                ? `в отъезде: ${officeErrandDef(officer.errand ?? 'arrears')?.label ?? 'поручение'}`
+                : `${def.does} · умение ${officer.skill}`
+            }
+            right={
+              errand && officer.awayUntil === undefined ? (
+                <Button
+                  compact
+                  tone="quiet"
+                  label={errand.label}
+                  disabled={
+                    reasonFor({ type: 'sendOfficer', officeId: id, errandId: errand.id }) !== null
+                  }
+                  onPress={() =>
+                    dispatch({ type: 'sendOfficer', officeId: id, errandId: errand.id })
+                  }
+                />
+              ) : null
+            }
+          />
+        )
+      })}
+      {council.map((advice: Advice) => (
+        <Panel key={advice.officeId}>
+          <Body>{advice.who}</Body>
+          <Dim>{advice.says}</Dim>
+          <Faint>{advice.wants}</Faint>
+        </Panel>
+      ))}
+      <Dim>
+        {parties
+          .map((party) => `${party.label}: ${party.mood > 0 ? '+' : ''}${party.mood}`)
+          .join(' · ')}
+      </Dim>
       {pending ? (
         <Panel tone="gold">
           <Body>{pending.title}</Body>

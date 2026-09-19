@@ -330,6 +330,26 @@ import {
   orderFrom,
   talesOf,
 } from './merchant'
+import {
+  type Appointment,
+  ERRAND_COST,
+  type OfficeErrandId,
+  type OfficeId,
+  type Offices,
+  candidatesFor,
+  chancellorCalm,
+  courtPressure,
+  courtWages,
+  errandsFor,
+  fitness,
+  isAway,
+  musterBonus,
+  officeDef,
+  officeErrandDef,
+  officerAt,
+  skimGuard,
+  treasuryBonus,
+} from './office'
 import type { Interdict, Membership, OrderPower } from './order'
 import {
   DUES_DAYS,
@@ -725,6 +745,10 @@ export type Command =
   | { readonly type: 'swearOath'; readonly lordId: string; readonly locationId: string }
   /** Созвать вассалов по присяге (этап 74, В3). */
   | { readonly type: 'summonVassals' }
+  /** Двор (этап 75): назначить, отставить, послать с поручением. */
+  | { readonly type: 'appoint'; readonly officeId: OfficeId; readonly holderId: string }
+  | { readonly type: 'dismissOfficer'; readonly officeId: OfficeId }
+  | { readonly type: 'sendOfficer'; readonly officeId: OfficeId; readonly errandId: OfficeErrandId }
   /** Двор (этап 43): пожаловать лен вассалу, отнять его, рассудить дело. */
   | { readonly type: 'grantFief'; readonly lordId: string; readonly locationId: string }
   | { readonly type: 'revokeFief'; readonly locationId: string }
@@ -1118,6 +1142,12 @@ export function applyCommand(
       return swearOath(state, command.lordId, command.locationId)
     case 'summonVassals':
       return summonVassals(state)
+    case 'appoint':
+      return appoint(state, command.officeId, command.holderId)
+    case 'dismissOfficer':
+      return dismissOfficer(state, command.officeId)
+    case 'sendOfficer':
+      return sendOfficer(state, command.officeId, command.errandId)
     case 'grantFief':
       return grantFief(state, command.lordId, command.locationId)
     case 'revokeFief':
@@ -5415,17 +5445,19 @@ function summonVassals(state: GameState): CommandResult {
       if (oath && oath.gives !== 'tax') shiftVassals(draft, -3, lord.id)
       continue
     }
-    came += men
+    // Маршал собирает людей лучше, чем ты сам (этап 75, Д1).
+    const brought = Math.round(men * musterBonus(draft.base, day))
+    came += brought
     // Ведёт он своих: две трети ополчения, треть — люди при оружии.
-    const militia = Math.max(1, Math.round(men * 0.66))
-    const armed = Math.max(0, men - militia)
+    const militia = Math.max(1, Math.round(brought * 0.66))
+    const armed = Math.max(0, brought - militia)
     units = {
       ...units,
       militia: (units.militia ?? 0) + militia,
       ...(armed > 0 ? { manAtArms: (units.manAtArms ?? 0) + armed } : {}),
     }
     if (oath) oaths[lord.id] = { ...oath, calledDay: day }
-    notice(draft, `${lord.title} ${lord.name} привёл ${men} человек.`, 'war')
+    notice(draft, `${lord.title} ${lord.name} привёл ${brought} человек.`, 'war')
     // Собранные люди — не даровые: двор пустеет, и это помнят.
     shiftVassals(draft, -2, lord.id)
   }
@@ -5434,6 +5466,94 @@ function summonVassals(state: GameState): CommandResult {
   if (came === 0)
     notice(draft, 'Никто не пришёл. Это и есть цена присяги, которой не верят.', 'war')
   else notice(draft, `Собрано по присяге: ${came} человек.`, 'war')
+  return close(draft)
+}
+
+/**
+ * Назначить на должность (этап 75, Д1 и Д2).
+ *
+ * Должность — работа, а не титул: её дают тому, кто по ней что-то умеет.
+ * Негодного назначить можно — он будет есть жалованье и молчать на совете, и
+ * это тоже решение.
+ */
+function appoint(state: GameState, officeId: OfficeId, holderId: string): CommandResult {
+  if (!state.realm) return fail('requirements', 'Двор держат при имени: у тебя его нет.')
+  const def = officeDef(officeId)
+  const candidate = candidatesFor(state, officeId).find((one) => one.id === holderId)
+  if (!candidate) return fail('invalid', 'Такого человека к должности не приставишь.')
+  const draft = open(state)
+  const seat: Appointment = {
+    holderId: candidate.id,
+    kind: candidate.kind,
+    sinceDay: dayOf(draft.time),
+  }
+  draft.offices = { ...draft.offices, [officeId]: seat }
+  advance(draft, hours(2))
+  notice(
+    draft,
+    candidate.skill >= 3
+      ? `${candidate.name} — твой ${def.label}. ${def.does}.`
+      : `${candidate.name} — твой ${def.label}. В деле он не силён, но должность занята.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/** Отставить: жалованье остаётся в казне, дело остаётся без хозяина. */
+function dismissOfficer(state: GameState, officeId: OfficeId): CommandResult {
+  const seat = state.offices?.[officeId]
+  if (!seat) return fail('invalid', 'Должность и так пуста.')
+  const officer = officerAt(state, officeId)
+  const draft = open(state)
+  const offices = { ...draft.offices }
+  delete offices[officeId]
+  draft.offices = offices
+  advance(draft, hours(1))
+  notice(draft, `${officer?.name ?? 'Человек'} больше не ${officeDef(officeId).label}.`, 'world')
+  // Отставленный вассал помнит это как обиду: должность при дворе — тоже милость.
+  if (seat.kind === 'vassal') {
+    draft.lordDeeds = withLordDeed(draft.lordDeeds, seat.holderId, 'refused')
+    shiftVassals(draft, -6, seat.holderId)
+  }
+  return close(draft)
+}
+
+/**
+ * Послать своего с поручением (этап 75, Д5).
+ *
+ * Пока он в отъезде, его должность пуста: сенешаль, выбивающий недоимки, не
+ * смотрит за управляющими. В этом и выбор — не в том, послать или нет, а в том,
+ * чем на это время пожертвовать.
+ */
+function sendOfficer(
+  state: GameState,
+  officeId: OfficeId,
+  errandId: OfficeErrandId,
+): CommandResult {
+  const officer = officerAt(state, officeId)
+  if (!officer) return fail('requirements', 'Эту должность никто не держит.')
+  const day = dayOf(state.time)
+  if (isAway(officer, day)) return fail('invalid', `${officer.name} уже в отъезде.`)
+  const errand = errandsFor(officeId).find((one) => one.id === errandId)
+  if (!errand) return fail('invalid', 'Такое поручение не по его части.')
+  if (state.character.money < ERRAND_COST) {
+    return fail('noMoney', `На дорогу и снаряжение нужно ${ERRAND_COST}.`)
+  }
+  const seat = state.offices?.[officeId]
+  if (!seat) return fail('invalid', 'Эту должность никто не держит.')
+
+  const draft = open(state)
+  addMoney(draft, -ERRAND_COST)
+  draft.offices = {
+    ...draft.offices,
+    [officeId]: { ...seat, errand: { id: errandId, untilDay: day + errand.days } },
+  }
+  advance(draft, hours(2))
+  notice(
+    draft,
+    `${officer.name} уехал: ${errand.label.toLowerCase()}. Вернётся через ${errand.days} суток.`,
+    'world',
+  )
   return close(draft)
 }
 
@@ -8388,6 +8508,7 @@ interface Draft {
   maims: readonly string[]
   lordDeeds: Readonly<Record<string, readonly LordDeedId[]>>
   oaths: Readonly<Record<string, Oath>>
+  offices: Offices
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -8461,6 +8582,7 @@ function open(state: GameState): Draft {
     maims: state.maims ?? [],
     lordDeeds: state.lordDeeds ?? {},
     oaths: state.oaths ?? {},
+    offices: state.offices ?? {},
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -8745,6 +8867,9 @@ function close(draft: Draft): CommandResult {
       }
     }
 
+    // Свои люди возвращаются из поездок (этап 75, Д5): с серебром, с людьми,
+    // с чужим словом или с тем, что на дорогах стало тише.
+    returnOfficers(draft)
     // Верность своих лордов ходит сама (этап 74, В4): подать, суд, война, позор
     // и соседи — всё, что вассал видит у себя во дворе.
     tickVassals(draft, daysPassed)
@@ -8826,6 +8951,7 @@ function close(draft: Draft): CommandResult {
     maims: draft.maims,
     lordDeeds: draft.lordDeeds,
     oaths: draft.oaths,
+    offices: draft.offices,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -9043,13 +9169,93 @@ function warNews(
  * себя, — твоя подать, оставлен ли ему суд, зовут ли его на твою войну, что о
  * тебе говорят и с кем ему тесно. Считается раз в такт и на всех сразу.
  */
+/**
+ * Свои люди возвращаются (этап 75, Д5).
+ *
+ * Поручение кончается само, в тот день, на который уезжали, и приносит то, ради
+ * чего посылали: серебро недоимок, поднятых людей, чужое слово или тишину на
+ * дорогах. Пока он в дороге, его должность пуста — это и есть цена.
+ */
+function returnOfficers(draft: Draft): void {
+  const day = dayOf(draft.time)
+  const offices = { ...draft.offices }
+  let changed = false
+  for (const [officeId, seat] of Object.entries(offices) as [OfficeId, Appointment][]) {
+    if (!seat.errand || seat.errand.untilDay > day) continue
+    const errand = officeErrandDef(seat.errand.id)
+    const officer = officerAt(draft.base, officeId)
+    const skill = officer ? Math.max(0, Math.min(1, officer.skill / 8)) : 0
+    offices[officeId] = { holderId: seat.holderId, kind: seat.kind, sinceDay: seat.sinceDay }
+    changed = true
+    if (!errand) continue
+    const name = officer?.name ?? 'Твой человек'
+    if (errand.id === 'arrears') {
+      // Берёт он не подать заново, а то, что не довезли: недоимку за те дни,
+      // что был в дороге. Где недоимок нет, привезёт малость — и на том спасибо.
+      const mine = holdingsOf(draft.settlements, PLAYER)
+      const owed = mine.reduce(
+        (sum, one) =>
+          sum +
+          dailyTax(one, foodSecurity(one)) *
+            (0.1 + (1 - arrearsFactor(draft.base, one.locationId, day))),
+        0,
+      )
+      const taken = Math.round(owed * errand.days * (0.4 + skill))
+      addMoney(draft, taken)
+      for (const one of mine) {
+        draft.reputation = withPlaceRep(draft.reputation, one.locationId, -3)
+      }
+      notice(draft, `${name} вернулся с недоимками: ${taken}. Места это запомнили.`, 'money')
+      continue
+    }
+    if (errand.id === 'levy') {
+      const men = Math.round(
+        vassalsOf(draft.base).reduce((sum, lord) => sum + lord.strength * 0.15, 0) * (0.5 + skill),
+      )
+      if (men > 0) {
+        draft.party = {
+          ...draft.party,
+          units: { ...draft.party.units, militia: (draft.party.units.militia ?? 0) + men },
+        }
+      }
+      notice(draft, `${name} привёл ${men} человек с вассальных земель.`, 'war')
+      continue
+    }
+    if (errand.id === 'message') {
+      const neighbour = Object.keys(draft.base.world.kingdoms)[0]
+      if (neighbour) {
+        draft.politics = withRelation(draft.politics, PLAYER, neighbour, Math.round(6 + skill * 10))
+        const kingdom = draft.base.world.kingdoms[neighbour]?.name ?? 'сосед'
+        notice(draft, `${name} вернулся от ${kingdom}: слово принято.`, 'world')
+      }
+      continue
+    }
+    if (errand.id === 'bandits') {
+      const mine = holdingsOf(draft.settlements, PLAYER)
+      const places = { ...draft.settlements }
+      for (const one of mine) {
+        places[one.locationId] = {
+          ...one,
+          banditry: Math.max(0, one.banditry - (0.1 + skill * 0.25)),
+        }
+      }
+      draft.settlements = places
+      notice(draft, `${name} вернулся: на твоих дорогах стало тише.`, 'war')
+    }
+  }
+  if (changed) draft.offices = offices
+}
+
 function tickVassals(draft: Draft, days: number): void {
   const vassals = vassalsOf(draft.base)
   if (vassals.length === 0 || days <= 0) return
   const day = dayOf(draft.time)
   const moved = new Map<string, number>()
+  // Канцлер успокаивает, разлад при дворе слышен всем (этап 75, Д1 и Д4).
+  const court = chancellorCalm(draft.base, day) + courtPressure(draft.base, day)
   for (const lord of vassals) {
-    const drift = loyaltyDrift(draft.base, draft.base.world, lord, oathOf(draft, lord.id), day)
+    const drift =
+      loyaltyDrift(draft.base, draft.base.world, lord, oathOf(draft, lord.id), day) + court
     if (drift !== 0) moved.set(lord.id, drift * days)
   }
   if (moved.size === 0) return
@@ -9142,7 +9348,9 @@ function collectHoldings(draft: Draft, days: number): void {
   for (const settlement of mine) {
     // Подать по закону, по недоимке и по честности управляющего (этап 61).
     const base = dailyTax(settlement, foodSecurity(settlement)) * days
-    const skim = skimOf(draft.base, settlement.locationId, day)
+    // Сенешаль смотрит за управляющими (этап 75, Д1): при хорошем ворують вдвое
+    // меньше, при негодном — как и прежде.
+    const skim = skimOf(draft.base, settlement.locationId, day) * skimGuard(draft.base, day)
     const collected = base * taxTake(law) * arrearsFactor(draft.base, settlement.locationId, day)
     const stolen = collected * skim
     if (stolen >= 1) {
@@ -9185,6 +9393,10 @@ function collectHoldings(draft: Draft, days: number): void {
   income += tribute
 
   draft.settlements = settlements
+  // Казначей ведёт счёт (этап 75): при нём приход больше. Двор ест жалованье
+  // каждый день, занята должность делом или нет.
+  income *= treasuryBonus(draft.base, day)
+  wages += courtWages(draft.base) * days
   const net = Math.round(income + tolls - wages)
   if (net !== 0) addMoney(draft, net)
   if (net < 0) notice(draft, `Земля не окупает гарнизон: ушло ${Math.abs(net)}.`)
