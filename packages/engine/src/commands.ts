@@ -198,6 +198,19 @@ import {
 } from './dynasty'
 import type { Settlement } from './economy'
 import { quoteBuy, quoteSell, recruitPool, withStock } from './economy'
+import {
+  type Embassy,
+  type EmbassyErrand,
+  type HostAnswer,
+  embassiesOf,
+  embassyCost,
+  embassyDays,
+  embassyDef,
+  embassyPossible,
+  embassyWeight,
+  envoyChoices,
+  hostAnswerDef,
+} from './embassy'
 import type { Enterprise } from './enterprise'
 import { CARAVAN_COST, SHIPPING_COST, WORKSHOP_COST, tickEnterprises } from './enterprise'
 import { gearBonus, horseCarry, repairCost, withItem } from './equipment'
@@ -694,7 +707,11 @@ export type Command =
   | { readonly type: 'hireSinger'; readonly circle: Circle }
   | { readonly type: 'watchJesters' }
   | { readonly type: 'askFaction'; readonly kingdomId: string; readonly factionId: FactionId }
-  | { readonly type: 'meetEnvoy'; readonly answer: 'yes' | 'no' | 'press' }
+  | {
+      readonly type: 'meetEnvoy'
+      /** С этапа 79 (П4) отвечают ещё двумя способами: тянуть и унизить. */
+      readonly answer: 'yes' | 'no' | 'press' | 'delay' | 'humiliate'
+    }
   | { readonly type: 'declareWar'; readonly kingdomId: string }
   | { readonly type: 'offerPeace'; readonly kingdomId: string }
   | { readonly type: 'seeHealer' }
@@ -790,6 +807,14 @@ export type Command =
   | { readonly type: 'swearOath'; readonly lordId: string; readonly locationId: string }
   /** Созвать вассалов по присяге (этап 74, В3). */
   | { readonly type: 'summonVassals' }
+  /** Посольство (этап 79): послать своего человека или письмо к чужой короне. */
+  | {
+      readonly type: 'sendEnvoy'
+      readonly to: string
+      readonly errand: EmbassyErrand
+      readonly envoyId?: string
+      readonly byLetter?: boolean
+    }
   /** Титул (этап 78): венчаться на царство и заявить право на чужую землю. */
   | { readonly type: 'crownSelf' }
   | { readonly type: 'pressClaim'; readonly provinceId: string; readonly against: string }
@@ -1207,6 +1232,8 @@ export function applyCommand(
       return swearOath(state, command.lordId, command.locationId)
     case 'summonVassals':
       return summonVassals(state)
+    case 'sendEnvoy':
+      return sendEnvoy(state, command.to, command.errand, command.envoyId, command.byLetter)
     case 'crownSelf':
       return crownSelf(state)
     case 'pressClaim':
@@ -4151,7 +4178,10 @@ function sickWhere(draft: Draft): SickWhere {
  * одним, и говорить с ним можно тремя способами: согласиться, отказать или
  * дожать. Дожимают убеждением, и у каждого нрава своя мера уступчивости.
  */
-function meetEnvoy(state: GameState, answer: 'yes' | 'no' | 'press'): CommandResult {
+function meetEnvoy(
+  state: GameState,
+  answer: 'yes' | 'no' | 'press' | 'delay' | 'humiliate',
+): CommandResult {
   const day = dayOf(state.time)
   const envoy = envoyAt(state.world, state.politics, state.locationId, day)
   if (!envoy) return fail('unavailableHere', 'Послов здесь сейчас нет.')
@@ -4173,6 +4203,21 @@ function meetEnvoy(state: GameState, answer: 'yes' | 'no' | 'press'): CommandRes
     // Отказ помнят: отношение корон — не пустая цифра.
     draft.politics = withRelation(draft.politics, mine, envoy.fromKingdomId, -8)
     notice(draft, 'Ты отказал. Он поклонился ровно настолько, насколько должен.', 'war')
+    return close(draft)
+  }
+  // Тянуть и унизить (этап 79, П4): не отказ и не согласие — но тоже ответ,
+  // и его помнят дольше отказа.
+  if (answer === 'delay' || answer === 'humiliate') {
+    const def = hostAnswerDef(answer)
+    draft.politics = withRelation(draft.politics, mine, envoy.fromKingdomId, def.relation)
+    notice(
+      draft,
+      answer === 'delay'
+        ? 'Ты не сказал ни да, ни нет. Он остался ждать и считать дни.'
+        : `${envoy.name} выведен со двора при всех. Такое помнят и через колено.`,
+      'war',
+    )
+    if (answer === 'humiliate') seeDeed(draft, 'sack')
     return close(draft)
   }
   const yields = envoyYields(envoy, skillLevel(draft.character, 'persuasion'))
@@ -5587,6 +5632,59 @@ function summonVassals(state: GameState): CommandResult {
   if (came === 0)
     notice(draft, 'Никто не пришёл. Это и есть цена присяги, которой не верят.', 'war')
   else notice(draft, `Собрано по присяге: ${came} человек.`, 'war')
+  return close(draft)
+}
+
+/**
+ * Послать посольство (этап 79, П1–П3, П5).
+ *
+ * Свой ход в дипломатии: человека снаряжают, посылают и ждут. Ответ придёт не
+ * сегодня и не от тебя: пока посол в дороге, чужая корона живёт своей жизнью, и
+ * к его приезду её замысел может стать другим.
+ */
+function sendEnvoy(
+  state: GameState,
+  to: string,
+  errand: EmbassyErrand,
+  envoyId?: string,
+  byLetter?: boolean,
+): CommandResult {
+  const possible = embassyPossible(state, to, errand)
+  if (!possible.can) return fail('requirements', possible.why)
+  const letter = byLetter === true
+  const day = dayOf(state.time)
+  const envoy = letter
+    ? null
+    : (envoyChoices(state, day).find((one) => one.id === envoyId) ??
+      envoyChoices(state, day)[0] ??
+      null)
+  if (!letter && !envoy) return fail('requirements', 'Послать некого: нужен свой человек.')
+  const cost = embassyCost(errand, letter)
+  if (state.character.money < cost) return fail('noMoney', `На дары и дорогу нужно ${cost}.`)
+
+  const draft = open(state)
+  addMoney(draft, -cost)
+  const days = embassyDays(letter)
+  const embassy: Embassy = {
+    id: `embassy:${to}:${day}`,
+    to,
+    errand,
+    envoyId: envoy?.id ?? null,
+    envoyName: envoy?.name ?? 'письмо',
+    byLetter: letter,
+    sentDay: day,
+    backDay: day + days,
+  }
+  draft.embassies = [...embassiesOf(draft), embassy]
+  advance(draft, hours(3))
+  const name = kingdomName(state, to)
+  notice(
+    draft,
+    letter
+      ? `Письмо в ${name}: ${embassyDef(errand).label}. Ответа ждать ${days} суток.`
+      : `${envoy?.name} поехал в ${name}: ${embassyDef(errand).label}. Вернётся через ${days} суток.`,
+    'world',
+  )
   return close(draft)
 }
 
@@ -8919,6 +9017,7 @@ interface Draft {
   queue: readonly QueuedWork[]
   crowned: Crowning | null
   claims: readonly Claim[]
+  embassies: readonly Embassy[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -8998,6 +9097,7 @@ function open(state: GameState): Draft {
     queue: state.queue ?? [],
     crowned: state.crowned ?? null,
     claims: state.claims ?? [],
+    embassies: state.embassies ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9282,6 +9382,8 @@ function close(draft: Draft): CommandResult {
       }
     }
 
+    // Посольства возвращаются с ответом (этап 79, П1).
+    returnEmbassies(draft)
     // Казна державы (этап 77): долги растут сами, очередь строек идёт по мере
     // денег, а пустая казна видна в мире.
     tickTreasury(draft, daysPassed)
@@ -9377,6 +9479,7 @@ function close(draft: Draft): CommandResult {
     queue: draft.queue,
     crowned: draft.crowned,
     claims: draft.claims,
+    embassies: draft.embassies,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -9615,6 +9718,111 @@ function warNews(
  * денег — казна платит понемногу, и стройка стоит, пока платить нечем; пустая
  * казна расходит гарнизоны и портит память тех мест, где им не платят.
  */
+/**
+ * Посольства возвращаются (этап 79, П1).
+ *
+ * Ответ считается в день возвращения, а не в день отправки: пока твой человек
+ * был в дороге, чужая корона жила своей жизнью, и её замысел мог стать другим.
+ * Бросок здесь один и на многое не влияет — почти всё решают вес посольства и
+ * то, чего эта корона хочет сама.
+ */
+function returnEmbassies(draft: Draft): void {
+  const day = dayOf(draft.time)
+  const back = embassiesOf(draft).filter((one) => one.backDay <= day)
+  if (back.length === 0) return
+  draft.embassies = embassiesOf(draft).filter((one) => one.backDay > day)
+  for (const embassy of back) {
+    const def = embassyDef(embassy.errand)
+    const envoy = envoyChoices(draft.base, day).find((one) => one.id === embassy.envoyId) ?? null
+    const weight = embassyWeight(
+      draft.base,
+      draft.base.world,
+      embassy.to,
+      embassy.errand,
+      envoy,
+      embassy.byLetter,
+      day,
+    )
+    const [roll, afterRoll] = nextFloat(draft.rng)
+    draft.rng = afterRoll
+    const yes = weight + roll * 0.25 >= 0.5
+    const name = kingdomName(draft.base, embassy.to)
+    if (!yes) {
+      draft.politics = withRelation(draft.politics, PLAYER, embassy.to, def.chills)
+      notice(
+        draft,
+        `${embassy.byLetter ? 'Ответ из' : `${embassy.envoyName} вернулся из`} ${name}: отказ (${def.label}). Ближе всего было на ${Math.round(weight * 100)} из ста.`,
+        'world',
+      )
+      continue
+    }
+    draft.politics = withRelation(draft.politics, PLAYER, embassy.to, def.warms)
+    applyEmbassy(draft, embassy, day)
+    notice(
+      draft,
+      `${embassy.byLetter ? 'Ответ из' : `${embassy.envoyName} вернулся из`} ${name}: согласие (${def.label}).`,
+      'world',
+    )
+  }
+}
+
+/** Что даёт удавшееся посольство: каждому делу своё. */
+function applyEmbassy(draft: Draft, embassy: Embassy, day: number): void {
+  const to = embassy.to
+  if (embassy.errand === 'alliance' || embassy.errand === 'marriage') {
+    draft.politics = {
+      ...draft.politics,
+      alliances: [
+        ...draft.politics.alliances.filter(
+          (one) => !((one.a === PLAYER && one.b === to) || (one.b === PLAYER && one.a === to)),
+        ),
+        { a: PLAYER, b: to, since: day, byMarriage: embassy.errand === 'marriage' },
+      ],
+    }
+    return
+  }
+  if (embassy.errand === 'tribute' || embassy.errand === 'threat') {
+    draft.politics = {
+      ...draft.politics,
+      tributes: [
+        ...draft.politics.tributes.filter((one) => !(one.from === to && one.to === PLAYER)),
+        { from: to, to: PLAYER, perDay: 6, untilDay: day + 360 },
+      ],
+    }
+    return
+  }
+  if (embassy.errand === 'mediation') {
+    // Помирить чужих: война кончается, а имя остаётся за тобой.
+    const war = draft.politics.wars.find((one) => one.a === to || one.b === to)
+    if (war) {
+      draft.politics = {
+        ...draft.politics,
+        wars: draft.politics.wars.filter((one) => one !== war),
+      }
+      draft.renown += 2
+      notice(
+        draft,
+        `Война ${kingdomName(draft.base, war.a)} и ${kingdomName(draft.base, war.b)} кончена твоим словом.`,
+        'war',
+      )
+    }
+    return
+  }
+  if (embassy.errand === 'ransom') {
+    // Выкуп своего: пленный возвращается к тебе, деньги уже отданы.
+    const captive = draft.companions.find((one) => one.captive)
+    if (captive) {
+      draft.companions = draft.companions.map((one) =>
+        one.id === captive.id ? { ...one, captive: false } : one,
+      )
+      notice(draft, `${captive.name} выкуплен и снова с тобой.`, 'people')
+    }
+    return
+  }
+  // Проход: право провести войско — пока это доброе слово и открытая дорога.
+  draft.politics = withRelation(draft.politics, PLAYER, to, 4)
+}
+
 function tickTreasury(draft: Draft, days: number): void {
   const day = dayOf(draft.time)
 

@@ -17,6 +17,7 @@ import type { QuarterId } from './content/quarters'
 import type { CechMembership } from './craft'
 import type { Settlement } from './economy'
 import { createSettlements } from './economy'
+import type { Embassy } from './embassy'
 import type { Enterprise } from './enterprise'
 import type { Law } from './estate'
 import type { GameEvent, LogKind } from './events'
@@ -290,6 +291,11 @@ export interface GameState {
   readonly crowned?: Crowning | null
   /** Свои претензии на чужую землю (этап 78, Т5). */
   readonly claims?: readonly Claim[]
+  /**
+   * Свои посольства в пути (этап 79): к кому, с чем, кто поехал и когда вернётся
+   * с ответом. Сам ответ не хранится — он считается в день возвращения.
+   */
+  readonly embassies?: readonly Embassy[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -383,6 +389,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     queue: [],
     crowned: null,
     claims: [],
+    embassies: [],
     factions: {},
     spellcraft: {},
     weather: [],
