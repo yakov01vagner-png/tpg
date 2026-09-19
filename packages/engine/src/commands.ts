@@ -39,6 +39,7 @@ import { ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import { TEMPER_LINES } from './content/lines'
+import { ROWS_BY_ID } from './content/merchants'
 import type { QuarterId } from './content/quarters'
 import type { ShipKind } from './content/ships'
 import { SHIPS, SHIP_NAMES } from './content/ships'
@@ -60,7 +61,7 @@ import {
   maybeBirth,
 } from './dynasty'
 import type { Settlement } from './economy'
-import { quoteBuy, quoteSell } from './economy'
+import { quoteBuy, quoteSell, withStock } from './economy'
 import type { Enterprise } from './enterprise'
 import { CARAVAN_COST, SHIPPING_COST, WORKSHOP_COST, tickEnterprises } from './enterprise'
 import { gearBonus, horseCarry, repairCost, withItem } from './equipment'
@@ -97,6 +98,18 @@ import { LIFE, foodSecurity, rollHarvest, tickDays } from './life'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
 import type { PriceLog } from './market'
 import { recordPrices } from './market'
+import type { Dealing, HagglePush } from './merchant'
+import {
+  NO_DEALING,
+  dealingWith,
+  haggle,
+  merchantBuyPrice,
+  merchantById,
+  merchantSellPrice,
+  merchantsAt,
+  orderFrom,
+  talesOf,
+} from './merchant'
 import type { Membership } from './order'
 import {
   DUES_DAYS,
@@ -213,6 +226,21 @@ export type Command =
   | { readonly type: 'goQuarter'; readonly quarterId: QuarterId }
   | { readonly type: 'askAround' }
   | { readonly type: 'buyMap'; readonly regionId: string }
+  | { readonly type: 'haggle'; readonly merchantId: string; readonly push: HagglePush }
+  | {
+      readonly type: 'buyFrom'
+      readonly merchantId: string
+      readonly good: GoodId
+      readonly amount: number
+    }
+  | {
+      readonly type: 'sellTo'
+      readonly merchantId: string
+      readonly good: GoodId
+      readonly amount: number
+    }
+  | { readonly type: 'takeOrder'; readonly merchantId: string }
+  | { readonly type: 'askPrices'; readonly merchantId: string }
   /** Уйти морем: своим судном, нанятым или попутным (этап 35). */
   | { readonly type: 'sail'; readonly toLocationId: string; readonly manner: Passage }
   /** Купить судно в порту, починить своё, продать своё. */
@@ -428,6 +456,16 @@ export function applyCommand(
       return askAround(state)
     case 'buyMap':
       return buyMap(state, command.regionId)
+    case 'haggle':
+      return haggleWith(state, command.merchantId, command.push)
+    case 'buyFrom':
+      return buyFrom(state, command.merchantId, command.good, command.amount)
+    case 'sellTo':
+      return sellTo(state, command.merchantId, command.good, command.amount)
+    case 'takeOrder':
+      return takeOrder(state, command.merchantId)
+    case 'askPrices':
+      return askPrices(state, command.merchantId)
     case 'travel':
       return travel(state, command.toLocationId)
     case 'sail':
@@ -2433,14 +2471,16 @@ function deliverGoods(state: GameState, good: GoodId, amount: number): CommandRe
   if (carried(state.character, good) < amount) {
     return fail('noGoods', `У тебя нет столько: ${GOODS[good].label.toLowerCase()}.`)
   }
+  // Сдают и к ярмарке (этап 39), и по заказу купца (этап 49): дело одно —
+  // привезённое перекладывают из своей поклажи в чужой амбар.
   const waiting = state.quests.filter(
     (quest) =>
-      quest.type === 'fairGoods' &&
+      (quest.type === 'fairGoods' || quest.type === 'merchantOrder') &&
       quest.issuerLocationId === state.locationId &&
       quest.good === good &&
       quest.progress < quest.amount,
   )
-  if (waiting.length === 0) return fail('unavailableHere', 'Этого здесь к ярмарке не ждут.')
+  if (waiting.length === 0) return fail('unavailableHere', 'Этого здесь никто не ждёт.')
   const settlement = state.settlements[state.locationId]
   if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
 
@@ -2460,7 +2500,7 @@ function deliverGoods(state: GameState, good: GoodId, amount: number): CommandRe
     left -= take
     return { ...quest, progress: quest.progress + take }
   })
-  notice(draft, `Сдано к ярмарке: ${GOODS[good].label.toLowerCase()}, ${amount}.`)
+  notice(draft, `Сдано: ${GOODS[good].label.toLowerCase()}, ${amount}.`)
   advance(draft, TRADE_MINUTES)
   return close(draft)
 }
@@ -2506,6 +2546,11 @@ function finishQuest(state: GameState, questId: string): CommandResult {
   notice(draft, `Награда за дело: ${reward}.`)
   addMoney(draft, reward)
   if (order) addStanding(draft, 12, `${order.name}: службу заметили.`)
+  // Купец помнит, кто привёз в срок: это и есть «рынок помнит тебя» (этап 49).
+  if (quest.merchantId) {
+    rememberDeal(draft, quest.merchantId, { standing: 12, deals: 1 })
+    notice(draft, 'Заказ сдан в срок — такое на рынке помнят.')
+  }
   draft.reputation = withPlaceRep(draft.reputation, quest.issuerLocationId, 10)
   const owner = state.settlements[quest.issuerLocationId]?.owner
   if (owner && !owner.startsWith('crown:') && owner !== PLAYER) {
@@ -2524,6 +2569,7 @@ function abandonQuest(state: GameState, questId: string): CommandResult {
   notice(draft, 'Дело брошено. Об этом узнают.')
   seeDeed(draft, 'abandonQuest')
   draft.reputation = withPlaceRep(draft.reputation, quest.issuerLocationId, -8)
+  if (quest.merchantId) failedOrder(draft, quest.merchantId)
   draft.quests = draft.quests.filter((candidate) => candidate.id !== questId)
   return close(draft)
 }
@@ -3601,6 +3647,298 @@ export function tradeSkillAt(state: GameState): number {
   )
 }
 
+/**
+ * Торг словом (этап 49).
+ *
+ * Не кнопка «скидка», а разговор: просишь уступить мягко, твёрдо или нахально.
+ * Уступка держится до конца дня и только у этого купца; наглость он запомнит.
+ * Торгуются раз в день: приставать к человеку каждый час — не торг.
+ */
+function haggleWith(state: GameState, merchantId: string, push: HagglePush): CommandResult {
+  const settlement = state.settlements[state.locationId]
+  const merchant = settlement
+    ? merchantById(state.world, state.settlements, state.locationId, merchantId)
+    : null
+  if (!merchant || !settlement) return fail('unavailableHere', 'Здесь такого купца нет.')
+  const day = dayOf(state.time)
+  const dealing = dealingWith(state, merchantId)
+  if (dealing.haggledDay === day) {
+    return fail('closed', `${merchant.name} уже наторговался с тобой на сегодня.`)
+  }
+  const draft = open(state)
+  const [roll, next] = nextFloat(draft.rng)
+  draft.rng = next
+  const result = haggle(merchant, tradeSkillAt(state), dealing.standing, push, roll)
+  advance(draft, HAGGLE_MINUTES)
+  practice(draft, 'trade', result.outcome === 'cut' ? 12 : 5)
+  rememberDeal(draft, merchantId, {
+    standing: result.standing,
+    haggledDay: day,
+    cut: result.cut,
+  })
+  notice(draft, `${merchant.name}: «${result.says}»`)
+  return close(draft)
+}
+
+/** Сколько времени уходит на торг. */
+const HAGGLE_MINUTES = 20
+
+/** Купить у человека, а не у места (этап 49). */
+function buyFrom(
+  state: GameState,
+  merchantId: string,
+  good: GoodId,
+  amount: number,
+): CommandResult {
+  const problem = checkTradeRequest(good, amount)
+  if (problem) return problem
+  const settlement = state.settlements[state.locationId]
+  if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
+  const merchant = merchantById(state.world, state.settlements, state.locationId, merchantId)
+  if (!merchant) return fail('unavailableHere', 'Здесь такого купца нет.')
+  if (!merchant.goods.includes(good)) {
+    return fail('noGoods', `${merchant.name} этим не торгует: он в ${rowWhere(merchant.rowId)}.`)
+  }
+  const dealing = dealingWith(state, merchantId)
+  if (dealing.standing <= REFUSED) {
+    return fail('shunned', `${merchant.name} с тобой больше не торгует.`)
+  }
+  const cut = dealing.haggledDay === dayOf(state.time) ? (dealing.cut ?? 0) : 0
+  const tradeSkill = tradeSkillAt(state)
+  const welcome = priceFactor(placeRep(state.reputation, state.locationId))
+
+  let market = settlement
+  let total = 0
+  for (let i = 0; i < amount; i += 1) {
+    if (market.stock[good] <= 1) {
+      return fail('noGoods', `Столько у него нет: ${GOODS[good].label.toLowerCase()} в обрез.`)
+    }
+    total += merchantBuyPrice(
+      state.world,
+      market,
+      merchant,
+      good,
+      tradeSkill,
+      dealing.standing,
+      cut,
+    )
+    market = withStock(market, good, -1)
+  }
+  total = Math.round(total * welcome)
+  if (state.character.money < total) {
+    return fail('noMoney', `Не хватает денег: нужно ${total}, есть ${state.character.money}.`)
+  }
+  const weight = GOODS[good].weight * amount
+  const capacity = partyCapacity(state.character, state.party) + horseCarry(state.character)
+  if (carriedWeight(state.character) + weight > capacity) {
+    return fail('overloaded', 'Столько не унести — ни на себе, ни на людях.')
+  }
+
+  const draft = open(state)
+  notice(draft, `У ${merchant.name}: ${GOODS[good].label.toLowerCase()}, ${amount} — за ${total}.`)
+  advance(draft, TRADE_MINUTES)
+  addMoney(draft, -total)
+  addGoods(draft, good, amount)
+  draft.settlements = { ...draft.settlements, [state.locationId]: market }
+  practice(draft, 'trade', Math.min(30, total * 0.12))
+  rememberDeal(draft, merchantId, { standing: dealStanding(total), deals: 1 })
+  return close(draft)
+}
+
+/** И продать ему же. */
+function sellTo(state: GameState, merchantId: string, good: GoodId, amount: number): CommandResult {
+  const problem = checkTradeRequest(good, amount)
+  if (problem) return problem
+  const settlement = state.settlements[state.locationId]
+  if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
+  const merchant = merchantById(state.world, state.settlements, state.locationId, merchantId)
+  if (!merchant) return fail('unavailableHere', 'Здесь такого купца нет.')
+  if (!merchant.goods.includes(good)) {
+    return fail('noGoods', `${merchant.name} этим не торгует: он в ${rowWhere(merchant.rowId)}.`)
+  }
+  if (carried(state.character, good) < amount) {
+    return fail('noGoods', `У тебя нет столько: ${GOODS[good].label.toLowerCase()}.`)
+  }
+  const dealing = dealingWith(state, merchantId)
+  if (dealing.standing <= REFUSED) {
+    return fail('shunned', `${merchant.name} с тобой больше не торгует.`)
+  }
+  const cut = dealing.haggledDay === dayOf(state.time) ? (dealing.cut ?? 0) : 0
+  const tradeSkill = tradeSkillAt(state)
+
+  let market = settlement
+  let total = 0
+  for (let i = 0; i < amount; i += 1) {
+    total += merchantSellPrice(
+      state.world,
+      market,
+      merchant,
+      good,
+      tradeSkill,
+      dealing.standing,
+      cut,
+    )
+    market = withStock(market, good, 1)
+  }
+
+  const draft = open(state)
+  notice(draft, `${merchant.name} берёт: ${GOODS[good].label.toLowerCase()}, ${amount} — ${total}.`)
+  advance(draft, TRADE_MINUTES)
+  addMoney(draft, total)
+  addGoods(draft, good, -amount)
+  draft.settlements = { ...draft.settlements, [state.locationId]: market }
+  practice(draft, 'trade', Math.min(30, total * 0.12))
+  rememberDeal(draft, merchantId, { standing: dealStanding(total), deals: 1 })
+  return close(draft)
+}
+
+/**
+ * Сколько торговля прибавляет к расположению: крупная сделка помнится, мелкая
+ * — нет. Потолок нарочно низкий: своим становятся за годы, а не за один обоз.
+ */
+function dealStanding(total: number): number {
+  return Math.min(3, Math.max(1, Math.round(total / 400)))
+}
+
+/** Ниже этого купец не подаёт руки. */
+const REFUSED = -60
+
+function rowWhere(rowId: string): string {
+  const row = ROWS_BY_ID[rowId]
+  return row ? row.label.toLowerCase() : 'своём ряду'
+}
+
+/** Запомнить встречу: память купца — единственное, что уходит от рынка в сейв. */
+function rememberDeal(
+  draft: Draft,
+  merchantId: string,
+  change: {
+    standing?: number
+    deals?: number
+    haggledDay?: number
+    cut?: number
+  },
+): void {
+  const before = draft.dealings[merchantId] ?? NO_DEALING
+  const next: Dealing = {
+    standing: Math.max(-100, Math.min(100, before.standing + (change.standing ?? 0))),
+    deals: before.deals + (change.deals ?? 0),
+    ...(change.haggledDay !== undefined
+      ? { haggledDay: change.haggledDay }
+      : before.haggledDay !== undefined
+        ? { haggledDay: before.haggledDay }
+        : {}),
+    ...(change.cut !== undefined
+      ? { cut: change.cut }
+      : before.cut !== undefined
+        ? { cut: before.cut }
+        : {}),
+  }
+  draft.dealings = { ...draft.dealings, [merchantId]: next }
+}
+
+/**
+ * Взял задаток и не привёз.
+ *
+ * Обманутый купец помнит крепче, чем облагодетельствованный, — и не он один:
+ * весь ряд стоит рядом и слышит. Поэтому память портится не у него одного, а у
+ * всех купцов этого места, хоть и слабее (этап 49, Р4).
+ */
+function failedOrder(draft: Draft, merchantId: string): void {
+  rememberDeal(draft, merchantId, { standing: -35 })
+  const locationId = merchantId.split(':')[1] ?? ''
+  for (const other of merchantsAt(draft.world, draft.settlements, locationId)) {
+    if (other.id === merchantId) continue
+    rememberDeal(draft, other.id, { standing: -12 })
+  }
+  notice(draft, 'Задаток взят, товар не привезён. Весь ряд это запомнил.')
+}
+
+/**
+ * Взять заказ купца (этап 49, Р3).
+ *
+ * Задаток вперёд — и потому подвести его дороже, чем не взяться: он помнит и
+ * говорит другим.
+ */
+function takeOrder(state: GameState, merchantId: string): CommandResult {
+  const settlement = state.settlements[state.locationId]
+  if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
+  const merchant = merchantById(state.world, state.settlements, state.locationId, merchantId)
+  if (!merchant) return fail('unavailableHere', 'Здесь такого купца нет.')
+  const day = dayOf(state.time)
+  const order = orderFrom(state.world, settlement, merchant, day)
+  if (!order) return fail('unavailableHere', `${merchant.name} нынче ни в чём не нуждается.`)
+  const questId = `order:${merchant.id}`
+  if (state.quests.some((quest) => quest.id === questId)) {
+    return fail('invalid', 'Этот заказ у тебя уже есть.')
+  }
+  const dealing = dealingWith(state, merchantId)
+  if (dealing.standing <= REFUSED) {
+    return fail('shunned', `${merchant.name} тебе ничего не доверит.`)
+  }
+
+  const draft = open(state)
+  advance(draft, 20)
+  addMoney(draft, order.advance)
+  draft.quests = [
+    ...draft.quests,
+    {
+      id: questId,
+      type: 'merchantOrder',
+      issuerLocationId: state.locationId,
+      targetLocationId: state.locationId,
+      amount: order.amount,
+      reward: order.reward,
+      deadlineDay: day + order.days,
+      progress: 0,
+      good: order.good,
+      merchantId: merchant.id,
+    },
+  ]
+  notice(
+    draft,
+    `${merchant.name}: «${order.says}» — ${GOODS[order.good].label.toLowerCase()}, ${order.amount} мер, задаток ${order.advance}.`,
+  )
+  return close(draft)
+}
+
+/**
+ * Расспросить о ценах (этап 49, Р6).
+ *
+ * Купец знает, почём его товар там, куда он его возит. Рассказывает не всякому:
+ * чужому — общими словами, своему — с числами. Это та же записная книжка цен,
+ * только заполненная устами, а не ногами.
+ */
+function askPrices(state: GameState, merchantId: string): CommandResult {
+  const merchant = merchantById(state.world, state.settlements, state.locationId, merchantId)
+  if (!merchant) return fail('unavailableHere', 'Здесь такого купца нет.')
+  const dealing = dealingWith(state, merchantId)
+  if (dealing.standing < 0) {
+    return fail('shunned', `${merchant.name} о делах с тобой не говорит.`)
+  }
+  const tales = talesOf(state.world, state.settlements, merchant)
+  if (tales.length === 0) return fail('unavailableHere', 'Ему и рассказать-то не о чем.')
+
+  const draft = open(state)
+  advance(draft, hours(1))
+  const day = dayOf(draft.time)
+  let log = draft.priceLog
+  for (const tale of tales) {
+    const known = log[tale.locationId] ?? {}
+    const samples = [...(known[tale.good] ?? []), { day, price: tale.price }]
+    log = { ...log, [tale.locationId]: { ...known, [tale.good]: samples } }
+  }
+  draft.priceLog = log
+  const places = new Set(tales.map((tale) => tale.locationId))
+  const names = [...places]
+    .map((id) => state.world.locations[id]?.name ?? '')
+    .filter(Boolean)
+    .join(', ')
+  rememberDeal(draft, merchantId, { standing: 1 })
+  notice(draft, `${merchant.name} рассказал, почём нынче в: ${names}.`)
+  return close(draft)
+}
+
 function buy(state: GameState, good: GoodId, amount: number): CommandResult {
   const problem = checkTradeRequest(good, amount)
   if (problem) return problem
@@ -3954,6 +4292,7 @@ interface Draft {
   courtDay: number
   quarter: QuarterId | null
   knowledge: Knowledge | undefined
+  dealings: Readonly<Record<string, Dealing>>
   battle: Battle | null
   politics: Politics
   /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
@@ -3993,6 +4332,7 @@ function open(state: GameState): Draft {
     courtDay: state.courtDay ?? 0,
     quarter: state.quarter ?? null,
     knowledge: state.knowledge,
+    dealings: state.dealings ?? {},
     battle: state.battle,
     politics: state.politics,
     world: state.world,
@@ -4196,6 +4536,7 @@ function close(draft: Draft): CommandResult {
     courtDay: draft.courtDay,
     quarter: draft.quarter,
     ...(draft.knowledge ? { knowledge: draft.knowledge } : {}),
+    dealings: draft.dealings,
     battle: draft.battle,
     politics: draft.politics,
     bands: draft.bands,
@@ -4481,6 +4822,7 @@ function expireQuests(draft: Draft): void {
   for (const quest of expired) {
     draft.reputation = withPlaceRep(draft.reputation, quest.issuerLocationId, -10)
     notice(draft, 'Срок вышел: дело не сделано.')
+    if (quest.merchantId) failedOrder(draft, quest.merchantId)
   }
   draft.quests = draft.quests.filter((quest) => today <= quest.deadlineDay)
 }

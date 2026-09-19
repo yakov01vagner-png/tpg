@@ -96,6 +96,12 @@ export function activityOf(command: Command): Activity | null {
     case 'buy':
     case 'sell':
     case 'buyItem':
+    // Купцы стоят на рынке, и говорят с ними там же (этап 49).
+    case 'haggle':
+    case 'buyFrom':
+    case 'sellTo':
+    case 'takeOrder':
+    case 'askPrices':
       return 'trade'
     case 'craftItem':
     case 'repairItem':

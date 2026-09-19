@@ -157,7 +157,7 @@ export function MapScreen({ game }: { game: GameState }) {
       flush(grid.size)
     }
     return result
-  }, [grid, mode, regionPaint, held, season])
+  }, [grid, mode, regionPaint, held, season, game])
 
   // Однотонная заливка вблизи превращается в пустое поле: глазу не за что
   // зацепиться. Часть клеток притемняем — тогда земля читается клетками, а

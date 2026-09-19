@@ -14,7 +14,13 @@ import { regionOf } from './world/queries'
  * шалят, просят разобраться с шайкой. Поэтому у них нет отдельной жизни —
  * они просто читаются из мира, пока не взяты.
  */
-export type QuestType = 'clearBandits' | 'bringFood' | 'freight' | 'fairGoods'
+export type QuestType =
+  | 'clearBandits'
+  | 'bringFood'
+  | 'freight'
+  | 'fairGoods'
+  /** Заказ купца (этап 49): задаток вперёд, спрос по имени. */
+  | 'merchantOrder'
 
 export interface Quest {
   readonly id: string
@@ -32,6 +38,8 @@ export interface Quest {
   readonly progress: number
   /** Какой товар везти — у поручений «к ярмарке» (этап 39). */
   readonly good?: GoodId
+  /** Кто заказал — у заказов купца (этап 49). Он же и спросит. */
+  readonly merchantId?: string
 }
 
 /** Разбой ниже этого считается выведенным. */
@@ -176,6 +184,10 @@ export function isComplete(state: GameState, quest: Quest): boolean {
 
 export function describeQuest(state: GameState, quest: Quest): string {
   const target = state.world.locations[quest.targetLocationId]?.name ?? 'где-то рядом'
+  if (quest.type === 'merchantOrder') {
+    const good = quest.good ? GOODS[quest.good].label.toLowerCase() : 'товар'
+    return `Заказ купца в ${target}: ${good}, ${quest.amount} мер`
+  }
   if (quest.type === 'clearBandits') return `Извести шайку у ${target}`
   if (quest.type === 'freight') return `Довезти чужой груз в ${target}: ${quest.amount} мер`
   if (quest.type === 'fairGoods') {

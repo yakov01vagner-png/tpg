@@ -14,6 +14,7 @@ import type { Journey } from './journey'
 import type { Knowledge } from './knowledge'
 import { startKnowledge } from './knowledge'
 import { EMPTY_PRICE_LOG, type PriceLog } from './market'
+import type { Dealing } from './merchant'
 import type { Membership } from './order'
 import type { Party } from './party'
 import { EMPTY_PARTY } from './party'
@@ -105,6 +106,12 @@ export interface GameState {
    */
   readonly knowledge?: Knowledge
   /**
+   * Память купцов о тебе (этап 49): кто как встречает и что помнит. Сами
+   * купцы выводятся из места (`merchant.ts`) — в сейве только память.
+   * Необязательно: сейвы до 0.6 купцов не знают.
+   */
+  readonly dealings?: Readonly<Record<string, Dealing>>
+  /**
    * Отведённый мор (этап 41): где и до какого дня чары держат смерть вполовину.
    * Необязательно — сейвы до 0.5 чар не знают.
    */
@@ -170,6 +177,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     journey: null,
     quarter: arrivalQuarter({ world, settlements }, locationId),
     knowledge: startKnowledge(world, locationId),
+    dealings: {},
     party: EMPTY_PARTY,
     ship: null,
     guild: null,

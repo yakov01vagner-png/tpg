@@ -4,6 +4,9 @@ import {
   GOOD_IDS,
   type GameState,
   type GoodId,
+  MERCHANT_TEMPERS,
+  type Merchant,
+  ROWS_BY_ID,
   SLOT_IDS,
   SLOT_LABELS,
   buyPrice,
@@ -18,11 +21,17 @@ import {
   knownMarkets,
   knownShare,
   mapsFor,
+  merchantBuyPrice,
+  merchantGreets,
+  merchantSellPrice,
+  merchantsAt,
+  orderFrom,
   partyCapacity,
   priceAgo,
   priceHistory,
   sellPrice,
   skillLevel,
+  standingWord,
   tradeSkillAt,
 } from '@tpg/engine'
 import { useState } from 'react'
@@ -50,6 +59,7 @@ export function TradeScreen({ game }: { game: GameState }) {
   // (этап 39), и здесь она обязана сойтись так же, как в ядре.
   const tradeSkill = tradeSkillAt(game)
   const fair = fairAt(game.world, game.locationId, dayOf(game.time))
+  const merchants = merchantsAt(game.world, game.settlements, game.locationId)
   const weight = carriedWeight(game.character)
   const capacity = partyCapacity(game.character, game.party)
 
@@ -89,60 +99,66 @@ export function TradeScreen({ game }: { game: GameState }) {
         ))}
       </Chips>
 
-      <Section title="Товары">
-        {GOOD_IDS.map((good: GoodId) => {
-          const buy = buyPrice(game.world, market, good, tradeSkill)
-          const sell = sellPrice(game.world, market, good, tradeSkill)
-          const mine = carried(game.character, good)
-          const canBuy = canApply(game, { type: 'buy', good, amount: lot }).ok
-          const canSell = canApply(game, { type: 'sell', good, amount: lot }).ok
-          const word = verdict(buy, GOODS[good].basePrice)
-          return (
-            <View key={good}>
-              <View style={styles.row}>
-                <Pressable
-                  accessibilityLabel={`История: ${GOODS[good].label}`}
-                  onPress={() => setOpen(open === good ? null : good)}
-                  style={styles.info}
-                >
-                  <View style={styles.nameRow}>
-                    <Icon name={good} size={22} color={palette.dim} />
-                    <Text style={styles.name}>
-                      {GOODS[good].label}
-                      {mine > 0 ? <Text style={styles.mine}>{`  у тебя ${mine}`}</Text> : null}
+      {merchants.map((merchant) => (
+        <MerchantStall key={merchant.id} game={game} merchant={merchant} lot={lot} />
+      ))}
+
+      {merchants.length > 0 ? null : (
+        <Section title="Товары">
+          {GOOD_IDS.map((good: GoodId) => {
+            const buy = buyPrice(game.world, market, good, tradeSkill)
+            const sell = sellPrice(game.world, market, good, tradeSkill)
+            const mine = carried(game.character, good)
+            const canBuy = canApply(game, { type: 'buy', good, amount: lot }).ok
+            const canSell = canApply(game, { type: 'sell', good, amount: lot }).ok
+            const word = verdict(buy, GOODS[good].basePrice)
+            return (
+              <View key={good}>
+                <View style={styles.row}>
+                  <Pressable
+                    accessibilityLabel={`История: ${GOODS[good].label}`}
+                    onPress={() => setOpen(open === good ? null : good)}
+                    style={styles.info}
+                  >
+                    <View style={styles.nameRow}>
+                      <Icon name={good} size={22} color={palette.dim} />
+                      <Text style={styles.name}>
+                        {GOODS[good].label}
+                        {mine > 0 ? <Text style={styles.mine}>{`  у тебя ${mine}`}</Text> : null}
+                      </Text>
+                    </View>
+                    <Text style={styles.prices}>
+                      {`купить ${buy} · продать ${sell}`}
+                      {word ? (
+                        <Text
+                          style={word === 'дёшево' ? styles.cheap : styles.dear}
+                        >{`  ${word}`}</Text>
+                      ) : null}
                     </Text>
-                  </View>
-                  <Text style={styles.prices}>
-                    {`купить ${buy} · продать ${sell}`}
-                    {word ? (
-                      <Text
-                        style={word === 'дёшево' ? styles.cheap : styles.dear}
-                      >{`  ${word}`}</Text>
-                    ) : null}
-                  </Text>
-                </Pressable>
-                <Pressable
-                  accessibilityLabel={`Купить ${GOODS[good].label}`}
-                  disabled={!canBuy}
-                  onPress={() => dispatch({ type: 'buy', good, amount: lot })}
-                  style={[styles.action, !canBuy && styles.actionOff]}
-                >
-                  <Text style={styles.actionLabel}>+</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityLabel={`Продать ${GOODS[good].label}`}
-                  disabled={!canSell}
-                  onPress={() => dispatch({ type: 'sell', good, amount: lot })}
-                  style={[styles.action, !canSell && styles.actionOff]}
-                >
-                  <Text style={styles.actionLabel}>−</Text>
-                </Pressable>
+                  </Pressable>
+                  <Pressable
+                    accessibilityLabel={`Купить ${GOODS[good].label}`}
+                    disabled={!canBuy}
+                    onPress={() => dispatch({ type: 'buy', good, amount: lot })}
+                    style={[styles.action, !canBuy && styles.actionOff]}
+                  >
+                    <Text style={styles.actionLabel}>+</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityLabel={`Продать ${GOODS[good].label}`}
+                    disabled={!canSell}
+                    onPress={() => dispatch({ type: 'sell', good, amount: lot })}
+                    style={[styles.action, !canSell && styles.actionOff]}
+                  >
+                    <Text style={styles.actionLabel}>−</Text>
+                  </Pressable>
+                </View>
+                {open === good ? <History game={game} good={good} /> : null}
               </View>
-              {open === good ? <History game={game} good={good} /> : null}
-            </View>
-          )
-        })}
-      </Section>
+            )
+          })}
+        </Section>
+      )}
 
       <Maps game={game} />
 
@@ -271,6 +287,7 @@ function verdict(price: number, base: number): string {
 }
 
 const styles = StyleSheet.create({
+  greets: { color: palette.text, fontStyle: 'italic', marginBottom: spacing.xs },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
   row: {
     alignItems: 'center',
@@ -336,4 +353,140 @@ function Maps({ game }: { game: GameState }) {
       })}
     </Section>
   )
+}
+
+/**
+ * Лавка купца (этап 49).
+ *
+ * Купец, а не строка таблицы: имя, нрав, ряд и то, как он тебя помнит. Цены у
+ * него свои, торг — разговор, заказ — задаток вперёд.
+ */
+function MerchantStall({
+  game,
+  merchant,
+  lot,
+}: {
+  game: GameState
+  merchant: Merchant
+  lot: number
+}) {
+  const market = game.settlements[game.locationId]
+  if (!market) return null
+  const dealing = game.dealings?.[merchant.id]
+  const standing = dealing?.standing ?? 0
+  const day = dayOf(game.time)
+  const cut = dealing?.haggledDay === day ? (dealing.cut ?? 0) : 0
+  const tradeSkill = tradeSkillAt(game)
+  const temper = MERCHANT_TEMPERS[merchant.temper]
+  const row = ROWS_BY_ID[merchant.rowId]
+  const greets = merchantGreets(merchant, standing)
+  const order = orderFrom(game.world, market, merchant, day)
+  const orderTaken = game.quests.some((quest) => quest.merchantId === merchant.id)
+  return (
+    <Section title={merchant.name} aside={`${row?.label ?? ''} · ${standingWord(standing)}`}>
+      <Dim>{`${temper.label}${cut > 0 ? ` · уступил ${Math.round(cut * 100)}%` : ''}${dealing?.deals ? ` · сделок ${dealing.deals}` : ''}`}</Dim>
+      {greets ? <Text style={styles.greets}>{`«${greets}»`}</Text> : null}
+
+      {merchant.goods.map((good) => {
+        const buy = merchantBuyPrice(game.world, market, merchant, good, tradeSkill, standing, cut)
+        const sell = merchantSellPrice(
+          game.world,
+          market,
+          merchant,
+          good,
+          tradeSkill,
+          standing,
+          cut,
+        )
+        const mine = carried(game.character, good)
+        const canBuy = canApply(game, {
+          type: 'buyFrom',
+          merchantId: merchant.id,
+          good,
+          amount: lot,
+        }).ok
+        const canSell = canApply(game, {
+          type: 'sellTo',
+          merchantId: merchant.id,
+          good,
+          amount: lot,
+        }).ok
+        return (
+          <View key={good} style={styles.row}>
+            <View style={styles.info}>
+              <View style={styles.nameRow}>
+                <Icon name={good} size={22} color={palette.dim} />
+                <Text style={styles.name}>
+                  {GOODS[good].label}
+                  {mine > 0 ? <Text style={styles.mine}>{`  у тебя ${mine}`}</Text> : null}
+                </Text>
+              </View>
+              <Text style={styles.prices}>{`купить ${buy} · продать ${sell}`}</Text>
+            </View>
+            <Pressable
+              accessibilityLabel={`Купить ${GOODS[good].label} у ${merchant.name}`}
+              disabled={!canBuy}
+              onPress={() =>
+                dispatch({ type: 'buyFrom', merchantId: merchant.id, good, amount: lot })
+              }
+              style={[styles.action, !canBuy && styles.actionOff]}
+            >
+              <Text style={styles.actionLabel}>+</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel={`Продать ${GOODS[good].label} ${merchant.name}`}
+              disabled={!canSell}
+              onPress={() =>
+                dispatch({ type: 'sellTo', merchantId: merchant.id, good, amount: lot })
+              }
+              style={[styles.action, !canSell && styles.actionOff]}
+            >
+              <Text style={styles.actionLabel}>−</Text>
+            </Pressable>
+          </View>
+        )
+      })}
+
+      <Chips>
+        {HAGGLES.map((push) => {
+          const command: Command = { type: 'haggle', merchantId: merchant.id, push: push.id }
+          return (
+            <Chip
+              key={push.id}
+              label={push.label}
+              active={false}
+              onPress={() => dispatch(command)}
+            />
+          )
+        })}
+        <Chip
+          label="о ценах"
+          active={false}
+          onPress={() => dispatch({ type: 'askPrices', merchantId: merchant.id })}
+        />
+      </Chips>
+
+      {order && !orderTaken ? (
+        <Card
+          title={`Просит привезти: ${GOODS[order.good].label.toLowerCase()}, ${order.amount} мер`}
+          description={`«${order.says}»`}
+          meta={`задаток ${order.advance} · потом ${order.reward} · ${order.days} сут.`}
+          reason={reasonOf(game, { type: 'takeOrder', merchantId: merchant.id })}
+          onPress={() => dispatch({ type: 'takeOrder', merchantId: merchant.id })}
+          tone="gold"
+        />
+      ) : null}
+    </Section>
+  )
+}
+
+const HAGGLES = [
+  { id: 'soft' as const, label: 'поторговаться' },
+  { id: 'firm' as const, label: 'сбить цену' },
+  { id: 'bold' as const, label: 'дожать' },
+]
+
+function reasonOf(game: GameState, command: Command): string | undefined {
+  const check = canApply(game, command)
+  return check.ok ? undefined : check.message
 }
