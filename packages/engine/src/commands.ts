@@ -11137,12 +11137,12 @@ function tickCompanies(draft: Draft, days: number): void {
     }
     // Короны нанимают те же роты и теми же деньгами (Н2). Считается по их
     // войнам и землям, без броска: одна и та же война даёт один и тот же найм.
-    if (!next.hiredBy) {
+    if (!next.hiredBy && day % COMPANY_BEAT === 0) {
       const best = hireBids(draft.base, draft.base.world, next)[0]
       if (best && best.bid > wageOf(next)) {
         next = { ...next, hiredBy: best.kingdomId, untilDay: day + 120, owed: 0, unpaidDays: 0 }
       }
-    } else if (next.hiredBy === PLAYER && next.unpaidDays > 0) {
+    } else if (next.hiredBy === PLAYER && next.unpaidDays > 0 && day % COMPANY_BEAT === 0) {
       // Кто платит больше — к тому и уходят: должнику роту не удержать.
       const rival = rivalsFor(draft.base, draft.base.world, next, wageOf(next))[0]
       if (rival) {
@@ -11497,8 +11497,9 @@ function tickNavy(draft: Draft, days: number): void {
   for (const ship of launched) {
     notice(draft, `${warshipDef(ship.kind).label} «${ship.name}» сошёл на воду.`, 'world')
   }
-  // Чужой запор считается всегда: он не зависит от того, запер ли ты кого-то.
-  shutOwnHarbours(draft, days)
+  // Чужой запор считается не каждые сутки, а раз в пятидневку — и сразу за
+  // все её дни: чужой флот выводится дорого (бюджет: сутки ≤ 6 мс).
+  if (day % NAVY_BEAT === 0) shutOwnHarbours(draft, days + NAVY_BEAT - 1)
   if (blockadesOf(draft).length === 0) return
   // Держать запор нечем — запор снимается сам.
   if (ships.length === 0) {
@@ -11780,6 +11781,11 @@ function tickPeace(draft: Draft, days: number): void {
   }
 }
 
+/** Как часто считают чужие посольства, найм рот и чужие запоры. */
+const OVERTURE_BEAT = 15
+const COMPANY_BEAT = 10
+const NAVY_BEAT = 5
+
 /**
  * Ответить чужому послу (этап 91, Ди1 и Ди2).
  *
@@ -11904,6 +11910,9 @@ function answerOverture(state: GameState, id: string, answer: AnswerId): Command
 function tickOvertures(draft: Draft, days: number): void {
   if (days <= 0) return
   const day = dayOf(draft.time)
+  // Посольства — дело не ежедневное: их считают раз в полмесяца. Считать
+  // чужие партии каждые сутки незачем и дорого (бюджет: сутки ≤ 6 мс).
+  if (day % OVERTURE_BEAT !== 0 && overturesOf(draft).length === 0) return
   // Приехавшие: одно предложение от короны за сезон, без броска.
   const standing = overturesOf(draft).filter((one) => one.untilDay >= day)
   const known = new Set(standing.map((one) => one.id))
