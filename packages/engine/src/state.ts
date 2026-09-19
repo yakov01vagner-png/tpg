@@ -48,6 +48,7 @@ import type { GameTime } from './time'
 import { WORLD_START } from './time'
 import type { Claim, Crowning } from './title'
 import type { Debt, QueuedWork } from './treasury'
+import type { Treaty } from './treaty'
 import type { Oath } from './vassal'
 import type { Politics } from './war'
 import { createPolitics } from './war'
@@ -296,6 +297,12 @@ export interface GameState {
    * с ответом. Сам ответ не хранится — он считается в день возвращения.
    */
   readonly embassies?: readonly Embassy[]
+  /**
+   * Договоры (этап 80): вид, срок, свидетель и тайная статья. Само действие
+   * договора живёт там же, где и прежде (союзы и дань в политике); здесь —
+   * бумага, которая объясняет, почему оно там.
+   */
+  readonly treaties?: readonly Treaty[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -390,6 +397,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     crowned: null,
     claims: [],
     embassies: [],
+    treaties: [],
     factions: {},
     spellcraft: {},
     weather: [],

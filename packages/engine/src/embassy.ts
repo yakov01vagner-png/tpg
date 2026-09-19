@@ -14,6 +14,7 @@ import { officerAt } from './office'
 import { crownPlan } from './plans'
 import type { GameState } from './state'
 import { recognitionOf } from './title'
+import type { SecretId } from './treaty'
 import { allied, atWar, relationOf } from './war'
 import type { World } from './world/types'
 
@@ -41,6 +42,9 @@ export interface Embassy {
   readonly sentDay: number
   /** Когда вернётся с ответом. */
   readonly backDay: number
+  /** С чем едет на бумаге (этап 80): тайная статья и свидетель. */
+  readonly secret?: SecretId
+  readonly guarantor?: string
 }
 
 export function embassiesOf(state: Pick<GameState, 'embassies'>): readonly Embassy[] {

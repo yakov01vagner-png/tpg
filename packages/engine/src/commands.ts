@@ -572,6 +572,20 @@ import {
   worksPrice,
 } from './treasury'
 import {
+  type SecretId,
+  type Treaty,
+  type TreatyKind,
+  breachCost,
+  guarantorFee,
+  leakChance,
+  liveTreaties,
+  secretDef,
+  treatiesOf,
+  treatyBetween,
+  treatyDef,
+  treatyWords,
+} from './treaty'
+import {
   type Oath,
   RAISE_MOOD,
   answersCall,
@@ -814,7 +828,12 @@ export type Command =
       readonly errand: EmbassyErrand
       readonly envoyId?: string
       readonly byLetter?: boolean
+      /** Договор (этап 80): тайная статья и свидетель, если они есть. */
+      readonly secret?: SecretId
+      readonly guarantor?: string
     }
+  /** Порвать договор (этап 80, Г3). */
+  | { readonly type: 'breakTreaty'; readonly treatyId: string }
   /** Титул (этап 78): венчаться на царство и заявить право на чужую землю. */
   | { readonly type: 'crownSelf' }
   | { readonly type: 'pressClaim'; readonly provinceId: string; readonly against: string }
@@ -1233,7 +1252,12 @@ export function applyCommand(
     case 'summonVassals':
       return summonVassals(state)
     case 'sendEnvoy':
-      return sendEnvoy(state, command.to, command.errand, command.envoyId, command.byLetter)
+      return sendEnvoy(state, command.to, command.errand, command.envoyId, command.byLetter, {
+        ...(command.secret ? { secret: command.secret } : {}),
+        ...(command.guarantor ? { guarantor: command.guarantor } : {}),
+      })
+    case 'breakTreaty':
+      return breakTreaty(state, command.treatyId)
     case 'crownSelf':
       return crownSelf(state)
     case 'pressClaim':
@@ -4301,6 +4325,25 @@ function declareWar(state: GameState, kingdomId: string): CommandResult {
   if (atWar(state.politics, PLAYER, kingdomId)) return fail('invalid', 'Вы и так воюете.')
 
   const draft = open(state)
+  // Война против того, с кем у тебя бумага, — это и есть разрыв (этап 80, Г3).
+  const day0 = dayOf(state.time)
+  const paper = treatyBetween(state, PLAYER, kingdomId, day0)
+  if (paper && (paper.kind === 'peace' || paper.kind === 'alliance')) {
+    const cost = breachCost(paper)
+    draft.treaties = treatiesOf(draft).map((one) =>
+      one.id === paper.id ? { ...one, brokenBy: PLAYER } : one,
+    )
+    for (const id of Object.keys(state.world.kingdoms)) {
+      if (id === kingdomId) continue
+      draft.politics = withRelation(draft.politics, PLAYER, id, cost.world)
+    }
+    shameOn(draft, 'broke')
+    notice(
+      draft,
+      `${treatyDef(paper.kind).label} с ${kingdomName(state, kingdomId)} порван объявлением войны.`,
+      'war',
+    )
+  }
   // Заявленное право — готовый повод (этап 78, Т5): на него и ссылаются, а
   // кубик остаётся тем, кому не на что сослаться.
   const claim = claimAgainst(state, kingdomId)
@@ -5648,6 +5691,7 @@ function sendEnvoy(
   errand: EmbassyErrand,
   envoyId?: string,
   byLetter?: boolean,
+  paper?: { readonly secret?: SecretId; readonly guarantor?: string },
 ): CommandResult {
   const possible = embassyPossible(state, to, errand)
   if (!possible.can) return fail('requirements', possible.why)
@@ -5659,8 +5703,15 @@ function sendEnvoy(
       envoyChoices(state, day)[0] ??
       null)
   if (!letter && !envoy) return fail('requirements', 'Послать некого: нужен свой человек.')
-  const cost = embassyCost(errand, letter)
-  if (state.character.money < cost) return fail('noMoney', `На дары и дорогу нужно ${cost}.`)
+  // Свидетель берёт своё вперёд: без его доли он и не поедет (этап 80, Г4).
+  const fee = paper?.guarantor ? guarantorFee({ kind: 'alliance' }) : 0
+  const cost = embassyCost(errand, letter) + fee
+  if (state.character.money < cost) {
+    return fail('noMoney', `На дары, дорогу${fee > 0 ? ' и свидетеля' : ''} нужно ${cost}.`)
+  }
+  if (paper?.guarantor && !state.world.kingdoms[paper.guarantor]) {
+    return fail('invalid', 'Такой короны в свидетели не позовёшь.')
+  }
 
   const draft = open(state)
   addMoney(draft, -cost)
@@ -5674,6 +5725,8 @@ function sendEnvoy(
     byLetter: letter,
     sentDay: day,
     backDay: day + days,
+    ...(paper?.secret ? { secret: paper.secret } : {}),
+    ...(paper?.guarantor ? { guarantor: paper.guarantor } : {}),
   }
   draft.embassies = [...embassiesOf(draft), embassy]
   advance(draft, hours(3))
@@ -9018,6 +9071,7 @@ interface Draft {
   crowned: Crowning | null
   claims: readonly Claim[]
   embassies: readonly Embassy[]
+  treaties: readonly Treaty[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9098,6 +9152,7 @@ function open(state: GameState): Draft {
     crowned: state.crowned ?? null,
     claims: state.claims ?? [],
     embassies: state.embassies ?? [],
+    treaties: state.treaties ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9382,6 +9437,8 @@ function close(draft: Draft): CommandResult {
       }
     }
 
+    // Договоры кончаются сами, а тайное становится явным (этап 80, Г2 и Г5).
+    tickTreaties(draft, daysPassed)
     // Посольства возвращаются с ответом (этап 79, П1).
     returnEmbassies(draft)
     // Казна державы (этап 77): долги растут сами, очередь строек идёт по мере
@@ -9480,6 +9537,7 @@ function close(draft: Draft): CommandResult {
     crowned: draft.crowned,
     claims: draft.claims,
     embassies: draft.embassies,
+    treaties: draft.treaties,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -9719,6 +9777,141 @@ function warNews(
  * казна расходит гарнизоны и портит память тех мест, где им не платят.
  */
 /**
+ * Договоры за прошедшие сутки (этап 80, Г2 и Г5).
+ *
+ * Срок выходит сам, без напоминаний: бумага перестаёт держать, и об этом
+ * узнаёшь в тот день, когда это случилось. Тайная статья живёт, пока о ней
+ * знают двое, — и чем дольше она живёт, тем больше людей успело узнать.
+ */
+function tickTreaties(draft: Draft, days: number): void {
+  const treaties = treatiesOf(draft)
+  if (treaties.length === 0 || days <= 0) return
+  const day = dayOf(draft.time)
+  const before = day - days
+
+  for (const treaty of treaties) {
+    if (treaty.brokenBy !== undefined) continue
+    if (treaty.untilDay !== 0 && treaty.untilDay > before && treaty.untilDay <= day) {
+      const other = treaty.a === PLAYER ? treaty.b : treaty.a
+      notice(
+        draft,
+        `Срок вышел: ${treatyDef(treaty.kind).label} с ${kingdomName(draft.base, other)} больше не держит.`,
+        'world',
+      )
+      // Союз и дань кончаются вместе с бумагой.
+      if (treaty.kind === 'tribute') {
+        draft.politics = {
+          ...draft.politics,
+          tributes: draft.politics.tributes.filter(
+            (one) => !(one.from === other && one.to === PLAYER),
+          ),
+        }
+      }
+    }
+  }
+
+  // Тайное становится явным: один бросок на все тайны разом.
+  const secrets = treaties.filter(
+    (one) => one.secret !== undefined && one.secret.known !== true && one.brokenBy === undefined,
+  )
+  if (secrets.length === 0) return
+  let none = 1
+  for (const treaty of secrets) none *= (1 - leakChance(treaty, day)) ** days
+  const [leaked, afterRoll] = rollChance(draft.rng, 1 - none)
+  draft.rng = afterRoll
+  if (!leaked) return
+  const [pick, afterPick] = nextInt(draft.rng, 0, secrets.length - 1)
+  draft.rng = afterPick
+  const treaty = secrets[pick] ?? secrets[0]
+  if (!treaty?.secret) return
+  const def = secretDef(treaty.secret.id)
+  draft.treaties = treatiesOf(draft).map((one) =>
+    one.id === treaty.id && one.secret ? { ...one, secret: { ...one.secret, known: true } } : one,
+  )
+  const other = treaty.a === PLAYER ? treaty.b : treaty.a
+  // Тот, против кого это было, узнаёт первым — и не прощает.
+  const against = treaty.secret.against ?? null
+  if (against) {
+    draft.politics = withRelation(draft.politics, PLAYER, against, def.angers)
+  }
+  for (const kingdomId of Object.keys(draft.base.world.kingdoms)) {
+    if (kingdomId === other || kingdomId === against) continue
+    draft.politics = withRelation(draft.politics, PLAYER, kingdomId, Math.round(def.angers / 4))
+  }
+  notice(
+    draft,
+    `Тайное стало явным: ${def.label} в грамоте с ${kingdomName(draft.base, other)}. ${def.about}`,
+    'world',
+  )
+}
+
+/** Какой договор выходит из такого посольства. Не у всякого — бумага. */
+function treatyKindOf(errand: EmbassyErrand): TreatyKind | null {
+  if (errand === 'alliance') return 'alliance'
+  if (errand === 'marriage') return 'alliance'
+  if (errand === 'tribute' || errand === 'threat') return 'tribute'
+  if (errand === 'passage') return 'passage'
+  if (errand === 'mediation') return 'peace'
+  return null
+}
+
+/**
+ * Порвать договор (этап 80, Г3).
+ *
+ * Разрыв стоит не только отношения с той стороной: слово держат или не держат,
+ * и это видят все. Свидетель делает разрыв дороже — за то его и зовут.
+ */
+function breakTreaty(state: GameState, treatyId: string): CommandResult {
+  const day = dayOf(state.time)
+  const treaty = liveTreaties(state, day).find((one) => one.id === treatyId)
+  if (!treaty) return fail('invalid', 'Такого договора нет или он уже не в силе.')
+  const other = treaty.a === PLAYER ? treaty.b : treaty.a
+  const cost = breachCost(treaty)
+
+  const draft = open(state)
+  draft.treaties = treatiesOf(draft).map((one) =>
+    one.id === treatyId ? { ...one, brokenBy: PLAYER } : one,
+  )
+  draft.politics = withRelation(draft.politics, PLAYER, other, cost.other)
+  for (const kingdomId of Object.keys(state.world.kingdoms)) {
+    if (kingdomId === other) continue
+    draft.politics = withRelation(draft.politics, PLAYER, kingdomId, cost.world)
+  }
+  // Союз и дань живут не только на бумаге: порвал — значит порвал и их.
+  if (treaty.kind === 'alliance') {
+    draft.politics = {
+      ...draft.politics,
+      alliances: draft.politics.alliances.filter(
+        (one) => !((one.a === PLAYER && one.b === other) || (one.b === PLAYER && one.a === other)),
+      ),
+    }
+  }
+  if (treaty.kind === 'tribute') {
+    draft.politics = {
+      ...draft.politics,
+      tributes: draft.politics.tributes.filter((one) => !(one.from === other && one.to === PLAYER)),
+    }
+  }
+  if (treaty.guarantor) {
+    // Свидетель наказывает нарушителя: за это ему и платили.
+    draft.politics = withRelation(draft.politics, PLAYER, treaty.guarantor, cost.other)
+    notice(
+      draft,
+      `${kingdomName(state, treaty.guarantor)} был свидетелем этой грамоты и не забудет, чем ты кончил.`,
+      'world',
+    )
+  }
+  shameOn(draft, 'broke')
+  advance(draft, hours(2))
+  notice(
+    draft,
+    `${treatyDef(treaty.kind).label} с ${kingdomName(state, other)} порван. Об этом узнают все.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
  * Посольства возвращаются (этап 79, П1).
  *
  * Ответ считается в день возвращения, а не в день отправки: пока твой человек
@@ -9769,6 +9962,33 @@ function returnEmbassies(draft: Draft): void {
 /** Что даёт удавшееся посольство: каждому делу своё. */
 function applyEmbassy(draft: Draft, embassy: Embassy, day: number): void {
   const to = embassy.to
+  // Согласие ложится на бумагу (этап 80): у договора есть вид, срок, свидетель
+  // и то, о чём договорились не вслух.
+  const kind = treatyKindOf(embassy.errand)
+  if (kind) {
+    const def = treatyDef(kind)
+    const treaty: Treaty = {
+      id: `treaty:${to}:${day}`,
+      a: PLAYER,
+      b: to,
+      kind,
+      sinceDay: day,
+      untilDay: def.days === 0 ? 0 : day + def.days,
+      ...(kind === 'tribute' ? { perDay: 6 } : {}),
+      ...(embassy.guarantor ? { guarantor: embassy.guarantor } : {}),
+      ...(embassy.secret && def.secret ? { secret: { id: embassy.secret } } : {}),
+    }
+    draft.treaties = [
+      ...treatiesOf(draft).filter(
+        (one) =>
+          !(one.kind === kind && (one.a === to || one.b === to) && one.brokenBy === undefined),
+      ),
+      treaty,
+    ]
+    if (embassy.guarantor) {
+      draft.politics = withRelation(draft.politics, PLAYER, embassy.guarantor, 6)
+    }
+  }
   if (embassy.errand === 'alliance' || embassy.errand === 'marriage') {
     draft.politics = {
       ...draft.politics,
