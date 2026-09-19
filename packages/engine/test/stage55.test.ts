@@ -151,9 +151,7 @@ describe('Н5: ученик у тебя', () => {
     expect(fed.character.money).toBe(teaching.character.money - STUDENT_UPKEEP)
     expect(fed.student?.learned).toBe(1)
     // И однажды уходит.
-    expect(
-      studentDone({ student: teaching.student }, (teaching.student?.since ?? 0) + STUDENT_DAYS),
-    ).toBe(true)
+    expect(studentDone(teaching, (teaching.student?.since ?? 0) + STUDENT_DAYS)).toBe(true)
   })
 })
 
