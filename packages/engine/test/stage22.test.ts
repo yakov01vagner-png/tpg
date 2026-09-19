@@ -75,7 +75,11 @@ describe('полотно выдерживает рост', () => {
     const world = generateWorld(1)
     // По лучшему из прогонов: тесты идут в несколько потоков, и соседний файл,
     // считающий двадцать лет войны, растягивает чужой замер вдвое-втрое.
-    const gridMs = fastest(() => worldGrid(world, MAP_SIZE))
+    // Восемь попыток, а не пять: при полном прогоне счёт делят десятки
+    // процессов, и лучшая из пяти выходила выше порога там, где та же работа в
+    // одиночку стоит вдвое меньше. Мерить надо цену работы, а не давку в
+    // очереди за счётом (то же сделано в stage48).
+    const gridMs = fastest(() => worldGrid(world, MAP_SIZE), 8)
     const layoutMs = fastest(() => layoutOf(world))
     console.log(`сетка ${gridMs.toFixed(1)} мс, раскладка ${layoutMs.toFixed(1)} мс`)
     expect(gridMs).toBeLessThan(40)

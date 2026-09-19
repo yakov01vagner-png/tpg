@@ -7,7 +7,9 @@ import {
   CECH_DUES,
   CONTENT,
   type Command,
+  GUARD_HIRE,
   type GameState,
+  INN_COST,
   JUSTICE_DEFS,
   JUSTICE_LEVELS,
   LEVY_DEFS,
@@ -34,6 +36,8 @@ import {
   brokenList,
   canApply,
   canRetire,
+  caravanMaster,
+  caravanTemperDef,
   cechAt,
   courtCase,
   dailyTax,
@@ -45,6 +49,9 @@ import {
   garrisonLimit,
   garrisonSize,
   garrisonWages,
+  guardLimit,
+  guardWages,
+  guardsOf,
   holdingsOf,
   homeDef,
   homesAt,
@@ -56,6 +63,8 @@ import {
   lordById,
   loyaltyWord,
   ownOrder,
+  ownRoads,
+  patrolCost,
   pleaOf,
   rankLabel,
   rankOfShifts,
@@ -66,8 +75,10 @@ import {
   spouseSays,
   spouseTemper,
   surrenderChance,
+  travellersAt,
   upbringingOf,
   vassalsOf,
+  wagonsOf,
   warsOf,
   worksRepairCost,
 } from '@tpg/engine'
@@ -503,10 +514,94 @@ function Affairs({ game }: { game: GameState }) {
   }
   if (rows.length === 0) return null
   return (
-    <Section title="Свои дела">
-      {rows.map((row) => (
-        <Row key={row.label} title={row.label} subtitle={row.value} />
-      ))}
+    <>
+      <Section title="Свои дела">
+        {rows.map((row) => (
+          <Row key={row.label} title={row.label} subtitle={row.value} />
+        ))}
+      </Section>
+      <Roads game={game} />
+    </>
+  )
+}
+
+/**
+ * Обозы и дороги (этап 62).
+ *
+ * Обоз — не строка в отчёте: у него есть караванщик со своим нравом, повозки и
+ * охрана, и если он стоит там же, где ты, к нему можно подойти. Рядом — двор на
+ * дороге и разъезды по своим дорогам.
+ */
+function Roads({ game }: { game: GameState }) {
+  const caravans = game.enterprises.filter((one) => one.kind === 'caravan')
+  const roads = ownRoads(game).filter(
+    (one) => one.fromId === game.locationId || one.toId === game.locationId,
+  )
+  const traffic = travellersAt(game.world, game.settlements, game.locationId)
+  const reasonFor = (command: Command): string | undefined => {
+    const check = canApply(game, command)
+    return check.ok ? undefined : check.message
+  }
+  if (caravans.length === 0 && roads.length === 0 && traffic < 4) return null
+  return (
+    <Section title="Дороги и обозы">
+      {caravans.map((one) => {
+        const master = caravanMaster(one.id)
+        const here = one.locationId === game.locationId && !one.travel
+        return (
+          <View key={one.id}>
+            <Panel>
+              <Body>{`${master.name}, ${caravanTemperDef(master.temper).label}`}</Body>
+              <Dim>
+                {`Повозок ${wagonsOf(one)} · охраны ${guardsOf(one)} из ${guardLimit(one)} · жалованье ${guardWages(one)} в сутки`}
+              </Dim>
+              <Dim>
+                {one.travel
+                  ? `В пути к ${game.world.locations[one.travel.toLocationId]?.name ?? '…'}`
+                  : `Стоит в ${game.world.locations[one.locationId]?.name ?? '…'}`}
+              </Dim>
+            </Panel>
+            <Card
+              title="Взять охрану"
+              description="Охрана не отменяет разбой — она делает нападение невыгодным."
+              meta={`+2 · ${GUARD_HIRE * 2}`}
+              reason={reasonFor({ type: 'hireGuards', enterpriseId: one.id, count: 2 })}
+              onPress={() => dispatch({ type: 'hireGuards', enterpriseId: one.id, count: 2 })}
+            />
+            {here ? (
+              <Card
+                title="Подойти к обозу"
+                description="Поговорить с караванщиком и взять из ящика то, что дело принесло."
+                meta={`в ящике ${Math.round(one.earned)}`}
+                reason={reasonFor({ type: 'meetCaravan', enterpriseId: one.id })}
+                onPress={() => dispatch({ type: 'meetCaravan', enterpriseId: one.id })}
+              />
+            ) : null}
+          </View>
+        )
+      })}
+      {traffic >= 4 ? (
+        <Card
+          title="Поставить постоялый двор"
+          description={`Дело для дороги, а не для города: живёт проезжими. Здесь их около ${Math.round(traffic)} в сутки.`}
+          meta={`−${INN_COST}`}
+          reason={reasonFor({ type: 'foundInn' })}
+          onPress={() => dispatch({ type: 'foundInn' })}
+        />
+      ) : null}
+      {roads.map((road) => {
+        const other = road.fromId === game.locationId ? road.toId : road.fromId
+        return (
+          <Card
+            key={`${road.fromId}|${road.toId}`}
+            title={`Разъезд до ${game.world.locations[other]?.name ?? 'соседей'}`}
+            description="Дорога между двумя своими местами — твоя. Держат её людьми на ней, а не законом."
+            meta={`−${patrolCost(road, 6)} · разбой ${Math.round(road.banditry * 100)}%`}
+            reason={reasonFor({ type: 'patrolRoad', toId: other, riders: 6 })}
+            onPress={() => dispatch({ type: 'patrolRoad', toId: other, riders: 6 })}
+          />
+        )
+      })}
     </Section>
   )
 }

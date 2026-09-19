@@ -6,6 +6,7 @@ import {
   CLOTH_LABELS,
   type Command,
   FOUND_COST,
+  GOODS,
   type GameState,
   HONE_HOURS,
   INTERDICT_DAYS,
@@ -14,6 +15,8 @@ import {
   type Passage,
   type PlaceKind,
   QUARTERS,
+  SAILOR_HIRE,
+  SAILOR_WAGE,
   SEND_COST,
   SHIPPING_COST,
   SHIPS,
@@ -27,6 +30,7 @@ import {
   addressOf,
   artifactDef,
   artifactsOf,
+  bountyFor,
   canApply,
   canFound,
   canWield,
@@ -35,6 +39,9 @@ import {
   companionsAt,
   coursesAt,
   craftOf,
+  crewMood,
+  crewNeeded,
+  crewOf,
   dayOf,
   daysToFair,
   describeQuest,
@@ -67,6 +74,8 @@ import {
   masteryOf,
   masteryWord,
   matchesAt,
+  moodWord,
+  mutinous,
   offeringFor,
   offersAt,
   orderById,
@@ -77,6 +86,7 @@ import {
   passageCost,
   pietyOf,
   pietyWord,
+  pirateLords,
   plagueAt,
   priestAt,
   quarterFor,
@@ -92,7 +102,10 @@ import {
   seasonOf,
   shipCarries,
   shipDef,
+  shipsAt,
   skillLevel,
+  skipperDef,
+  skipperOf,
   spellsFor,
   timeOfDay,
   waitHours,
@@ -1197,6 +1210,8 @@ function SeaSection({
         })}
       </Section>
 
+      <Quay game={game} dispatch={dispatch} />
+
       <Section title="Пристань">
         {game.ship ? (
           <>
@@ -1498,3 +1513,81 @@ const styles = StyleSheet.create({
   faceRole: { color: palette.faint, fontSize: 9 },
   moreLabel: { color: palette.gold, fontSize: font.small },
 })
+
+/**
+ * Пристань живёт (этап 62, К5 и К4).
+ *
+ * У причала всегда кто-то стоит — и это не украшение: с попутным шкипером можно
+ * уйти в его гавань. Рядом — своя команда: руки, жалованье, настроение, — и
+ * морские лорды, за головы которых дают цену.
+ */
+function Quay({
+  game,
+  dispatch,
+}: {
+  game: GameState
+  dispatch: (command: Command) => void
+}) {
+  const day = dayOf(game.time)
+  const standing = shipsAt(game.world, game.locationId, day)
+  const ship = game.ship
+  const lords = pirateLords(game.world)
+  if (standing.length === 0 && !ship) return null
+  return (
+    <>
+      {ship ? (
+        <Section title="Команда">
+          <Panel tone={mutinous(ship) ? 'danger' : undefined}>
+            <Dim>
+              {`${skipperOf(ship).name}, ${skipperDef(skipperOf(ship).temper).label} · рук ${crewOf(ship)} из ${crewNeeded(ship)} · ${moodWord(crewMood(ship))}`}
+            </Dim>
+            <Dim>{skipperDef(skipperOf(ship).temper).about}</Dim>
+          </Panel>
+          <Card
+            title="Набрать матросов"
+            description="Недобор рук замедляет ход вполтора раза: корабль — это прежде всего люди."
+            meta={`${SAILOR_HIRE} за голову`}
+            reason={reasonOf(canApply(game, { type: 'hireCrew', count: 4 }))}
+            onPress={() => dispatch({ type: 'hireCrew', count: 4 })}
+          />
+          <Card
+            title="Рассчитать команду"
+            description="Жалованье за месяц вперёд. Палуба, которой заплатили, молчит."
+            meta={`−${crewOf(ship) * SAILOR_WAGE * 30}`}
+            reason={reasonOf(canApply(game, { type: 'payCrew' }))}
+            onPress={() => dispatch({ type: 'payCrew' })}
+          />
+          {lords.map((lord) => (
+            <Card
+              key={lord.id}
+              title={`Охота: ${lord.name} ${lord.byname}`}
+              description="Морской лорд без короны: своя гавань, своё имя и цена за голову."
+              meta={`+${bountyFor(lord)} · сила ${lord.strength}`}
+              reason={reasonOf(canApply(game, { type: 'huntPirate', pirateId: lord.id }))}
+              onPress={() => dispatch({ type: 'huntPirate', pirateId: lord.id })}
+              tone="danger"
+            />
+          ))}
+        </Section>
+      ) : null}
+      {standing.length > 0 ? (
+        <Section title="У причала" aside={`${standing.length}`}>
+          {standing.map((one) => {
+            const from = game.world.locations[one.fromId]
+            return (
+              <Card
+                key={one.id}
+                glyph={<Icon name="port" size={20} color={palette.dim} />}
+                title={`«${one.name}» — ${one.skipper}`}
+                description={`Пришла из ${from?.name ?? 'моря'}, привезла ${GOODS[one.cargo].label.toLowerCase()}. Домой пойдёт скоро.`}
+                meta={`место ${one.berth}`}
+                reason={reasonOf(canApply(game, { type: 'takeBerth', shipId: one.id }))}
+                onPress={() => dispatch({ type: 'takeBerth', shipId: one.id })}
+              />
+            )
+          })}
+        </Section>
+      ) : null}
+    </>
+  )
+}

@@ -110,6 +110,14 @@ import {
 } from './content/lore'
 import { ROWS_BY_ID } from './content/merchants'
 import type { QuarterId } from './content/quarters'
+import {
+  GUARD_HIRE,
+  GUARD_WAGE,
+  INN_COST,
+  PATROL_HOURS,
+  SAILOR_HIRE,
+  SAILOR_WAGE,
+} from './content/road'
 import type { ShipKind } from './content/ships'
 import { SHIPS, SHIP_NAMES } from './content/ships'
 import { SITES } from './content/sites'
@@ -299,6 +307,30 @@ import type { Reputation } from './reputation'
 import type { Rng } from './rng'
 import { nextFloat, nextInt, rollChance } from './rng'
 import {
+  bountyFor,
+  caravanMaster,
+  caravanTemperDef,
+  crewMood,
+  crewNeeded,
+  crewOf,
+  crewPace,
+  crewWages,
+  guardLimit,
+  guardsOf,
+  moodWord,
+  mutinous,
+  ownRoads,
+  patrolCost,
+  patrolEffect,
+  pirateById,
+  pirateNear,
+  shipsAt,
+  skipperDef,
+  skipperOf,
+  travellersAt,
+  wagonsOf,
+} from './road'
+import {
   SELF_TAUGHT_FEE,
   canGrantHere,
   isSelfTaught,
@@ -383,7 +415,7 @@ import { allied, pairOf } from './war'
 import type { Politics } from './war'
 import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
-import { iceBound, lanesFrom } from './world/lanes'
+import { iceBound, isHarbour, lanesFrom } from './world/lanes'
 import { kingdomOf, regionOf, roadsFrom } from './world/queries'
 import { fordShut } from './world/rivers'
 import type { World } from './world/types'
@@ -508,6 +540,14 @@ export type Command =
   | { readonly type: 'siegeBribe' }
   | { readonly type: 'captiveFate'; readonly captiveId: string; readonly fate: CaptiveFate }
   | { readonly type: 'inquire' }
+  | { readonly type: 'hireGuards'; readonly enterpriseId: string; readonly count: number }
+  | { readonly type: 'meetCaravan'; readonly enterpriseId: string }
+  | { readonly type: 'foundInn' }
+  | { readonly type: 'patrolRoad'; readonly toId: string; readonly riders: number }
+  | { readonly type: 'hireCrew'; readonly count: number }
+  | { readonly type: 'payCrew' }
+  | { readonly type: 'takeBerth'; readonly shipId: string }
+  | { readonly type: 'huntPirate'; readonly pirateId: string }
   | {
       readonly type: 'setLaw'
       readonly tax?: TaxLevel
@@ -834,6 +874,22 @@ export function applyCommand(
       return captiveFate(state, command.captiveId, command.fate)
     case 'inquire':
       return inquire(state)
+    case 'hireGuards':
+      return hireGuards(state, command.enterpriseId, command.count)
+    case 'meetCaravan':
+      return meetCaravan(state, command.enterpriseId)
+    case 'foundInn':
+      return foundInn(state)
+    case 'patrolRoad':
+      return patrolRoad(state, command.toId, command.riders)
+    case 'hireCrew':
+      return hireCrew(state, command.count)
+    case 'payCrew':
+      return payCrew(state)
+    case 'takeBerth':
+      return takeBerth(state, command.shipId)
+    case 'huntPirate':
+      return huntPirate(state, command.pirateId)
     case 'setLaw':
       return setLaw(state, command)
     case 'answerPlea':
@@ -1158,7 +1214,12 @@ function sail(state: GameState, toLocationId: string, manner: Passage): CommandR
     )
   }
 
-  const hours = seaHours(lane.hours, manner, state.ship)
+  // Ход своего судна считают руки, а не только корпус (этап 62, К4): недобор
+  // команды замедляет вполтора раза, а нрав шкипера — в свою сторону.
+  const hours = Math.round(
+    seaHours(lane.hours, manner, state.ship) *
+      (manner === 'own' && state.ship ? crewPace(state.ship) : 1),
+  )
   const people = partySize(state.party) + 1
   const cost = Math.round(
     passageCost(manner, hours, people) * (ownOrderHere(state)?.perks.sea ?? 1),
@@ -1279,7 +1340,10 @@ const TRIBUTE_PER_HEAD = 22
 function payTribute(state: GameState): CommandResult {
   const battle = state.battle
   if (!battle) return fail('invalid', 'Боя нет.')
-  if (battle.foeId !== 'pirates') {
+  // Откупаются от моря: и от безымянной шайки, и от морского лорда, у которого
+  // с этапа 62 есть имя. Имя цены не меняет — меняет то, кому платишь.
+  const lord = battle.foeId ? pirateById(state.world, battle.foeId) : null
+  if (battle.foeId !== 'pirates' && !lord) {
     return fail('invalid', 'С этими не договариваются.')
   }
   if (battle.outcome !== 'ongoing') return fail('invalid', 'Всё уже решилось.')
@@ -1525,12 +1589,19 @@ function seaRaiders(draft: Draft, hoursAtSea: number): void {
   if (partySize(draft.party) >= 3) {
     const [band, afterBand] = banditBand(0.6, 400, draft.rng)
     draft.rng = afterBand
-    draft.battle = startBattle(draft.party, band, 'coast', {
-      foeId: 'pirates',
-      // Абордаж — та же теснота, что у брода: на сходнях дерутся по трое.
-      ground: 'ford',
-      veterans: veteransOf(draft.party),
-    })
+    // У пирата есть имя (этап 62, К6): ближайший к этой воде морской лорд.
+    const lord = pirateNear(draft.base.world, draft.locationId)
+    draft.battle = startBattle(
+      draft.party,
+      lord ? { ...band, name: `${lord.name} ${lord.byname}` } : band,
+      'coast',
+      {
+        foeId: lord?.id ?? 'pirates',
+        // Абордаж — та же теснота, что у брода: на сходнях дерутся по трое.
+        ground: 'ford',
+        veterans: veteransOf(draft.party),
+      },
+    )
     notice(draft, 'Из-за мыса вышли под чёрным парусом. Уйти некуда — только драться.')
     return
   }
@@ -1770,6 +1841,35 @@ function tick(state: GameState, minutes: number): CommandResult {
 function paySailors(draft: Draft, days: number): void {
   const ship = draft.ship
   if (!ship || days <= 0) return
+  // Палуба живёт своим счётом (этап 62, К4): жалованье команде идёт сверх
+  // содержания судна, и заплаченная команда молчит о том, о чём иначе
+  // заговорила бы. Нрав шкипера тянет настроение в свою сторону каждый день.
+  const wages = crewWages(ship) * days
+  const drift = skipperDef(skipperOf(ship).temper).mood * days
+  let mood = crewMood(ship)
+  if (draft.character.money >= wages) {
+    if (wages > 0) addMoney(draft, -wages)
+    mood = Math.min(100, mood + drift + days * 0.2)
+  } else {
+    // Не заплатили — ропщут, и чем дольше, тем громче.
+    mood = Math.max(0, mood + drift - days * 2.5)
+  }
+  draft.ship = { ...ship, crew: crewOf(ship), mood: Math.round(mood) }
+  if (mutinous(draft.ship) && crewOf(ship) > 0) {
+    const [rises, afterRoll] = rollChance(draft.rng, 0.06 * days)
+    draft.rng = afterRoll
+    if (rises) {
+      const skipper = skipperOf(ship)
+      // Бунт: палуба уходит со шкипером, а судно остаётся — без рук оно никуда
+      // не пойдёт, пока не наберёшь новых.
+      draft.ship = { ...draft.ship, crew: 0, mood: 40 }
+      notice(
+        draft,
+        `Команда «${ship.name}» ушла с ${skipper.name}ом на берег. Судно стоит: рук на нём нет.`,
+        'trade',
+      )
+    }
+  }
   const due = shipUpkeep(ship) * days
   if (draft.character.money >= due) {
     addMoney(draft, -due)
@@ -1777,8 +1877,11 @@ function paySailors(draft: Draft, days: number): void {
   }
   addMoney(draft, -draft.character.money)
   const rot = Math.min(0.5, 0.015 * days)
-  const worn = Math.max(0, Math.round((ship.condition - rot) * 100) / 100)
-  draft.ship = worn > 0 ? { ...ship, condition: worn } : null
+  // Считаем от того судна, что уже в черновике: команда и её настроение только
+  // что записаны, и терять их здесь было бы ошибкой.
+  const now = draft.ship ?? ship
+  const worn = Math.max(0, Math.round((now.condition - rot) * 100) / 100)
+  draft.ship = worn > 0 ? { ...now, condition: worn } : null
   notice(
     draft,
     worn > 0
@@ -2121,6 +2224,21 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
     // Спутники растут делами, а не годами (этап 54): бой — дело тяжёлое.
     seasonCompanions(draft, true)
     seeDeed(draft, 'winBattle')
+
+    // Голова морского лорда стоит денег (этап 62, К6): цену объявляет гавань,
+    // которой он надоел, и платят её там же — сразу, потому что доказательство
+    // при тебе.
+    const hunted = battle.foeId ? pirateById(state.world, battle.foeId) : null
+    if (hunted) {
+      const bounty = bountyFor(hunted)
+      addMoney(draft, bounty)
+      draft.renown += 1
+      notice(
+        draft,
+        `${hunted.name} ${hunted.byname} больше не выйдет в море. За голову дано ${bounty}.`,
+        'war',
+      )
+    }
 
     // Дело ордена «убрать чужих» (этап 59, О1) делается там, где стоит враг:
     // выиграл бой в том месте — дело сделано.
@@ -3175,6 +3293,309 @@ function replaceSeneschal(state: GameState): CommandResult {
     draft,
     `${seneschal.name} отставлен. На дворе это обсуждают, и не в твою пользу.`,
     'people',
+  )
+  return close(draft)
+}
+
+// --- дела и дороги (этап 62) ------------------------------------------------
+
+/**
+ * Нанять охрану к обозу (этап 62, К1).
+ *
+ * Охрана не отменяет разбой — она делает нападение невыгодным: грабят обоз с
+ * охраной реже, а уносят меньше. Платить ей приходится всякий день, идёт обоз
+ * или стоит.
+ */
+function hireGuards(state: GameState, enterpriseId: string, count: number): CommandResult {
+  const enterprise = state.enterprises.find((one) => one.id === enterpriseId)
+  if (!enterprise) return fail('unknownAction', 'Такого дела у тебя нет.')
+  if (enterprise.kind !== 'caravan') return fail('invalid', 'Охрану берут к обозу.')
+  if (!Number.isInteger(count) || count === 0) return fail('invalid', 'Сколько именно?')
+  const now = guardsOf(enterprise)
+  const limit = guardLimit(enterprise)
+  const wanted = Math.max(0, Math.min(limit, now + count))
+  if (wanted === now) {
+    return fail('invalid', count > 0 ? `Больше ${limit} обоз не прокормит.` : 'Отпускать некого.')
+  }
+  const added = wanted - now
+  const price = added > 0 ? added * GUARD_HIRE : 0
+  if (state.character.money < price) {
+    return fail('noMoney', `На это нужно ${price}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  if (price > 0) addMoney(draft, -price)
+  advance(draft, hours(2))
+  draft.enterprises = draft.enterprises.map((one) =>
+    one.id === enterpriseId ? { ...one, guards: wanted } : one,
+  )
+  const master = caravanMaster(enterpriseId)
+  notice(
+    draft,
+    added > 0
+      ? `${master.name} берёт ${added} в охрану: теперь при обозе ${wanted}. Жалованье ${wanted * GUARD_WAGE} в сутки.`
+      : `При обозе осталось ${wanted} охраны.`,
+    'trade',
+  )
+  return close(draft)
+}
+
+/**
+ * Встретить свой обоз в пути (этап 62, К1).
+ *
+ * Обоз — не строка в отчёте: если ты стоишь там же, где он, можно подойти,
+ * поговорить с караванщиком и взять из ящика выручку. Заодно узнаёшь, каков он.
+ */
+function meetCaravan(state: GameState, enterpriseId: string): CommandResult {
+  const enterprise = state.enterprises.find((one) => one.id === enterpriseId)
+  if (!enterprise) return fail('unknownAction', 'Такого дела у тебя нет.')
+  if (enterprise.locationId !== state.locationId || enterprise.travel) {
+    return fail('unavailableHere', 'Обоза здесь нет: он в пути.')
+  }
+  const master = caravanMaster(enterprise.id)
+  const def = caravanTemperDef(master.temper)
+
+  const draft = open(state)
+  advance(draft, hours(1))
+  // Ящик: то, что дело принесло и чего ты ещё не брал.
+  const box = Math.max(0, Math.round(enterprise.earned))
+  if (box > 0) {
+    addMoney(draft, box)
+    draft.enterprises = draft.enterprises.map((one) =>
+      one.id === enterpriseId ? { ...one, earned: 0 } : one,
+    )
+  }
+  notice(
+    draft,
+    `${master.name}, ${def.label}: «${def.about}» Повозок ${wagonsOf(enterprise)}, охраны ${guardsOf(enterprise)}.${
+      box > 0 ? ` Из ящика взято ${box}.` : ' В ящике пусто.'
+    }`,
+    'trade',
+  )
+  return close(draft)
+}
+
+/**
+ * Поставить постоялый двор (этап 62, К2).
+ *
+ * Дело не для города, а для дороги: двор живёт проезжими. Его ставят там, где
+ * дороги сходятся, и он стоит пустым там, где по ним не ездят.
+ */
+function foundInn(state: GameState): CommandResult {
+  if (state.character.money < INN_COST) {
+    return fail('noMoney', `На двор нужно ${INN_COST}, у тебя ${state.character.money}.`)
+  }
+  if (state.enterprises.some((one) => one.kind === 'inn' && one.locationId === state.locationId)) {
+    return fail('invalid', 'Один двор здесь уже твой.')
+  }
+  const traffic = travellersAt(state.world, state.settlements, state.locationId)
+  if (traffic < 4) {
+    return fail('unavailableHere', 'Здесь не ездят: двор будет стоять пустым.')
+  }
+
+  const draft = open(state)
+  addMoney(draft, -INN_COST)
+  advance(draft, hours(8))
+  draft.enterprises = [
+    ...draft.enterprises,
+    {
+      id: `inn:${dayOf(draft.time)}:${draft.enterprises.length}`,
+      kind: 'inn',
+      locationId: state.locationId,
+      homeId: null,
+      awayId: null,
+      travel: null,
+      travelTarget: null,
+      invested: INN_COST,
+      managerId: null,
+      cargo: {},
+      earned: 0,
+    },
+  ]
+  notice(
+    draft,
+    `Двор поставлен. Проезжих здесь около ${Math.round(traffic)} в сутки — это и есть твой доход.`,
+    'trade',
+  )
+  return close(draft)
+}
+
+/**
+ * Держать дорогу (этап 62, К3).
+ *
+ * Дорога между двумя своими местами — твоя. Разъезд по ней стоит денег и сбивает
+ * разбой на обоих концах: держат дорогу не законом, а людьми на ней.
+ */
+function patrolRoad(state: GameState, toId: string, riders: number): CommandResult {
+  const road = ownRoads(state).find(
+    (one) =>
+      (one.fromId === state.locationId && one.toId === toId) ||
+      (one.toId === state.locationId && one.fromId === toId),
+  )
+  if (!road) return fail('invalid', 'Это не твоя дорога: своими должны быть оба конца.')
+  if (!Number.isInteger(riders) || riders < 2 || riders > 20) {
+    return fail('invalid', 'В разъезд ставят от двух до двадцати.')
+  }
+  const price = patrolCost(road, riders)
+  if (state.character.money < price) {
+    return fail('noMoney', `Разъезд стоит ${price}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -price)
+  advance(draft, hours(PATROL_HOURS))
+  addFatigue(draft, 14)
+  const drop = patrolEffect(riders)
+  const settlements = { ...draft.settlements }
+  for (const id of [road.fromId, road.toId]) {
+    const settlement = settlements[id]
+    if (!settlement) continue
+    settlements[id] = { ...settlement, banditry: Math.max(0, settlement.banditry - drop) }
+    draft.reputation = withPlaceRep(draft.reputation, id, 5)
+  }
+  draft.settlements = settlements
+  const where = draft.base.world.locations[toId]?.name ?? 'соседнее место'
+  notice(
+    draft,
+    `Разъезд прошёл дорогу до ${where}: разбой сбит на ${Math.round(drop * 100)} сотых.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Набрать команду (этап 62, К4).
+ *
+ * Корабль — это прежде всего люди. Недобор рук замедляет ход вполтора раза, а
+ * неплатёж кончается тем, чем всегда кончается неплатёж на палубе.
+ */
+function hireCrew(state: GameState, count: number): CommandResult {
+  const ship = state.ship
+  if (!ship) return fail('requirements', 'Своего судна у тебя нет.')
+  if (!isHarbour(state.world, state.locationId)) {
+    return fail('unavailableHere', 'Матросов берут в гавани.')
+  }
+  if (!Number.isInteger(count) || count === 0) return fail('invalid', 'Сколько именно?')
+  const need = crewNeeded(ship)
+  const now = crewOf(ship)
+  const wanted = Math.max(0, Math.min(need, now + count))
+  if (wanted === now) {
+    return fail(
+      'invalid',
+      count > 0 ? `Больше ${need} на такое судно не нужно.` : 'Списывать некого.',
+    )
+  }
+  const added = wanted - now
+  const price = added > 0 ? added * SAILOR_HIRE : 0
+  if (state.character.money < price) {
+    return fail('noMoney', `На это нужно ${price}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  if (price > 0) addMoney(draft, -price)
+  advance(draft, hours(3))
+  draft.ship = { ...ship, crew: wanted, mood: crewMood(ship) }
+  const skipper = skipperOf(ship)
+  notice(
+    draft,
+    added > 0
+      ? `${skipper.name} (${skipperDef(skipper.temper).label}) взял ${added} на борт: рук ${wanted} из ${need}.`
+      : `На борту осталось ${wanted} рук.`,
+    'trade',
+  )
+  return close(draft)
+}
+
+/**
+ * Рассчитать команду (этап 62, К4).
+ *
+ * Жалованье за месяц вперёд: палуба, которой заплатили, молчит о том, о чём
+ * иначе заговорила бы.
+ */
+function payCrew(state: GameState): CommandResult {
+  const ship = state.ship
+  if (!ship) return fail('requirements', 'Своего судна у тебя нет.')
+  const crew = crewOf(ship)
+  if (crew === 0) return fail('invalid', 'Платить некому.')
+  const price = crew * SAILOR_WAGE * 30
+  if (state.character.money < price) {
+    return fail('noMoney', `На месяц жалованья нужно ${price}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -price)
+  advance(draft, hours(1))
+  draft.ship = { ...ship, mood: Math.min(100, crewMood(ship) + 30) }
+  notice(draft, `Команде заплачено за месяц: ${price}. ${moodWord(crewMood(draft.ship))}.`, 'money')
+  return close(draft)
+}
+
+/**
+ * Уйти с попутным шкипером (этап 62, К5).
+ *
+ * У пристани всегда кто-то стоит, и он идёт откуда-то и куда-то. Место на его
+ * палубе стоит дешевле, чем нанять судно, но идёт он в свою гавань, а не в твою.
+ */
+function takeBerth(state: GameState, shipId: string): CommandResult {
+  const day = dayOf(state.time)
+  const found = shipsAt(state.world, state.locationId, day).find((one) => one.id === shipId)
+  if (!found) return fail('unknownAction', 'Такого судна у пристани нет.')
+  if (state.character.money < found.berth) {
+    return fail(
+      'noMoney',
+      `${found.skipper} просит ${found.berth}, у тебя ${state.character.money}.`,
+    )
+  }
+  if (partySize(state.party) + 1 > ABOARD_MAX) {
+    return fail('noRoom', `${found.skipper} возьмёт шестерых, а не ${partySize(state.party) + 1}.`)
+  }
+  const sailing = sail(state, found.fromId, 'aboard')
+  if (!sailing.ok) return sailing
+  const draft = open(sailing.state)
+  addMoney(draft, -found.berth)
+  notice(
+    draft,
+    `«${found.name}» под рукой ${found.skipper}а идёт домой, и ты с ним. Место — ${found.berth}.`,
+    'trade',
+  )
+  return close(draft)
+}
+
+/**
+ * Охота на морского лорда (этап 62, К6).
+ *
+ * У пирата есть имя, гавань и цена за голову. Идти к нему — дело добровольное:
+ * он сидит в глухом месте у воды, и по дороге туда никто не поможет.
+ */
+function huntPirate(state: GameState, pirateId: string): CommandResult {
+  const lord = pirateById(state.world, pirateId)
+  if (!lord) return fail('unknownAction', 'О таком не слышали.')
+  if (!state.ship) return fail('requirements', 'К нему идут своим судном.')
+  if (!isHarbour(state.world, state.locationId)) {
+    return fail('unavailableHere', 'Выходить в море надо из гавани.')
+  }
+  if (partySize(state.party) < 6) return fail('requirements', 'С такими силами его не брать.')
+
+  const draft = open(state)
+  advance(draft, hours(12))
+  addFatigue(draft, 16)
+  const [band, afterBand] = warband(lord.strength, draft.rng)
+  draft.rng = afterBand
+  draft.battle = startBattle(
+    draft.party,
+    { ...band, name: `${lord.name} ${lord.byname}` },
+    'coast',
+    {
+      foeId: lord.id,
+      // Абордаж: теснота сходней, и обходить некуда.
+      ground: 'ford',
+      veterans: veteransOf(draft.party),
+    },
+  )
+  notice(
+    draft,
+    `${lord.name} ${lord.byname} вышел навстречу сам. За его голову дают ${bountyFor(lord)}.`,
+    'war',
   )
   return close(draft)
 }

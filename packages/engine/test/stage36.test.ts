@@ -218,7 +218,8 @@ describe('морской разбой', () => {
         if (!step.ok) break
         current = step.state
       }
-      if (current.battle?.foeId === 'pirates') met = current
+      // С этапа 62 у пирата есть имя: в бою стоит не «пираты», а морской лорд.
+      if (current.battle && current.battle.foeId !== null) met = current
     }
     expect(met, 'пираты так и не встретились').not.toBeNull()
     if (!met) return

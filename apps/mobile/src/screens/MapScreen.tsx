@@ -1,3 +1,4 @@
+import type { EnterpriseKind } from '@tpg/engine'
 import {
   ARMY_PACE,
   CARAVAN_COST,
@@ -249,8 +250,7 @@ export function MapScreen({ game }: { game: GameState }) {
 
   // Свои дела на полотне: мастерская дымит у места, караван идёт по дороге.
   const ventures = useMemo(() => {
-    const out: { id: string; x: number; y: number; kind: 'caravan' | 'workshop' | 'shipping' }[] =
-      []
+    const out: { id: string; x: number; y: number; kind: EnterpriseKind }[] = []
     for (const enterprise of game.enterprises) {
       const at = points[enterprise.locationId]
       if (!at) continue
@@ -888,9 +888,11 @@ export function MapScreen({ game }: { game: GameState }) {
             .filter((one) => one.locationId === chosen.id || one.homeId === chosen.id)
             .map((one) => (
               <Text key={one.id} style={styles.venture}>
-                {one.kind === 'workshop'
-                  ? `Твоя мастерская · принесла ${one.earned}`
-                  : `${one.kind === 'shipping' ? 'Твоё судно' : 'Твой караван'}${one.travel ? ` · в пути к ${game.world.locations[one.travelTarget ?? '']?.name ?? '…'}` : ' · стоит здесь'} · принёс ${one.earned}`}
+                {one.kind === 'inn'
+                  ? `Твой постоялый двор · принёс ${one.earned}`
+                  : one.kind === 'workshop'
+                    ? `Твоя мастерская · принесла ${one.earned}`
+                    : `${one.kind === 'shipping' ? 'Твоё судно' : 'Твой караван'}${one.travel ? ` · в пути к ${game.world.locations[one.travelTarget ?? '']?.name ?? '…'}` : ' · стоит здесь'} · принёс ${one.earned}`}
               </Text>
             ))}
           {knownPrice(game, chosen.id) ? (

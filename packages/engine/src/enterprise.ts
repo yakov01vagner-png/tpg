@@ -1,6 +1,7 @@
 import { nextHop } from './band'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
+import { INN_SHARE } from './content/road'
 import type { ShipKind } from './content/ships'
 import { SITES } from './content/sites'
 import type { Settlement } from './economy'
@@ -8,6 +9,7 @@ import { priceOf } from './economy'
 import { WAGON_PACE, legHoursFor } from './journey'
 import { foodSecurity } from './life'
 import { type Rng, rollChance } from './rng'
+import { guardWages, guardsOf, innIncome, masterSkim, masterTrade, raidRisk } from './road'
 import { seasonOf } from './time'
 import { iceBound, lanesFrom } from './world/lanes'
 import { roadsFrom } from './world/queries'
@@ -25,7 +27,11 @@ import { isSite } from './world/types'
 /** Как часто ученик портит работу: раз в месяц с небольшим на каждого. */
 const SPOIL_PER_APPRENTICE = 0.03
 
-export type EnterpriseKind = 'caravan' | 'workshop' | 'shipping'
+/**
+ * Постоялый двор (этап 62, К2) — четвёртый род дела: он не ходит и не делает
+ * вещей, он живёт проезжими. Потому и стоит там, где дорога, а не там, где люди.
+ */
+export type EnterpriseKind = 'caravan' | 'workshop' | 'shipping' | 'inn'
 
 export interface Enterprise {
   readonly id: string
@@ -58,6 +64,11 @@ export interface Enterprise {
    * и вместе с делом его можно потерять насовсем.
    */
   readonly ship?: ShipKind
+  /**
+   * Охрана при обозе (этап 62, К1): её нанимают, ей платят и её теряют. Есть
+   * только у караванов; необязательно — сейвы до 0.6 охраны не знают.
+   */
+  readonly guards?: number
 }
 
 /** Во что обходится завести дело. */
@@ -101,6 +112,8 @@ export type EnterpriseEvent =
       readonly lost: number
     }
   | { readonly type: 'workshopIdle'; readonly id: string; readonly locationId: string }
+  /** Двор стоит пустым: дорога глухая или по ней перестали ездить (этап 62). */
+  | { readonly type: 'innEmpty'; readonly id: string; readonly locationId: string }
   | {
       readonly type: 'workshopSpoiled'
       readonly id: string
@@ -149,6 +162,8 @@ export function tickEnterprises(
   for (const enterprise of enterprises) {
     const skill = managerSkill(enterprise)
     const hand = enterprise.managerId ? 1 + skill * 0.06 : NO_MANAGER
+    // Охрана при обозе ест каждый день, идёт он или стоит (этап 62, К1).
+    if (enterprise.kind === 'caravan') income -= guardWages(enterprise)
 
     if (enterprise.kind === 'workshop') {
       const place = settlements[enterprise.locationId]
@@ -185,6 +200,23 @@ export function tickEnterprises(
       }
       income += gain
       next.push({ ...enterprise, earned: enterprise.earned + gain })
+      continue
+    }
+
+    // Постоялый двор (этап 62, К2): он не ходит и ничего не делает — он живёт
+    // проезжими. Их столько, сколько дорог от места и сколько на них покоя: на
+    // большой дороге двор кормит, в разбойной округе стоит пустым.
+    if (enterprise.kind === 'inn') {
+      const gain = Math.round(
+        innIncome(world, settlements, enterprise.locationId) * hand * INN_SHARE,
+      )
+      if (gain > 0) {
+        income += gain
+        next.push({ ...enterprise, earned: enterprise.earned + gain })
+      } else {
+        events.push({ type: 'innEmpty', id: enterprise.id, locationId: enterprise.locationId })
+        next.push(enterprise)
+      }
       continue
     }
 
@@ -277,10 +309,16 @@ export function tickEnterprises(
         landDanger(world, settlements, arrived),
         landDanger(world, settlements, enterprise.locationId),
       )
-      const [robbed, afterRoll] = rollChance(generator, danger)
+      // Охрана и нрав караванщика (этап 62, К1): отчаянный ведёт обоз туда, где
+      // не ходят, а охрана делает нападение невыгодным. Ни то ни другое не
+      // отменяет разбой — они меняют его цену.
+      const [robbed, afterRoll] = rollChance(generator, raidRisk(enterprise, danger))
       generator = afterRoll
       if (robbed) {
-        const lost = Math.round(enterprise.invested * 0.3)
+        // Охрана дерётся: часть её ложится на дороге, но товара уносят меньше.
+        const guards = guardsOf(enterprise)
+        const fell = guards > 0 ? Math.max(1, Math.round(guards / 2)) : 0
+        const lost = Math.round(enterprise.invested * (guards > 0 ? 0.18 : 0.3))
         events.push({ type: 'caravanRobbed', id: enterprise.id, locationId: arrived, lost })
         next.push({
           ...enterprise,
@@ -288,6 +326,7 @@ export function tickEnterprises(
           travel: null,
           invested: Math.max(0, enterprise.invested - lost),
           cargo: {},
+          ...(fell > 0 ? { guards: Math.max(0, guardsOf(enterprise) - fell) } : {}),
         })
         continue
       }
@@ -295,7 +334,10 @@ export function tickEnterprises(
       // различалось, обоз продавал товар на каждом промежуточном месте и
       // окупался за семнадцать дней — одно дело кормило лучше, чем война.
       const endOfRoad = arrived === enterprise.homeId || arrived === enterprise.awayId
-      const gain = endOfRoad ? tradeHere(world, place, enterprise, hand) : 0
+      const traded = endOfRoad ? tradeHere(world, place, enterprise, hand) : 0
+      // Караванщик торгует по-своему: корыстный выторгует больше и часть
+      // оставит себе, осторожный привезёт меньше, но привезёт.
+      const gain = Math.round(traded * masterTrade(enterprise) * (1 - masterSkim(enterprise)))
       if (gain !== 0) {
         income += gain
         events.push({ type: 'caravanSold', id: enterprise.id, locationId: arrived, gain })
