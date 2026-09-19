@@ -36,6 +36,9 @@ import {
   talkedTo,
   topicsFor,
   troopCount,
+  wishDone,
+  wishOf,
+  wishShare,
 } from '@tpg/engine'
 import { useState } from 'react'
 import { ScrollView, StyleSheet, Text, View } from 'react-native'
@@ -172,7 +175,7 @@ export function PeopleScreen({ game }: { game: GameState }) {
                 <Portrait seed={companion.id} size={36} overrides={COMPANION_FACES[companion.id]} />
               }
               title={companion.name}
-              subtitle={`${TEMPERS[companion.temper]?.label ?? ''} · ${companion.captive ? 'в плену' : roleWord(companion.role)}`}
+              subtitle={`${TEMPERS[companion.temper]?.label ?? ''} · ${companion.captive ? 'в плену' : roleWord(companion.role)}${wishLine(companion)}`}
               right={
                 <>
                   <Badge text={moodWord(companion.mood)} tone={moodTone(companion.mood)} />
@@ -455,4 +458,13 @@ function Talk({ game }: { game: GameState }) {
       })}
     </Section>
   )
+}
+
+/** Чего спутник хочет и сколько до этого осталось (этап 54). */
+function wishLine(companion: Companion): string {
+  const wish = wishOf(companion)
+  if (!wish) return ''
+  if (wishDone(companion)) return ` · ${wish.label}: сделано`
+  const share = Math.round(wishShare(companion) * 100)
+  return ` · ${wish.label}${share > 0 ? ` (${share}%)` : ''}`
 }

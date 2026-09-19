@@ -37,7 +37,18 @@ import {
 } from './character'
 import type { CompanionRole } from './companion'
 import type { Companion } from './companion'
-import { bestSkill, companionDef, following, hireCompanion, witness } from './companion'
+import {
+  DEED_SKILL,
+  bestSkill,
+  companionDef,
+  following,
+  hireCompanion,
+  quarrelsOf,
+  wishDone,
+  wishNeeds,
+  wishOf,
+  witness,
+} from './companion'
 import type { Availability, Content, Requirements } from './content'
 import { CONTENT } from './content'
 import type { BuildingId } from './content/buildings'
@@ -309,6 +320,8 @@ export type Command =
   | { readonly type: 'petition'; readonly lordId: string }
   /** Разговор (этап 53): спросить человека о том, что он знает. */
   | { readonly type: 'talk'; readonly speakerId: string; readonly topicId: string }
+  /** Помочь спутнику с его делом (этап 54). */
+  | { readonly type: 'grantWish'; readonly companionId: string }
   /** Уйти морем: своим судном, нанятым или попутным (этап 35). */
   | { readonly type: 'sail'; readonly toLocationId: string; readonly manner: Passage }
   /** Купить судно в порту, починить своё, продать своё. */
@@ -558,6 +571,8 @@ export function applyCommand(
       return petition(state, command.lordId)
     case 'talk':
       return talk(state, command.speakerId, command.topicId)
+    case 'grantWish':
+      return grantWish(state, command.companionId)
     case 'travel':
       return travel(state, command.toLocationId)
     case 'sail':
@@ -1838,6 +1853,8 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
     addMoney(draft, battle.spoils.money)
     draft.renown += 1
     draft.battlesWon += 1
+    // Спутники растут делами, а не годами (этап 54): бой — дело тяжёлое.
+    seasonCompanions(draft, true)
     seeDeed(draft, 'winBattle')
 
     // Побитая шайка — это меньше разбоя в округе и доброе слово в месте.
@@ -3106,6 +3123,49 @@ function allyStrikesFirst(
 // --- спутники ---------------------------------------------------------------
 
 /** Кого можно встретить в этом месте: тех, кого ты ещё не звал. */
+/**
+ * Спутник растёт (этап 54, С5).
+ *
+ * Умение приходит с делами: после боя и после долгой дороги у спутника
+ * прибавляется дел, а с ними — то, чем он и без того силён. Иногда остаётся
+ * шрам: память о бое, в котором он выжил.
+ */
+function seasonCompanions(draft: Draft, hard: boolean): void {
+  draft.companions = draft.companions.map((one) => {
+    if (one.captive || one.role.type !== 'party') return one
+    const deeds = (one.deeds ?? 0) + 1
+    // Растёт то, чем он и без того силён: умение приходит от дела, а не от книг.
+    const [best] = Object.entries(one.skills).sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+    const skills = best
+      ? {
+          ...one.skills,
+          [best[0] as SkillId]: Math.round(((best[1] ?? 0) + DEED_SKILL) * 10) / 10,
+        }
+      : one.skills
+    const scarred = hard && !one.scar && deeds % 7 === 0
+    return {
+      ...one,
+      deeds,
+      skills,
+      ...(scarred ? { scar: 'шрам через бровь' } : {}),
+    }
+  })
+}
+
+/** Погибшего помнят: имя, день и место остаются в состоянии (этап 54, С4). */
+function rememberFallen(draft: Draft, companion: Companion): void {
+  draft.fallen = [
+    ...draft.fallen,
+    {
+      id: companion.id,
+      name: companion.name,
+      day: dayOf(draft.time),
+      locationId: draft.locationId,
+    },
+  ]
+  notice(draft, `${companion.name} остался в поле. Отряд молчит.`)
+}
+
 export function companionsAt(
   state: GameState,
   locationId = state.locationId,
@@ -3115,9 +3175,13 @@ export function companionsAt(
   const population = state.settlements[locationId]?.population ?? location.population
   const taken = new Set(state.companions.map((one) => one.id))
   const kingdom = kingdomOf(state.world, locationId)?.id ?? null
+  // Павшего не встретишь: он остался в поле (этап 54). Ушедший — встретишь, и
+  // он будет не тот, что уходил.
+  const dead = new Set(state.fallen?.map((one) => one.id) ?? [])
   return Object.values(COMPANIONS).filter(
     (def) =>
       !taken.has(def.id) &&
+      !dead.has(def.id) &&
       isAvailableAt(def.where, location, population) &&
       (!def.kingdomId || def.kingdomId === kingdom),
   )
@@ -3438,7 +3502,7 @@ function recruitCompanion(state: GameState, companionId: string): CommandResult 
   }
   const draft = open(state)
   addMoney(draft, -def.fee)
-  draft.companions = [...draft.companions, hireCompanion(def)]
+  draft.companions = [...draft.companions, hireCompanion(def, dayOf(state.time))]
   notice(draft, `${def.name} идёт с тобой.`, 'people')
   advance(draft, hours(1))
   return close(draft)
@@ -3775,6 +3839,105 @@ export function tradeSkillAt(state: GameState): number {
  * Уступка держится до конца дня и только у этого купца; наглость он запомнит.
  * Торгуются раз в день: приставать к человеку каждый час — не торг.
  */
+/**
+ * Помочь спутнику с его делом (этап 54, С2).
+ *
+ * Долг выкупают деньгами, учение оплачивают в школе, дом дают землёй. Месть,
+ * имя и покой деньгами не купишь — они приходят делами и годами.
+ */
+function grantWish(state: GameState, companionId: string): CommandResult {
+  const companion = state.companions.find((one) => one.id === companionId)
+  if (!companion) return fail('unknownAction', 'Такого спутника у тебя нет.')
+  const wish = wishOf(companion)
+  if (!wish) return fail('invalid', `${companion.name} ничего не просит.`)
+  if (wishDone(companion)) return fail('invalid', `У ${companion.name} это дело уже сделано.`)
+  if (wish.id === 'lore') {
+    const school = schoolAt(state.world, state.locationId)
+    if (!school) return fail('unavailableHere', 'Учить его надо там, где есть школа.')
+  }
+  if (wish.cost === 0) {
+    return fail('requirements', `${companion.name}: «${wish.says}» Это деньгами не решается.`)
+  }
+  if (state.character.money < wish.cost) {
+    return fail('noMoney', `Нужно ${wish.cost}, а у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -wish.cost)
+  advance(draft, hours(2))
+  finishWish(draft, companionId)
+  return close(draft)
+}
+
+/** Дело спутника сделано: он это помнит и остаётся твоим. */
+function finishWish(draft: Draft, companionId: string): void {
+  const day = dayOf(draft.time)
+  draft.companions = draft.companions.map((one) => {
+    if (one.id !== companionId) return one
+    const wish = wishOf(one)
+    if (!wish || one.wish?.doneDay !== undefined) return one
+    notice(draft, `${one.name}: «${wish.done}»`)
+    return {
+      ...one,
+      mood: Math.min(100, one.mood + 25),
+      wish: { progress: wishNeeds(wish.id), doneDay: day },
+    }
+  })
+}
+
+/**
+ * Дела спутников идут сами (этап 54).
+ *
+ * Месть считается боями, имя — славой, покой — сутками без крови, дом — твоей
+ * землёй. Проверяется раз в сутки вместе со всем остальным миром.
+ */
+function advanceWishes(draft: Draft, days: number): void {
+  const day = dayOf(draft.time)
+  const holdings = holdingsOf(draft.settlements, PLAYER).length
+  draft.companions = draft.companions.map((one) => {
+    const wish = wishOf(one)
+    if (!wish || one.wish?.doneDay !== undefined || one.captive) return one
+    const was = one.wish?.progress ?? 0
+    let progress = was
+    if (wish.id === 'revenge') progress = draft.battlesWon - (one.since ? 0 : 0)
+    if (wish.id === 'name') progress = draft.renown
+    if (wish.id === 'home') progress = holdings > 0 ? 1 : 0
+    if (wish.id === 'peace') progress = draft.battle === null ? was + days : 0
+    if (progress === was) return one
+    const next = { ...one, wish: { ...one.wish, progress } }
+    if (progress >= wishNeeds(wish.id)) {
+      notice(draft, `${one.name}: «${wish.done}»`)
+      return {
+        ...next,
+        mood: Math.min(100, one.mood + 25),
+        wish: { progress, doneDay: day },
+      }
+    }
+    return next
+  })
+}
+
+/**
+ * Ссоры в отряде (этап 54, С3).
+ *
+ * Кто с кем не уживается, тот и тянет настроение вниз — каждый день понемногу.
+ * Кто сходится, тому в походе легче.
+ */
+function quarrel(draft: Draft, days: number): void {
+  const quarrels = quarrelsOf(draft.companions)
+  if (quarrels.length === 0) return
+  const shifts = new Map<string, number>()
+  for (const one of quarrels) {
+    shifts.set(one.a.id, (shifts.get(one.a.id) ?? 0) + one.feeling * days * 0.5)
+    shifts.set(one.b.id, (shifts.get(one.b.id) ?? 0) + one.feeling * days * 0.5)
+  }
+  draft.companions = draft.companions.map((one) => {
+    const shift = shifts.get(one.id)
+    if (!shift) return one
+    return { ...one, mood: Math.max(0, Math.min(100, one.mood + shift)) }
+  })
+}
+
 /**
  * Разговор (этап 53).
  *
@@ -4959,6 +5122,7 @@ interface Draft {
   piety: number
   pilgrimDay: number | undefined
   talked: Readonly<Record<string, number>>
+  fallen: readonly { id: string; name: string; day: number; locationId: string }[]
   battle: Battle | null
   politics: Politics
   /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
@@ -5004,6 +5168,7 @@ function open(state: GameState): Draft {
     piety: state.piety ?? 0,
     pilgrimDay: state.pilgrimDay,
     talked: state.talked ?? {},
+    fallen: state.fallen ?? [],
     battle: state.battle,
     politics: state.politics,
     world: state.world,
@@ -5216,6 +5381,7 @@ function close(draft: Draft): CommandResult {
     cech: draft.cech,
     piety: draft.piety,
     talked: draft.talked,
+    fallen: draft.fallen,
     ...(draft.pilgrimDay !== undefined ? { pilgrimDay: draft.pilgrimDay } : {}),
     battle: draft.battle,
     politics: draft.politics,
@@ -5403,6 +5569,8 @@ function payUpkeep(draft: Draft, days: number): void {
   paySailors(draft, days)
   payDues(draft)
   payCech(draft)
+  advanceWishes(draft, 1)
+  quarrel(draft, 1)
   // Новый день — новое терпение: вчерашние разговоры не в счёт (этап 53).
   draft.talked = {}
   if (partySize(draft.party) === 0) return

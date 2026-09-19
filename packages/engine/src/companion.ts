@@ -1,5 +1,6 @@
 import type { CompanionDef, DeedId, TemperId } from './content/companions'
-import { COMPANIONS, TEMPERS } from './content/companions'
+import type { WishDef, WishId } from './content/companions'
+import { COMPANIONS, TEMPERS, WISHES } from './content/companions'
 import type { SkillId } from './skills'
 
 /**
@@ -28,7 +29,103 @@ export interface Companion {
   readonly role: CompanionRole
   /** В плену: жив, но не с тобой. */
   readonly captive: boolean
+  /** С какого дня идёт с тобой (этап 54). */
+  readonly since?: number
+  /** Сколько дел за ним: боёв, походов, зим. По этому он и растёт. */
+  readonly deeds?: number
+  /** Шрам: что осталось от боя, в котором он выжил. */
+  readonly scar?: string
+  /** Как идёт его собственное дело (этап 54). */
+  readonly wish?: { readonly progress: number; readonly doneDay?: number }
 }
+
+/**
+ * Своё дело спутника (этап 54, С2).
+ *
+ * У каждого есть, чего он хочет: выкупить долг, отомстить, вернуть дом, нажить
+ * имя, доучиться, дожить спокойно. Пока дело не сделано, он идёт с тобой — и
+ * смотрит, помогаешь ты ему или только пользуешься.
+ */
+export function wishOf(companion: Companion): WishDef | null {
+  const def = companionDef(companion.id)
+  return def?.wish ? WISHES[def.wish] : null
+}
+
+/** Сколько дела сделано, долей. */
+export function wishShare(companion: Companion): number {
+  const wish = wishOf(companion)
+  if (!wish) return 0
+  return Math.min(1, (companion.wish?.progress ?? 0) / wishNeeds(wish.id))
+}
+
+/** Сколько надо, чтобы дело было сделано. */
+export function wishNeeds(id: WishId): number {
+  switch (id) {
+    case 'debt':
+      return 1
+    case 'revenge':
+      return 10
+    case 'home':
+      return 1
+    case 'name':
+      return 12
+    case 'lore':
+      return 1
+    case 'peace':
+      return 365
+  }
+}
+
+export function wishDone(companion: Companion): boolean {
+  return companion.wish?.doneDay !== undefined
+}
+
+/**
+ * Ссоры и дружбы (этап 54, С3).
+ *
+ * Спутники смотрят не только на тебя, но и друг на друга: честный не уживается
+ * с корыстным, гордый с гордым, набожный с тем, кто смеётся над верой. А кто
+ * сходится — тому в отряде легче.
+ */
+const FEELINGS: Readonly<Record<string, number>> = {
+  'honest|greedy': -2,
+  'greedy|honest': -2,
+  'devout|greedy': -2,
+  'greedy|devout': -2,
+  'proud|proud': -2,
+  'grim|merry': -1,
+  'honest|loyal': 2,
+  'loyal|honest': 2,
+  'devout|honest': 1,
+  'honest|devout': 1,
+  'loyal|proud': 1,
+  'proud|loyal': 1,
+  'grim|grim': 1,
+}
+
+export function feelsAbout(one: Companion, other: Companion): number {
+  return FEELINGS[`${one.temper}|${other.temper}`] ?? 0
+}
+
+/** Кто с кем не уживается: пары, которые тянут отряд вниз. */
+export function quarrelsOf(
+  companions: readonly Companion[],
+): readonly { readonly a: Companion; readonly b: Companion; readonly feeling: number }[] {
+  const out: { a: Companion; b: Companion; feeling: number }[] = []
+  const party = following(companions)
+  for (let i = 0; i < party.length; i += 1) {
+    for (let j = i + 1; j < party.length; j += 1) {
+      const a = party[i] as Companion
+      const b = party[j] as Companion
+      const feeling = feelsAbout(a, b) + feelsAbout(b, a)
+      if (feeling !== 0) out.push({ a, b, feeling })
+    }
+  }
+  return out
+}
+
+/** Сколько спутник растёт за дело: умение приходит с делами, а не с годами. */
+export const DEED_SKILL = 0.35
 
 /** Ниже этого спутник уходит. */
 export const LEAVING_MOOD = 15
@@ -38,7 +135,7 @@ export function companionDef(id: string): CompanionDef | null {
   return COMPANIONS[id] ?? null
 }
 
-export function hireCompanion(def: CompanionDef): Companion {
+export function hireCompanion(def: CompanionDef, day = 1): Companion {
   return {
     id: def.id,
     name: def.name,
@@ -47,6 +144,9 @@ export function hireCompanion(def: CompanionDef): Companion {
     mood: START_MOOD,
     role: { type: 'party' },
     captive: false,
+    since: day,
+    deeds: 0,
+    ...(def.wish ? { wish: { progress: 0 } } : {}),
   }
 }
 

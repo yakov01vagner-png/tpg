@@ -132,6 +132,16 @@ export interface GameState {
    */
   readonly talked?: Readonly<Record<string, number>>
   /**
+   * Павшие спутники (этап 54): имя, день и место. Их помнят и о них говорят;
+   * встретить их снова нельзя.
+   */
+  readonly fallen?: readonly {
+    readonly id: string
+    readonly name: string
+    readonly day: number
+    readonly locationId: string
+  }[]
+  /**
    * Отведённый мор (этап 41): где и до какого дня чары держат смерть вполовину.
    * Необязательно — сейвы до 0.5 чар не знают.
    */
@@ -202,6 +212,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     cech: null,
     piety: 0,
     talked: {},
+    fallen: [],
     party: EMPTY_PARTY,
     ship: null,
     guild: null,
