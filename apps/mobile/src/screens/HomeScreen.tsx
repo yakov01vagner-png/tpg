@@ -36,9 +36,11 @@ import {
   addressOf,
   ailmentDef,
   ailmentOf,
+  anniversariesOf,
   artifactDef,
   artifactsOf,
   bountyFor,
+  calendarOf,
   canApply,
   canFound,
   canWield,
@@ -58,6 +60,7 @@ import {
   errandsAt,
   examsAt,
   fairAt,
+  fairFolkAt,
   feastAt,
   feastDoingsAt,
   feastHere,
@@ -175,6 +178,7 @@ import {
   Faint,
   Meter,
   Panel,
+  Row,
   Section,
   Tile,
   Tiles,
@@ -1237,6 +1241,8 @@ function SeaSection({
         })}
       </Section>
 
+      <FairCrowd game={game} dispatch={dispatch} />
+
       <Sickbed game={game} dispatch={dispatch} />
 
       <Quay game={game} dispatch={dispatch} />
@@ -1790,5 +1796,67 @@ function Sickbed({
         )
       })}
     </Section>
+  )
+}
+
+/**
+ * Ярмарочный люд и календарь (этап 67, Я3 и Я6).
+ *
+ * Ярмарка — не прибавка к цене, а толпа: заезжие купцы, скоморохи, вербовщик с
+ * бочонком и воры, которые работают всегда. Рядом — то, что будет дальше: сроки,
+ * праздники, ярмарки и повороты года.
+ */
+function FairCrowd({
+  game,
+  dispatch,
+}: {
+  game: GameState
+  dispatch: (command: Command) => void
+}) {
+  const day = dayOf(game.time)
+  const folk = fairFolkAt(game.world, game.locationId, day)
+  const ahead = calendarOf(game, day, 120).slice(0, 8)
+  const marks = anniversariesOf(game, day)
+  if (folk.length === 0 && ahead.length === 0 && marks.length === 0) return null
+  return (
+    <>
+      {marks.length > 0 ? (
+        <Panel tone="gold">
+          {marks.map((one) => (
+            <Dim key={one.id} tone="gold">{`${one.label}, ${one.years}-я: ${one.says}`}</Dim>
+          ))}
+        </Panel>
+      ) : null}
+      {folk.length > 0 ? (
+        <Section title="Ярмарочная толпа" aside={`${folk.length}`}>
+          {folk.map((one) => (
+            <Card
+              key={one.kind}
+              title={one.label}
+              description={one.about}
+              meta={one.kind === 'jester' ? '2 ч' : undefined}
+              reason={
+                one.kind === 'jester'
+                  ? reasonOf(canApply(game, { type: 'watchJesters' }))
+                  : undefined
+              }
+              onPress={one.kind === 'jester' ? () => dispatch({ type: 'watchJesters' }) : undefined}
+              tone={one.kind === 'thief' ? 'danger' : undefined}
+            />
+          ))}
+        </Section>
+      ) : null}
+      {ahead.length > 0 ? (
+        <Section title="Что будет" aside={`${ahead.length}`}>
+          {ahead.map((one) => (
+            <Row
+              key={`${one.kind}:${one.day}:${one.label}`}
+              title={one.label}
+              subtitle={`через ${one.day - day} ${plural(one.day - day, 'день', 'дня', 'дней')}${one.where ? ` · ${one.where}` : ''}`}
+            />
+          ))}
+        </Section>
+      ) : null}
+    </>
   )
 }

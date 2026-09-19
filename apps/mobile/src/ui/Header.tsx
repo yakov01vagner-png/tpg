@@ -10,6 +10,8 @@ import {
   hourOf,
   minuteOf,
   seasonOf,
+  skyDef,
+  skyOf,
   timeOfDay,
   yearOf,
 } from '@tpg/engine'
@@ -73,7 +75,9 @@ export function Header({ game, speed }: { game: GameState; speed: ClockSpeed }) 
           <Text style={[styles.pora, pora === 'night' && styles.night]}>
             {/* Дата, а не номер дня: с версии 0.5 у года есть месяцы и времена
                 года, и «14 липня» говорит больше, чем «день 470» (этап 37). */}
-            {`${formatDate(dayOf(game.time))}, ${SEASON_LABELS[seasonOf(dayOf(game.time))]} · год ${yearOf(dayOf(game.time))} · ${TIME_OF_DAY_LABELS[pora]}`}
+            {/* И небо этого дня (этап 67, Я4): погода — не время года, а
+                сегодня, и по ней видно, стоит ли выходить в дорогу. */}
+            {`${formatDate(dayOf(game.time))}, ${SEASON_LABELS[seasonOf(dayOf(game.time))]} · год ${yearOf(dayOf(game.time))} · ${TIME_OF_DAY_LABELS[pora]} · ${skyDef(skyOf(game.world, game.locationId, dayOf(game.time))).label}`}
           </Text>
         </View>
 

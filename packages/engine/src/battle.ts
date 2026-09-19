@@ -118,6 +118,11 @@ export interface Battle {
   readonly veterans?: number
   /** Свои павшие по родам: из них потом встанут раненые (этап 58, Б3). */
   readonly fallen?: Units
+  /**
+   * Насколько видно цель (этап 67, Я4): небо этого дня. Единица — ясно, в
+   * тумане вдвое хуже. Стрелкам это решает всё.
+   */
+  readonly sight?: number
   /** С чем враг вышел на поле: по разнице считают, что с него снимут. */
   readonly enemyStartUnits?: Units
 }
@@ -189,6 +194,7 @@ export interface BattleOptions {
   readonly foeId?: string | null
   readonly ground?: GroundId
   readonly veterans?: number
+  readonly sight?: number
 }
 
 export function startBattle(
@@ -206,6 +212,7 @@ export function startBattle(
     strain: 0,
     ground: options.ground ?? 'open',
     veterans: options.veterans ?? 0,
+    sight: options.sight ?? 1,
     fallen: {},
     enemy,
     enemyStart: unitsSize(enemy.units),
@@ -346,7 +353,8 @@ export function resolveRound(
     if (order === 'feint') feinting += unitsSize(units)
     if (order === 'rally') rallying += unitsSize(units)
     // Укрытие: в лесу и за стенами стрела находит цель вдвое реже.
-    const seen = order === 'shoot' ? 1 - ground.cover : 1
+    // Видимость: укрытие места и небо этого дня вместе (этапы 58 и 67).
+    const seen = order === 'shoot' ? (1 - ground.cover) * (battle.sight ?? 1) : 1
     if (order === 'flank' && !ground.flanks) {
       // Обходить негде: у брода и на перевале фланга нет вовсе.
       log.push(`${GROUP_LABELS[id]}: обходить негде — ${ground.label.toLowerCase()}.`)

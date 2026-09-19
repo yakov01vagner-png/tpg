@@ -129,7 +129,11 @@ describe('праздники корон', () => {
     if (!feast) return
     expect(feastAt(world, market, feast.day)).toEqual(feast)
     expect(feastAt(world, market, feast.day + feast.days + 3)).toBeNull()
-    const job = Object.values(CONTENT.jobs).find((one) => one.where?.archetypes?.includes('city'))
+    // Берём работу без срока: с этапа 67 есть сезонные (сев, жатва, зимняя
+    // подёнщина), и в обычный день их в городе может не быть вовсе.
+    const job = Object.values(CONTENT.jobs).find(
+      (one) => one.where?.archetypes?.includes('city') && one.where?.seasons === undefined,
+    )
     if (!job) return
     const holiday = applyCommand(at(market, feast.day), { type: 'work', jobId: job.id })
     expect(holiday.ok).toBe(false)

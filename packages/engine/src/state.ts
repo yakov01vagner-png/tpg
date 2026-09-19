@@ -247,7 +247,11 @@ export interface GameState {
   readonly lordDeeds?: Readonly<Record<string, readonly LordDeedId[]>>
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
-  readonly realm: { readonly name: string } | null
+  /**
+   * Своё имя на карте. С этапа 67 помнит и день, когда оно появилось: у имени
+   * бывает годовщина. Необязательно — сейвы до 0.6 дня не знают.
+   */
+  readonly realm: { readonly name: string; readonly sinceDay?: number } | null
   /** Взятые поручения. */
   readonly quests: readonly Quest[]
   /** Именные люди при герое: с ними идут, им поручают, их теряют. */

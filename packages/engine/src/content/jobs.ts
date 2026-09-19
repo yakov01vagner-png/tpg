@@ -25,6 +25,14 @@ export interface JobDef {
   readonly window?: TimeWindow
   /** Где это вообще бывает. Без указания — везде. */
   readonly where?: Availability
+  /**
+   * Работа, на которую берут всех (этап 67, Я1).
+   *
+   * Сев, жатва и зимняя подёнщина не спрашивают, кто ты и любит ли тебя
+   * хозяин: руки нужны сейчас. У прочих работ в поселении есть хозяин, и он
+   * может прогнать (этап 50).
+   */
+  readonly openHands?: boolean
 }
 
 /**
@@ -32,6 +40,54 @@ export interface JobDef {
  * Работа даёт деньги и медленную практику; быстрый рост — только через учёбу.
  */
 export const JOBS: readonly JobDef[] = [
+  // --- год в деревне (этап 67, Я1): весной сеют, осенью жнут, и обе работы
+  // бывают только в свой срок. Платят за них лучше обычного — потому что
+  // руки нужны сейчас, а не вообще.
+  {
+    id: 'sowField',
+    openHands: true,
+    where: {
+      archetypes: ['village', 'town'],
+      seasons: ['spring'],
+    },
+    label: 'Выйти на сев',
+    description:
+      'Борона, лукошко и вся деревня в поле от света до света. Опоздавшим не сеют — им потом не жнут.',
+    durationMinutes: hours(10),
+    pay: 15,
+    practice: { hardLabour: 26, survival: 10 },
+    fatigue: 38,
+  },
+  {
+    id: 'reapField',
+    openHands: true,
+    where: {
+      archetypes: ['village', 'town'],
+      seasons: ['autumn'],
+    },
+    label: 'Выйти на жатву',
+    description:
+      'Серп, спина и страх перед дождём. В эти три недели в деревне платят всем, кто держится на ногах.',
+    durationMinutes: hours(11),
+    pay: 20,
+    practice: { hardLabour: 30, fortitude: 10 },
+    fatigue: 44,
+  },
+  {
+    id: 'winterYard',
+    openHands: true,
+    where: {
+      archetypes: ['village', 'town', 'city', 'capital', 'port', 'fortress', 'mine'],
+      seasons: ['winter'],
+    },
+    label: 'Зимняя подёнщина',
+    description:
+      'Чистить снег, колоть дрова, возить воду. Работа не велика, но зимой другой и нет.',
+    durationMinutes: hours(6),
+    pay: 7,
+    practice: { hardLabour: 14, fortitude: 6 },
+    fatigue: 22,
+  },
   // --- ремесло по земле (этап 50, М5): что делают под горой, не делают в порту
   {
     id: 'breakOre',

@@ -163,6 +163,7 @@ import {
   TRACK_HOURS,
   TRACK_SKILL,
 } from './content/wild'
+import { JESTER_MORALE, RECRUITER_PRICE, THIEF_SHARE } from './content/year'
 import type { CourtChoice } from './court'
 import { courtCase, vassalsOf } from './court'
 import type { CechMembership } from './craft'
@@ -392,6 +393,16 @@ import {
   masterStance,
   schoolAt,
 } from './school'
+import {
+  anniversariesOf,
+  calendarOf,
+  fairFolkAt,
+  hasFairFolk,
+  skyDef,
+  skyOf,
+  skyRoad,
+  skySight,
+} from './season'
 import type { SettleEvent } from './settle'
 import { tickSettling } from './settle'
 import type { Passage, Ship } from './ship'
@@ -580,6 +591,7 @@ export type Command =
   /** Встать лагерем там, где нет крыши. */
   | { readonly type: 'camp'; readonly manner?: CampManner }
   | { readonly type: 'hunt' }
+  | { readonly type: 'watchJesters' }
   | { readonly type: 'askFaction'; readonly kingdomId: string; readonly factionId: FactionId }
   | { readonly type: 'meetEnvoy'; readonly answer: 'yes' | 'no' | 'press' }
   | { readonly type: 'declareWar'; readonly kingdomId: string }
@@ -913,6 +925,8 @@ export function applyCommand(
       return camp(state, command.manner ?? 'sleep')
     case 'hunt':
       return hunt(state)
+    case 'watchJesters':
+      return watchJesters(state)
     case 'askFaction':
       return askFaction(state, command.kingdomId, command.factionId)
     case 'meetEnvoy':
@@ -1258,18 +1272,24 @@ function travel(state: GameState, toLocationId: string): CommandResult {
   // Незнакомой землёй идут дольше: дороги не знаешь, спрашиваешь, плутаешь
   // (этап 46). Незнание чего-то стоит — и считается.
   const blind = !knowsPlace(state, toLocationId)
+  // Погода дня (этап 67, Я4): не время года, а сегодняшнее небо. В дождь
+  // дорога раскисает, в туман плутают, в буран не идут вовсе — идут медленно.
+  const sky = skyOf(state.world, state.locationId, dayOf(state.time))
   const walking = Math.round(
     legHoursFor(
       roadHoursNow,
       paceOf(state.party, state.character.wound !== null) * ailmentPace(state),
       seasonOf(dayOf(state.time)),
-    ) * (blind ? BLIND_SLOW : 1),
+    ) *
+      (blind ? BLIND_SLOW : 1) *
+      skyRoad(sky),
   )
   const blocked = checkFatigue(state.character, travelFatigue(walking))
   if (blocked) return blocked
 
   const from = state.world.locations[state.locationId]
   const draft = open(state)
+  if (sky !== 'clear') notice(draft, `${skyDef(sky).label}: ${skyDef(sky).about}`, 'world')
   notice(
     draft,
     `Дорога${from ? ` из ${from.name}` : ''} в ${destination.name}: ${formatDuration(hours(walking))} пути${
@@ -1780,6 +1800,7 @@ function roadMeet(draft: Draft, journey: Journey, hoursOnRoad: number): void {
     foeId: met.kingdomId ? `crown:${met.kingdomId}` : met.lordId,
     ground: groundFor(ahead?.terrain ?? 'plains', 'road'),
     veterans: veteransOf(draft.party),
+    sight: skySight(skyOf(draft.base.world, draft.locationId, dayOf(draft.time))),
   })
   notice(draft, `На дороге встретились: ${who}. Расходиться поздно.`)
 }
@@ -1869,6 +1890,7 @@ function ambush(draft: Draft, locationId: string, onTheRoad = false): void {
       foeId: 'bandits',
       ground: groundFor(terrain, 'road'),
       veterans: veteransOf(draft.party),
+      sight: skySight(skyOf(draft.base.world, draft.locationId, dayOf(draft.time))),
     })
     notice(
       draft,
@@ -2116,13 +2138,23 @@ function hire(state: GameState, troop: TroopId, count: number): CommandResult {
       `Столько людей тут не наберёшь: готовых идти всего ${Math.floor(settlement.recruits)}.`,
     )
   }
-  // Свой орден нанимает своим дешевле (этап 42).
-  const cost = Math.round(def.hireCost * count * (ownOrderHere(state)?.perks.hire ?? 1))
+  // Свой орден нанимает своим дешевле (этап 42). А на ярмарке стоит вербовщик
+  // с бочонком (этап 67, Я3), и у него дешевле, чем в казарме.
+  const recruiter = hasFairFolk(state.world, state.locationId, dayOf(state.time), 'recruiter')
+  const cost = Math.round(
+    def.hireCost *
+      count *
+      (ownOrderHere(state)?.perks.hire ?? 1) *
+      (recruiter ? RECRUITER_PRICE : 1),
+  )
   if (state.character.money < cost) {
     return fail('noMoney', `Не хватает денег: нужно ${cost}, есть ${state.character.money}.`)
   }
 
   const draft = open(state)
+  if (recruiter) {
+    notice(draft, 'Вербовщик у бочонка машет рукой: у него берут дешевле.', 'people')
+  }
   notice(draft, `Нанято: ${def.label.toLowerCase()} — ${count}, за ${cost}.`)
   advance(draft, HIRE_MINUTES)
   addMoney(draft, -cost)
@@ -4166,6 +4198,55 @@ function askFaction(state: GameState, kingdomId: string, factionId: FactionId): 
   return close(draft)
 }
 
+/**
+ * Посмотреть скоморохов (этап 67, Я3).
+ *
+ * Дудки, медведь и непристойная песня про соседнего барона. Отряду это стоит
+ * часа и нескольких монет, а даёт то, чего не даёт жалованье.
+ */
+function watchJesters(state: GameState): CommandResult {
+  const day = dayOf(state.time)
+  if (!hasFairFolk(state.world, state.locationId, day, 'jester')) {
+    return fail('unavailableHere', 'Скоморохов здесь нет: ярмарка не всякий день.')
+  }
+  const price = Math.max(2, partySize(state.party))
+  if (state.character.money < price) return fail('noMoney', `На это нужно хотя бы ${price}.`)
+
+  const draft = open(state)
+  addMoney(draft, -price)
+  advance(draft, hours(2))
+  addFatigue(draft, -5)
+  draft.party = { ...draft.party, morale: Math.min(100, draft.party.morale + JESTER_MORALE) }
+  draft.companions = draft.companions.map((one) =>
+    one.captive ? one : { ...one, mood: Math.min(100, one.mood + 3) },
+  )
+  notice(
+    draft,
+    'Медведь пляшет, дудки врут, песня про соседнего барона непристойна до слёз. Отряд доволен.',
+    'people',
+  )
+  return close(draft)
+}
+
+/**
+ * Воры в толпе (этап 67, Я3).
+ *
+ * На ярмарке всегда работают. Кошелёк режут у того, кто зазевался, — и это
+ * единственное, чем ярмарка бывает дорога.
+ */
+function pickpockets(draft: Draft): void {
+  const day = dayOf(draft.time)
+  if (!hasFairFolk(draft.base.world, draft.locationId, day, 'thief')) return
+  if (draft.character.money <= 0) return
+  const watchful = skillLevel(draft.character, 'sleight') + skillLevel(draft.character, 'survival')
+  const [cut, afterRoll] = rollChance(draft.rng, Math.max(0.05, 0.3 - watchful * 0.01))
+  draft.rng = afterRoll
+  if (!cut) return
+  const lost = Math.max(1, Math.round(draft.character.money * THIEF_SHARE))
+  addMoney(draft, -lost)
+  notice(draft, `В толпе срезали кошель: ${lost}. Вора искать поздно.`, 'money')
+}
+
 function siegeLift(state: GameState): CommandResult {
   if (!state.siege) return fail('invalid', 'Ты никого не осаждаешь.')
   const draft = open(state)
@@ -4785,7 +4866,7 @@ function proclaimRealm(state: GameState, name: string): CommandResult {
 
   const draft = open(state)
   notice(draft, `Провозглашено: ${title}. Соседи это заметят.`)
-  draft.realm = { name: title }
+  draft.realm = { name: title, sinceDay: dayOf(draft.time) }
   // Тот, чью землю ты держишь, воспримет это как мятеж.
   const former = state.service
   if (former) {
@@ -5453,6 +5534,27 @@ function camp(state: GameState, manner: CampManner = 'sleep'): CommandResult {
     else if (manner === 'watch') notice(draft, 'Ночь прошла тихо: к огню никто не подошёл.')
   }
   return close(draft)
+}
+
+/**
+ * Годовщины (этап 67, Я5).
+ *
+ * Год со свадьбы, год со смерти, день рождения. Не прибавка к числу, а повод:
+ * спутники об этом узнают, и день выходит не такой, как другие.
+ */
+function markAnniversaries(draft: Draft): void {
+  const day = dayOf(draft.time)
+  for (const one of anniversariesOf(draft.base, day)) {
+    notice(draft, `${one.label}, ${one.years}-я: «${one.says}»`, 'people')
+    if (one.id === 'birthday') {
+      draft.companions = draft.companions.map((candidate) =>
+        candidate.captive ? candidate : { ...candidate, mood: Math.min(100, candidate.mood + 2) },
+      )
+    }
+    if (one.id === 'mourning') {
+      draft.piety = Math.max(-100, Math.min(100, draft.piety + 2))
+    }
+  }
 }
 
 /** Кто-то говорит у костра: тот из спутников, кому есть что сказать. */
@@ -7403,7 +7505,9 @@ function work(state: GameState, jobId: string, content: Content): CommandResult 
   // сами на себя, и каменоломне всё равно, кто ты.
   const shifts = shiftsOf(state, jobId)
   const rank = rankOfShifts(shifts)
-  const hired = state.settlements[state.locationId] !== undefined
+  // На сев, жатву и подёнщину берут всех (этап 67, Я1): у такой работы хозяина
+  // нет — есть срок, и он не ждёт.
+  const hired = state.settlements[state.locationId] !== undefined && job.openHands !== true
   const master = hired ? masterOf(state.locationId, job) : null
   if (master) {
     const welcome = placeRep(state.reputation, state.locationId)
@@ -7765,7 +7869,12 @@ function checkPlace(
 ): CommandResult | null {
   const here = state.world.locations[state.locationId]
   if (!here) return fail('invalid', 'Непонятно, где находится герой.')
-  return isAvailableAt(where, here) ? null : fail('unavailableHere', message)
+  // Живое население и нынешнее время года: работа бывает не только там, но и
+  // тогда (этап 67, Я1).
+  const population = state.settlements[state.locationId]?.population ?? here.population
+  return isAvailableAt(where, here, population, seasonOf(dayOf(state.time)))
+    ? null
+    : fail('unavailableHere', message)
 }
 
 function checkWindow(
@@ -7878,7 +7987,7 @@ interface Draft {
   brotherhood: Brotherhood | null
   renown: number
   reputation: Reputation
-  realm: { name: string } | null
+  realm: { name: string; sinceDay?: number } | null
   quests: readonly Quest[]
   over: boolean
   readonly base: GameState
@@ -8466,6 +8575,9 @@ function payUpkeep(draft: Draft, days: number): void {
   paySailors(draft, days)
   // Отряд болеет от того, где он есть (этап 64, Ж5).
   sicken(draft, days)
+  // Год как жизнь (этап 67): годовщины и ярмарочные воры — тоже сутки мира.
+  markAnniversaries(draft)
+  pickpockets(draft)
   payDues(draft)
   payCech(draft)
   advanceWishes(draft, 1)

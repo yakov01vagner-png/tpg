@@ -1,4 +1,5 @@
 import type { MagicRankId } from '../magic'
+import type { Season } from '../time'
 import type { PlaceKind, Terrain } from '../world/types'
 
 /**
@@ -19,6 +20,13 @@ export interface Availability {
    * магистра не читают в лавке писца: нужен тот, кто сам магистр.
    */
   readonly school?: MagicRankId
+  /**
+   * Только в эти времена года (этап 67, Я1).
+   *
+   * Сев бывает весной, жатва — осенью, и в декабре ни того ни другого нет ни в
+   * одной деревне мира. Без указания — круглый год.
+   */
+  readonly seasons?: readonly Season[]
 }
 
 /** Места, где есть городская жизнь: ремесло, лавки, наёмный труд. */

@@ -111,3 +111,150 @@ export const FAIR_NAMES: readonly string[] = [
   'Оружейная ярмарка',
   'Гостиный торг',
 ]
+
+/**
+ * Погода дня (этап 67, Я4).
+ *
+ * Не время года, а день: дождь, туман, жара, мороз. Время года решает, какая
+ * погода вероятна, а день — какая выпала. Меняет дорогу, охоту и бой.
+ */
+export const SKIES = ['clear', 'rain', 'fog', 'heat', 'frost', 'storm'] as const
+export type Sky = (typeof SKIES)[number]
+
+export interface SkyDef {
+  readonly id: Sky
+  readonly label: string
+  readonly about: string
+  /** Во сколько раз дольше идти. */
+  readonly road: number
+  /** Что делает со стрельбой: видно цель или нет. */
+  readonly sight: number
+  /** Насколько тяжелее день: прибавка к усталости за переход. */
+  readonly toll: number
+}
+
+export const SKY_DEFS: Record<Sky, SkyDef> = {
+  clear: {
+    id: 'clear',
+    label: 'ясно',
+    about: 'Погода, о которой не говорят: просто день.',
+    road: 1,
+    sight: 1,
+    toll: 0,
+  },
+  rain: {
+    id: 'rain',
+    label: 'дождь',
+    about: 'Дорога раскисла, тетива мокнет, костёр не горит.',
+    road: 1.25,
+    sight: 0.85,
+    toll: 6,
+  },
+  fog: {
+    id: 'fog',
+    label: 'туман',
+    about: 'Дальше трёх шагов — молоко. Стрелять некуда, а выйти можно куда угодно.',
+    road: 1.3,
+    sight: 0.5,
+    toll: 4,
+  },
+  heat: {
+    id: 'heat',
+    label: 'зной',
+    about: 'Воздух дрожит, вода кончается быстрее, чем дорога.',
+    road: 1.15,
+    sight: 1,
+    toll: 10,
+  },
+  frost: {
+    id: 'frost',
+    label: 'мороз',
+    about: 'Снег скрипит, железо липнет к рукам, ночевать под небом — испытание.',
+    road: 1.2,
+    sight: 1,
+    toll: 12,
+  },
+  storm: {
+    id: 'storm',
+    label: 'буран',
+    about: 'Идти нельзя, стоять холодно. Пережидают, у кого есть где.',
+    road: 1.6,
+    sight: 0.6,
+    toll: 18,
+  },
+}
+
+/** Какая погода вероятна в это время года: доли из ста. */
+export const SKY_ODDS: Record<string, Readonly<Record<Sky, number>>> = {
+  spring: { clear: 45, rain: 30, fog: 15, heat: 0, frost: 7, storm: 3 },
+  summer: { clear: 55, rain: 22, fog: 6, heat: 15, frost: 0, storm: 2 },
+  autumn: { clear: 38, rain: 32, fog: 20, heat: 0, frost: 7, storm: 3 },
+  winter: { clear: 40, rain: 5, fog: 10, heat: 0, frost: 35, storm: 10 },
+}
+
+/**
+ * Ярмарочный люд (этап 67, Я3).
+ *
+ * Ярмарка — не прибавка к торгу, а люди: заезжие купцы, скоморохи, вербовщики
+ * и воры. Каждый делает своё, и каждого видно только в ярмарочные дни.
+ */
+export const FAIR_FOLK = ['merchant', 'jester', 'recruiter', 'thief'] as const
+export type FairFolk = (typeof FAIR_FOLK)[number]
+
+export const FAIR_FOLK_DEFS: Record<FairFolk, { readonly label: string; readonly about: string }> =
+  {
+    merchant: {
+      label: 'заезжий купец',
+      about: 'Привёз то, чего здесь не видали, и торгуется как у себя дома.',
+    },
+    jester: {
+      label: 'скоморохи',
+      about: 'Дудки, медведь и непристойная песня про соседнего барона. Отряд веселеет.',
+    },
+    recruiter: {
+      label: 'вербовщик',
+      about: 'Стоит с бочонком и берёт всех. У него дешевле, чем в казарме.',
+    },
+    thief: {
+      label: 'воры',
+      about: 'В толпе всегда работают. Кошелёк держи, а лучше не бери с собой.',
+    },
+  }
+
+/** Насколько скоморохи поднимают дух отряда. */
+export const JESTER_MORALE = 10
+/** Во сколько раз вербовщик дешевле казармы. */
+export const RECRUITER_PRICE = 0.7
+/** Какую долю кошелька берут воры в толпе. */
+export const THIEF_SHARE = 0.08
+
+/**
+ * Годовщины (этап 67, Я5).
+ *
+ * Год со свадьбы, год со смерти, день рождения. Их помнят — и они что-то дают:
+ * не прибавку к числу, а повод.
+ */
+export const ANNIVERSARIES = ['birthday', 'wedding', 'mourning', 'realm'] as const
+export type AnniversaryId = (typeof ANNIVERSARIES)[number]
+
+export const ANNIVERSARY_DEFS: Record<
+  AnniversaryId,
+  { readonly label: string; readonly says: string }
+> = {
+  birthday: {
+    label: 'день рождения',
+    says: 'Тебе сегодня на год больше. Спутники об этом как-то узнали.',
+  },
+  wedding: {
+    label: 'годовщина свадьбы',
+    says: 'Год с того дня. Дома это помнят лучше, чем ты.',
+  },
+  mourning: {
+    label: 'поминальный день',
+    says: 'Год, как его не стало. В такие дни пьют молча.',
+  },
+  realm: {
+    label: 'годовщина своего имени',
+    says: 'Год, как твоё имя на карте. Кто-то ещё помнит, каким оно было первым днём.',
+  },
+}
