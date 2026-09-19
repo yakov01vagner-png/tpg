@@ -4,12 +4,15 @@ import {
   CLIMATE_LABELS,
   CLOTH_LABELS,
   type Command,
+  FOUND_COST,
   type GameState,
+  INTERDICT_DAYS,
   PLACE_LABELS,
   PRIEST_TEMPERS,
   type Passage,
   type PlaceKind,
   QUARTERS,
+  SEND_COST,
   SHIPPING_COST,
   SHIPS,
   SHIP_KINDS,
@@ -20,11 +23,16 @@ import {
   TERRAIN_LABELS,
   addressOf,
   canApply,
+  canFound,
+  canWield,
   castChance,
+  charterById,
   companionsAt,
   coursesAt,
   dayOf,
   daysToFair,
+  describeQuest,
+  errandsAt,
   examsAt,
   fairAt,
   feastAt,
@@ -37,6 +45,7 @@ import {
   formatDuration,
   hours,
   iceBound,
+  interdictedAt,
   isHolySite,
   isOwnedByPlayer,
   isSite,
@@ -51,6 +60,7 @@ import {
   matchesAt,
   offeringFor,
   offersAt,
+  orderById,
   ordersAt,
   ownOrder,
   ownOrderHere,
@@ -700,7 +710,128 @@ function Orders({
             />
           )
         })}
+      <Chapter game={game} dispatch={dispatch} />
     </Section>
+  )
+}
+
+/**
+ * Дом ордена (этап 59): дела, братья и власть ступени.
+ *
+ * До 0.6 орден был карточкой с положением. Теперь в его доме дают службу, какой
+ * нет на рынке, и на верхах орденом можно двигать: послать братьев, просить
+ * заступничества, наложить запрет.
+ */
+function Chapter({
+  game,
+  dispatch,
+}: {
+  game: GameState
+  dispatch: (command: Command) => void
+}) {
+  const own = ownOrderHere(game)
+  const hood = game.brotherhood
+  const errands = errandsAt(game)
+  const day = dayOf(game.time)
+  const ban = interdictedAt(game, game.locationId, day)
+  const founding: Command = {
+    type: 'foundBrotherhood',
+    name: `Братство ${game.character.name}`,
+    charterId: 'steel',
+  }
+  if (!own && !hood && !canFound(game).can) return null
+  return (
+    <>
+      {ban ? (
+        <Panel tone="danger">
+          <Dim>{`Место под запретом: ${orderById(ban.orderId)?.name ?? 'братство'} не служит здесь до ${ban.untilDay} дня.`}</Dim>
+        </Panel>
+      ) : null}
+      {own
+        ? errands.map((errand) => (
+            <Card
+              key={errand.id}
+              glyph={<Icon name="crestPlayer" size={20} color={palette.gold} />}
+              title={describeQuest(game, errand)}
+              description="Дело братства: такого не просят на рынке. Спросят по уставу."
+              meta={`+${errand.reward} · до ${errand.deadlineDay} дня`}
+              reason={reasonOf(canApply(game, { type: 'takeQuest', questId: errand.id }))}
+              onPress={() => dispatch({ type: 'takeQuest', questId: errand.id })}
+            />
+          ))
+        : null}
+      {own &&
+      game.quests.some(
+        (one) => one.type === 'orderHeresy' && one.targetLocationId === game.locationId,
+      )
+        ? null
+        : null}
+      {game.quests.some(
+        (one) => one.type === 'orderHeresy' && one.targetLocationId === game.locationId,
+      ) ? (
+        <Card
+          title="Провести дознание"
+          description="Выслушать тех, кто говорит не то. Место это запомнит."
+          meta="8 ч"
+          reason={reasonOf(canApply(game, { type: 'inquire' }))}
+          onPress={() => dispatch({ type: 'inquire' })}
+        />
+      ) : null}
+      {own && canWield(game, 'send').can ? (
+        <Card
+          title="Послать братьев"
+          description="Орден идёт туда, куда сказано, и режет разбой на своей земле."
+          meta={`−${SEND_COST}`}
+          reason={reasonOf(canApply(game, { type: 'orderSend', locationId: game.locationId }))}
+          onPress={() => dispatch({ type: 'orderSend', locationId: game.locationId })}
+        />
+      ) : null}
+      {own && canWield(game, 'patronage').can ? (
+        <Card
+          title="Просить заступничества"
+          description="Орден скажет за тебя перед лордом. Слово ордена весит по его силе."
+          reason={reasonOf(canApply(game, { type: 'orderPatronage' }))}
+          onPress={() => dispatch({ type: 'orderPatronage' })}
+        />
+      ) : null}
+      {own && canWield(game, 'interdict').can && !ban ? (
+        <Card
+          title="Наложить запрет"
+          description="Место останется без обрядов и без братьев. Такое помнят."
+          meta={`${INTERDICT_DAYS} сут`}
+          reason={reasonOf(canApply(game, { type: 'orderInterdict', locationId: game.locationId }))}
+          onPress={() => dispatch({ type: 'orderInterdict', locationId: game.locationId })}
+          tone="danger"
+        />
+      ) : null}
+      {ban && canWield(game, 'pardon').can ? (
+        <Card
+          title="Помиловать"
+          description="Снять запрет раньше срока. Такое помнят дольше запрета."
+          reason={reasonOf(canApply(game, { type: 'orderPardon', locationId: game.locationId }))}
+          onPress={() => dispatch({ type: 'orderPardon', locationId: game.locationId })}
+          tone="gold"
+        />
+      ) : null}
+      {hood ? (
+        <Card
+          glyph={<Icon name="crestPlayer" size={20} color={palette.gold} />}
+          title={hood.name}
+          description={`${charterById(hood.charterId).about} Братьев: ${hood.brothers}.`}
+          meta="твой устав"
+          tone="gold"
+        />
+      ) : canFound(game).can ? (
+        <Card
+          title="Основать своё братство"
+          description="Шестая сила на карте бывает не только землёй, но и уставом. Своё заводят с верха или с чистого места."
+          meta={`−${FOUND_COST}`}
+          reason={reasonOf(canApply(game, founding))}
+          onPress={() => dispatch(founding)}
+          tone="gold"
+        />
+      ) : null}
+    </>
   )
 }
 

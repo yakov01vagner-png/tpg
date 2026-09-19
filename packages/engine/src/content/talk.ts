@@ -11,7 +11,15 @@
 export type TopicId = string
 
 /** Кто может знать эту тему. */
-export type SpeakerKind = 'merchant' | 'master' | 'priest' | 'courtier' | 'lord' | 'companion'
+export type SpeakerKind =
+  | 'merchant'
+  | 'master'
+  | 'priest'
+  | 'courtier'
+  | 'lord'
+  | 'companion'
+  /** Брат по ордену (этап 59, О5): у ордена есть люди, и с ними говорят. */
+  | 'brother'
 
 export interface TopicDef {
   readonly id: TopicId
@@ -40,7 +48,7 @@ export const TOPICS: readonly TopicDef[] = [
     id: 'roads',
     label: 'О дорогах',
     question: 'Куда отсюда ходят и что на дорогах?',
-    kinds: ['merchant', 'courtier', 'companion', 'master'],
+    kinds: ['merchant', 'courtier', 'companion', 'master', 'brother'],
     minutes: 20,
     patience: 1,
   },
@@ -48,7 +56,7 @@ export const TOPICS: readonly TopicDef[] = [
     id: 'danger',
     label: 'О разбое',
     question: 'Спокойно ли в округе?',
-    kinds: ['merchant', 'courtier', 'lord', 'companion', 'master'],
+    kinds: ['merchant', 'courtier', 'lord', 'companion', 'master', 'brother'],
     minutes: 15,
     patience: 1,
   },
@@ -162,7 +170,7 @@ export const TOPICS: readonly TopicDef[] = [
     id: 'war',
     label: 'О войне',
     question: 'С кем нынче воюют?',
-    kinds: ['courtier', 'lord', 'merchant', 'companion'],
+    kinds: ['courtier', 'lord', 'merchant', 'companion', 'brother'],
     minutes: 20,
     patience: 2,
   },
@@ -170,7 +178,7 @@ export const TOPICS: readonly TopicDef[] = [
     id: 'feud',
     label: 'О вражде',
     question: 'Кто с кем в ссоре?',
-    kinds: ['courtier', 'lord', 'priest'],
+    kinds: ['courtier', 'lord', 'priest', 'brother'],
     minutes: 25,
     patience: 3,
   },
@@ -195,7 +203,7 @@ export const TOPICS: readonly TopicDef[] = [
     id: 'faith',
     label: 'О вере',
     question: 'Как у вас с верой?',
-    kinds: ['priest', 'courtier'],
+    kinds: ['priest', 'courtier', 'brother'],
     minutes: 25,
     patience: 2,
   },
@@ -211,7 +219,7 @@ export const TOPICS: readonly TopicDef[] = [
     id: 'holy',
     label: 'О святых местах',
     question: 'Куда у вас ходят молиться?',
-    kinds: ['priest', 'companion'],
+    kinds: ['priest', 'companion', 'brother'],
     minutes: 20,
     patience: 2,
   },
@@ -219,7 +227,7 @@ export const TOPICS: readonly TopicDef[] = [
     id: 'sin',
     label: 'О грехах',
     question: 'Чем тут грешат?',
-    kinds: ['priest'],
+    kinds: ['priest', 'brother'],
     minutes: 30,
     patience: 3,
   },
@@ -227,7 +235,7 @@ export const TOPICS: readonly TopicDef[] = [
     id: 'orders',
     label: 'Об орденах',
     question: 'Чьи братья тут стоят?',
-    kinds: ['priest', 'merchant', 'courtier'],
+    kinds: ['priest', 'merchant', 'courtier', 'brother'],
     minutes: 20,
     patience: 2,
   },
@@ -236,7 +244,7 @@ export const TOPICS: readonly TopicDef[] = [
     id: 'magic',
     label: 'О магах',
     question: 'Что у вас говорят о магах?',
-    kinds: ['priest', 'courtier', 'merchant', 'companion'],
+    kinds: ['priest', 'courtier', 'merchant', 'companion', 'brother'],
     minutes: 25,
     patience: 2,
   },
@@ -261,7 +269,7 @@ export const TOPICS: readonly TopicDef[] = [
     id: 'rumour',
     label: 'О чём говорят',
     question: 'О чём нынче говорят?',
-    kinds: ['merchant', 'master', 'priest', 'courtier', 'companion'],
+    kinds: ['merchant', 'master', 'priest', 'courtier', 'companion', 'brother'],
     minutes: 20,
     patience: 2,
   },
@@ -269,7 +277,7 @@ export const TOPICS: readonly TopicDef[] = [
     id: 'strangers',
     label: 'О проезжих',
     question: 'Кто здесь бывал до меня?',
-    kinds: ['merchant', 'master', 'priest'],
+    kinds: ['merchant', 'master', 'priest', 'brother'],
     minutes: 15,
     patience: 2,
   },
@@ -277,7 +285,7 @@ export const TOPICS: readonly TopicDef[] = [
     id: 'me',
     label: 'Обо мне',
     question: 'Что обо мне говорят?',
-    kinds: ['merchant', 'master', 'priest', 'courtier', 'companion'],
+    kinds: ['merchant', 'master', 'priest', 'courtier', 'companion', 'brother'],
     minutes: 15,
     patience: 2,
   },
@@ -285,7 +293,7 @@ export const TOPICS: readonly TopicDef[] = [
     id: 'himself',
     label: 'О нём самом',
     question: 'А сам ты кто будешь?',
-    kinds: ['merchant', 'master', 'priest', 'courtier', 'lord', 'companion'],
+    kinds: ['merchant', 'master', 'priest', 'courtier', 'lord', 'companion', 'brother'],
     minutes: 25,
     patience: 2,
   },

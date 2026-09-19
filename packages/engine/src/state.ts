@@ -1,6 +1,9 @@
 import type { Band } from './band'
 import { musterBands } from './band'
 import type { Battle } from './battle'
+import { startSway } from './brother'
+import type { OrderSway } from './brother'
+import type { Brotherhood } from './brotherhood'
 import type { Captive } from './captive'
 import type { ChainProgress } from './chain'
 import type { Character } from './character'
@@ -18,7 +21,7 @@ import type { Knowledge } from './knowledge'
 import { startKnowledge } from './knowledge'
 import { EMPTY_PRICE_LOG, type PriceLog } from './market'
 import type { Dealing } from './merchant'
-import type { Membership } from './order'
+import type { Interdict, Membership } from './order'
 import type { Party } from './party'
 import { EMPTY_PARTY } from './party'
 import type { Plague } from './plague'
@@ -189,6 +192,15 @@ export interface GameState {
   readonly renown: number
   /** Что о тебе помнят места и лорды. */
   readonly reputation: Reputation
+  /**
+   * Влияние орденов в мире (этап 59, О3): шесть чисел, которые живут без
+   * игрока. Необязательно — сейвы до 0.6 орденской жизни не знают.
+   */
+  readonly orderSway?: OrderSway
+  /** Наложенные запреты: где и до какого дня место живёт без ордена. */
+  readonly interdicts?: readonly Interdict[]
+  /** Своё братство, если основано (этап 59, О6). */
+  readonly brotherhood?: Brotherhood | null
   /** Своё владение, если провозглашено. */
   readonly realm: { readonly name: string } | null
   /** Взятые поручения. */
@@ -246,6 +258,9 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     party: EMPTY_PARTY,
     ship: null,
     guild: null,
+    orderSway: startSway(),
+    interdicts: [],
+    brotherhood: null,
     battle: null,
     politics,
     bands,

@@ -1,3 +1,4 @@
+import { brotherTitle, brothersAt } from './brother'
 import { courtOf, lordHere, lordTemper } from './castle'
 import { following } from './companion'
 import { LORD_TEMPERS } from './content/castle'
@@ -13,7 +14,7 @@ import { priceOf } from './economy'
 import { feastAt } from './fair'
 import { foodSecurity } from './life'
 import { merchantsAt } from './merchant'
-import { ordersAt } from './order'
+import { orderById, ordersAt } from './order'
 import { jobsAt } from './place'
 import { schoolAt } from './school'
 import type { GameState } from './state'
@@ -142,6 +143,20 @@ export function speakersAt(state: GameState, locationId: string = state.location
         kind: 'courtier',
         tone: courtier.mood < -10 ? 'curt' : courtier.mood > 20 ? 'warm' : 'plain',
         about: 'при дворе',
+      })
+    }
+  }
+  // Братья по ордену (этап 59, О5): у ордена есть люди, и с ними говорят так
+  // же, как с купцами и придворными.
+  const own = state.guild ? orderById(state.guild.orderId) : null
+  if (own) {
+    for (const brother of brothersAt(state, own, locationId)) {
+      out.push({
+        id: brother.id,
+        name: brother.name,
+        kind: 'brother',
+        tone: brother.mood < -10 ? 'curt' : brother.mood > 25 ? 'warm' : 'pious',
+        about: `${brotherTitle(own, brother.role)}, ${own.name.toLowerCase()}`,
       })
     }
   }

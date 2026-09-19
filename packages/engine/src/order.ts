@@ -1,3 +1,4 @@
+import { POWER_RANKS } from './content/brothers'
 import type { DeedId } from './content/companions'
 import type { OrderDef } from './content/orders'
 import { ORDERS, ORDERS_BY_ID } from './content/orders'
@@ -114,3 +115,56 @@ export function feudChill(state: GameState, locationId: string): number {
 
 /** Взнос за месяц, тридцать суток. */
 export const DUES_DAYS = 30
+
+// --- власть ступени (этап 59) ----------------------------------------------
+
+/**
+ * Что даёт ступень (этап 59, О2 и О4).
+ *
+ * До 0.6 ступень была прибавкой к поблажкам: дешевле найм, меньше засад. Но
+ * орден — сила, и на его верхах силой можно двигать: послать братьев, просить
+ * заступничества перед лордом, наложить запрет, помиловать.
+ */
+export type OrderPower = keyof typeof POWER_RANKS
+
+export function canWield(
+  state: GameState,
+  power: OrderPower,
+): { readonly can: boolean; readonly reason: string } {
+  const order = ownOrder(state)
+  if (!order || !state.guild) return { can: false, reason: 'Ты ни в каком братстве не состоишь.' }
+  const rank = rankOf(order, state.guild.standing)
+  const needed = POWER_RANKS[power]
+  if (rank < needed) {
+    const label = order.ranks[needed]?.label ?? 'высшая ступень'
+    return {
+      can: false,
+      reason: `Такое решает ${label}, а ты — ${rankLabel(order, state.guild.standing)}.`,
+    }
+  }
+  return { can: true, reason: '' }
+}
+
+/**
+ * Запрет (интердикт).
+ *
+ * Церковь запрещает месту обряды, гильдия — торг, орден — свою защиту. Пока
+ * запрет держится, место живёт без того, чем орден был ему полезен, и помнит,
+ * кто это устроил.
+ */
+export interface Interdict {
+  readonly locationId: string
+  readonly orderId: string
+  readonly untilDay: number
+}
+
+export function interdictedAt(
+  state: Pick<GameState, 'interdicts'>,
+  locationId: string,
+  day: number,
+): Interdict | null {
+  return (
+    (state.interdicts ?? []).find((one) => one.locationId === locationId && one.untilDay > day) ??
+    null
+  )
+}

@@ -13,6 +13,8 @@ import {
   unformUp,
   unitsSize,
 } from './battle'
+import { type OrderSway, brothersAt, startSway, swayOf, tickOrders } from './brother'
+import { type Brotherhood, canFound, charterById, ownCharterFeels } from './brotherhood'
 import { type Captive, LORD_CAPTURE_CHANCE, captiveFrom, fateOutcome } from './captive'
 import type { IntrigueKind } from './castle'
 import {
@@ -54,6 +56,16 @@ import {
 import type { Availability, Content, Requirements } from './content'
 import { CONTENT } from './content'
 import { DEBATE_MINUTES, DEBATE_XP, STUDENT_UPKEEP } from './content/books'
+import {
+  type CharterId,
+  FOUND_COST,
+  FOUND_RENOWN,
+  INTERDICT_DAYS,
+  INTERDICT_STANDING,
+  SEND_BANDITRY,
+  SEND_COST,
+  SEND_STANDING,
+} from './content/brothers'
 import type { BuildingId } from './content/buildings'
 import { BUILDINGS } from './content/buildings'
 import { TOURNEY_FEE, TOURNEY_PURSE } from './content/castle'
@@ -115,6 +127,7 @@ import { quoteBuy, quoteSell, withStock } from './economy'
 import type { Enterprise } from './enterprise'
 import { CARAVAN_COST, SHIPPING_COST, WORKSHOP_COST, tickEnterprises } from './enterprise'
 import { gearBonus, horseCarry, repairCost, withItem } from './equipment'
+import { errandKindOf, errandsAt } from './errand'
 import type { GameEvent, LogKind } from './events'
 import { FAIR_TRADE_BONUS, fairAt, feastAt } from './fair'
 import { groundFor, orderNeeds, veteranShare, woundedOf } from './field'
@@ -173,12 +186,14 @@ import {
   orderFrom,
   talesOf,
 } from './merchant'
-import type { Membership } from './order'
+import type { Interdict, Membership, OrderPower } from './order'
 import {
   DUES_DAYS,
   EXPELLED,
+  canWield,
   charterFeels,
   feudChill,
+  interdictedAt,
   orderById,
   ordersAt,
   ownOrder,
@@ -428,6 +443,16 @@ export type Command =
   | { readonly type: 'siegeParley' }
   | { readonly type: 'siegeBribe' }
   | { readonly type: 'captiveFate'; readonly captiveId: string; readonly fate: CaptiveFate }
+  | { readonly type: 'inquire' }
+  | { readonly type: 'orderSend'; readonly locationId: string }
+  | { readonly type: 'orderPatronage' }
+  | { readonly type: 'orderInterdict'; readonly locationId: string }
+  | { readonly type: 'orderPardon'; readonly locationId: string }
+  | {
+      readonly type: 'foundBrotherhood'
+      readonly name: string
+      readonly charterId: CharterId
+    }
   | { readonly type: 'siegeLift' }
   | { readonly type: 'askForFief' }
   | { readonly type: 'buyItem'; readonly itemId: string }
@@ -730,6 +755,18 @@ export function applyCommand(
       return siegeBribe(state)
     case 'captiveFate':
       return captiveFate(state, command.captiveId, command.fate)
+    case 'inquire':
+      return inquire(state)
+    case 'orderSend':
+      return orderSend(state, command.locationId)
+    case 'orderPatronage':
+      return orderPatronage(state)
+    case 'orderInterdict':
+      return orderInterdict(state, command.locationId)
+    case 'orderPardon':
+      return orderPardon(state, command.locationId)
+    case 'foundBrotherhood':
+      return foundBrotherhood(state, command.name, command.charterId)
     case 'siegeLift':
       return siegeLift(state)
     case 'askForFief':
@@ -1982,6 +2019,14 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
     seasonCompanions(draft, true)
     seeDeed(draft, 'winBattle')
 
+    // Дело ордена «убрать чужих» (этап 59, О1) делается там, где стоит враг:
+    // выиграл бой в том месте — дело сделано.
+    draft.quests = draft.quests.map((quest) =>
+      quest.type === 'orderFoe' && quest.targetLocationId === state.locationId
+        ? { ...quest, progress: quest.amount }
+        : quest,
+    )
+
     // Побитая шайка — это меньше разбоя в округе и доброе слово в месте.
     if (!battle.stake) {
       const settlement = draft.settlements[state.locationId]
@@ -2602,6 +2647,210 @@ function captiveFate(state: GameState, captiveId: string, fate: CaptiveFate): Co
   return close(draft)
 }
 
+// --- орден в деле (этап 59) -------------------------------------------------
+
+/**
+ * Дознание (этап 59, О1).
+ *
+ * Церковь послала выслушать тех, кто говорит не то. Дело решается на месте и
+ * своей головой: чем лучше о тебе тут думают, тем охотнее говорят; строгость
+ * даётся легче, чем правда.
+ */
+function inquire(state: GameState): CommandResult {
+  const quest = state.quests.find(
+    (one) => one.type === 'orderHeresy' && one.targetLocationId === state.locationId,
+  )
+  if (!quest) return fail('unavailableHere', 'Здесь тебе нечего дознавать.')
+  if (quest.progress >= quest.amount) return fail('invalid', 'Дознание уже проведено.')
+
+  const draft = open(state)
+  advance(draft, hours(8))
+  addFatigue(draft, 12)
+  const known = draft.reputation.places[state.locationId] ?? 0
+  // Говорят охотнее с тем, кого здесь знают, и с тем, кто умеет слушать.
+  const chance = Math.max(
+    0.2,
+    Math.min(0.9, 0.35 + known / 200 + skillLevel(draft.character, 'persuasion') * 0.008),
+  )
+  const [heard, afterRoll] = rollChance(draft.rng, chance)
+  draft.rng = afterRoll
+  if (!heard) {
+    draft.reputation = withPlaceRep(draft.reputation, state.locationId, -4)
+    notice(draft, 'Тебе улыбаются и говорят, что всё как всегда. Верить этому нельзя.')
+    return close(draft)
+  }
+  draft.quests = draft.quests.map((one) =>
+    one.id === quest.id ? { ...one, progress: one.amount } : one,
+  )
+  // Дознание оставляет след: место помнит того, кто приходил спрашивать.
+  draft.reputation = withPlaceRep(draft.reputation, state.locationId, -10)
+  notice(draft, 'Ты выслушал всех, кого стоило. Теперь есть что сказать братьям.', 'world')
+  return close(draft)
+}
+
+/**
+ * Послать братьев (этап 59, О2).
+ *
+ * Ступень — власть: на верхах орденом можно двигать. Братья идут туда, куда
+ * сказано, и делают то, что орден умеет: режут разбой на своей земле. Стоит
+ * это казны и части твоего положения — распоряжаться чужими людьми даром не
+ * выходит.
+ */
+function orderSend(state: GameState, locationId: string): CommandResult {
+  const order = ownOrder(state)
+  const power = canWield(state, 'send')
+  if (!order || !state.guild) return fail('requirements', power.reason)
+  if (!power.can) return fail('requirements', power.reason)
+  const settlement = state.settlements[locationId]
+  const place = state.world.locations[locationId]
+  if (!settlement || !place) return fail('invalid', 'Туда посылать некого и незачем.')
+  if (state.character.money < SEND_COST) {
+    return fail('noMoney', `На это нужно ${SEND_COST}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -SEND_COST)
+  addStanding(draft, -SEND_STANDING, `${order.name}: братьев послали по твоему слову.`)
+  draft.settlements = {
+    ...draft.settlements,
+    [locationId]: {
+      ...settlement,
+      banditry: Math.max(0, settlement.banditry - SEND_BANDITRY),
+    },
+  }
+  draft.reputation = withPlaceRep(draft.reputation, locationId, 12)
+  advance(draft, hours(4))
+  notice(draft, `${order.name} послал братьев в ${place.name}. На дорогах станет тише.`, 'world')
+  return close(draft)
+}
+
+/**
+ * Заступничество перед лордом (этап 59, О4).
+ *
+ * Орден говорит с короной на равных, и брат высокой ступени может попросить,
+ * чтобы за него сказали. Слово ордена весит тем больше, чем больше веса у него
+ * самого (О3).
+ */
+function orderPatronage(state: GameState): CommandResult {
+  const order = ownOrder(state)
+  const power = canWield(state, 'patronage')
+  if (!order || !state.guild) return fail('requirements', power.reason)
+  if (!power.can) return fail('requirements', power.reason)
+  const lord = lordHere(state)
+  if (!lord) return fail('unavailableHere', 'Здесь не перед кем заступаться.')
+  if (order.feud.kingdoms.includes(lord.kingdomId ?? '')) {
+    return fail(
+      'requirements',
+      `${order.name} с этой короной в ссоре: такое слово только навредит.`,
+    )
+  }
+
+  const draft = open(state)
+  advance(draft, hours(3))
+  // Вес ордена в мире решает, слушают ли его.
+  const weight = swayOf(draft.orderSway, order.id)
+  const favour = Math.round(6 + weight / 12)
+  draft.reputation = withLordRep(draft.reputation, lord.id, favour)
+  addStanding(draft, -6, `${order.name}: за тебя просили.`)
+  notice(
+    draft,
+    `За тебя сказал ${order.name}. ${lord.name} слушает такие слова внимательнее твоих.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Запрет (этап 59, О4).
+ *
+ * Высшая ступень может закрыть месту то, чем орден ему полезен: обряды,
+ * защиту, торг. Место живёт без этого, пока запрет держится, и хорошо помнит,
+ * кто его наложил.
+ */
+function orderInterdict(state: GameState, locationId: string): CommandResult {
+  const order = ownOrder(state)
+  const power = canWield(state, 'interdict')
+  if (!order || !state.guild) return fail('requirements', power.reason)
+  if (!power.can) return fail('requirements', power.reason)
+  const place = state.world.locations[locationId]
+  if (!place) return fail('invalid', 'Такого места нет.')
+  if (!ordersAt(state.world, locationId).some((one) => one.id === order.id)) {
+    return fail('unavailableHere', `${order.name} там не стоит: запрещать нечего.`)
+  }
+  const day = dayOf(state.time)
+  if (interdictedAt(state, locationId, day)) return fail('invalid', 'Там и так запрет.')
+
+  const draft = open(state)
+  advance(draft, hours(4))
+  addStanding(draft, -INTERDICT_STANDING, `${order.name}: запрет твоим словом.`)
+  draft.interdicts = [
+    ...draft.interdicts,
+    { locationId, orderId: order.id, untilDay: day + INTERDICT_DAYS },
+  ]
+  draft.reputation = withPlaceRep(draft.reputation, locationId, -30)
+  notice(draft, `${place.name} под запретом: ${INTERDICT_DAYS} суток без братьев.`, 'world')
+  return close(draft)
+}
+
+/** Помиловать: снять свой же запрет раньше срока. Такое помнят долго. */
+function orderPardon(state: GameState, locationId: string): CommandResult {
+  const order = ownOrder(state)
+  const power = canWield(state, 'pardon')
+  if (!order || !state.guild) return fail('requirements', power.reason)
+  if (!power.can) return fail('requirements', power.reason)
+  const day = dayOf(state.time)
+  if (!interdictedAt(state, locationId, day)) return fail('invalid', 'Там нет запрета.')
+  const place = state.world.locations[locationId]
+
+  const draft = open(state)
+  advance(draft, hours(2))
+  draft.interdicts = draft.interdicts.filter((one) => one.locationId !== locationId)
+  draft.reputation = withPlaceRep(draft.reputation, locationId, 35)
+  seeDeed(draft, 'sparePrisoners')
+  notice(draft, `${place?.name ?? 'Место'} помиловано. Такое помнят дольше запрета.`, 'world')
+  return close(draft)
+}
+
+/**
+ * Своё братство (этап 59, О6).
+ *
+ * Шестая сила на карте бывает не только землёй (этап 30), но и уставом. Своё
+ * заводят с верха чужого ордена или с чистого места — и дальше свой устав
+ * судит тебя так же, как чужие судили раньше.
+ */
+function foundBrotherhood(state: GameState, name: string, charterId: CharterId): CommandResult {
+  const check = canFound(state)
+  if (!check.can) return fail('requirements', check.reason)
+  const clean = name.trim()
+  if (clean.length < 3) return fail('invalid', 'У братства должно быть имя.')
+  const here = state.world.locations[state.locationId]
+  if (!here) return fail('invalid', 'Непонятно, где находится герой.')
+
+  const draft = open(state)
+  addMoney(draft, -FOUND_COST)
+  advance(draft, hours(12))
+  draft.brotherhood = {
+    name: clean,
+    kind: 'order',
+    charterId,
+    since: dayOf(draft.time),
+    seats: [state.locationId],
+    brothers: Math.max(2, Math.round(draft.renown / 2)),
+  }
+  draft.renown += FOUND_RENOWN
+  // Уходя со своим уставом, из чужого ордена выходят: в двух сразу не состоят.
+  if (draft.guild) {
+    notice(draft, 'Ты вышел из братства, в котором вырос. Так делают не все.')
+    draft.guild = null
+  }
+  notice(
+    draft,
+    `${clean} основано в ${here.name}. Устав: ${charterById(charterId).label.toLowerCase()}.`,
+    'world',
+  )
+  return close(draft)
+}
+
 function siegeLift(state: GameState): CommandResult {
   if (!state.siege) return fail('invalid', 'Ты никого не осаждаешь.')
   const draft = open(state)
@@ -3001,8 +3250,14 @@ function deliverGoods(state: GameState, good: GoodId, amount: number): CommandRe
   // привезённое перекладывают из своей поклажи в чужой амбар.
   const waiting = state.quests.filter(
     (quest) =>
-      (quest.type === 'fairGoods' || quest.type === 'merchantOrder') &&
-      quest.issuerLocationId === state.locationId &&
+      (quest.type === 'fairGoods' ||
+        quest.type === 'merchantOrder' ||
+        // Рынок гильдии открывают там, куда послали, а не там, где взяли дело
+        // (этап 59, О1): товар надо продать в чужом месте.
+        quest.type === 'orderMarket') &&
+      (quest.type === 'orderMarket'
+        ? quest.targetLocationId === state.locationId
+        : quest.issuerLocationId === state.locationId) &&
       quest.good === good &&
       quest.progress < quest.amount,
   )
@@ -3035,7 +3290,11 @@ function takeQuest(state: GameState, questId: string): CommandResult {
   if (state.quests.some((quest) => quest.id === questId)) {
     return fail('invalid', 'Это уже на тебе.')
   }
-  const offer = offersAt(state).find((quest) => quest.id === questId)
+  // Дела ордена дают в его доме и только своим (этап 59, О1) — их ищут там же,
+  // где и рыночные поручения: для игрока это один список.
+  const offer =
+    offersAt(state).find((quest) => quest.id === questId) ??
+    errandsAt(state).find((quest) => quest.id === questId)
   if (!offer) return fail('unknownAction', 'Такого здесь не просят.')
   // Чужой груз кладут в свой трюм: без судна фрахт не берут (этап 36).
   if (offer.type === 'freight' && !state.ship) {
@@ -3044,6 +3303,7 @@ function takeQuest(state: GameState, questId: string): CommandResult {
 
   const draft = open(state)
   notice(draft, `Взято: ${describeQuest(state, offer).toLowerCase()}.`)
+  if (errandKindOf(offer.type)) notice(draft, 'Это дело братства. Спросят по уставу.')
   draft.quests = [...draft.quests, offer]
   advance(draft, 30)
   return close(draft)
@@ -3608,6 +3868,24 @@ function seeDeed(draft: Draft, deed: DeedId): void {
   const own = ownOrder(draft.base)
   if (own && charterFeels(own, deed) !== 0) {
     addStanding(draft, charterFeels(own, deed), `${own.name}: ${DEED_LABELS[deed]}.`)
+  }
+  // Свой устав судит так же, как чужие (этап 59, О6). Идущее с ним приводит
+  // братьев, идущее против — распускает их: устав, который пишешь сам, тем и
+  // неудобен, что нарушаешь его тоже сам.
+  const hood = draft.brotherhood
+  if (hood) {
+    const feels = ownCharterFeels(hood, deed)
+    if (feels !== 0) {
+      const brothers = Math.max(0, hood.brothers + (feels > 0 ? 1 : -1))
+      draft.brotherhood = { ...hood, brothers }
+      notice(
+        draft,
+        feels > 0
+          ? `${hood.name}: такое по уставу. Братьев стало ${brothers}.`
+          : `${hood.name}: такое не по уставу. Братьев осталось ${brothers}.`,
+        'people',
+      )
+    }
   }
   const present = following(draft.companions)
   if (present.length === 0) return
@@ -4874,6 +5152,14 @@ function rite(state: GameState, riteId: string): CommandResult {
   if (!def) return fail('unknownAction', 'Такого обряда нет.')
   const priest = priestAt(state.world, state.settlements, state.locationId)
   if (!priest) return fail('unavailableHere', 'Здесь некому служить: храма нет.')
+  // Под запретом обрядов не служат (этап 59, О4) — в этом весь его смысл.
+  const ban = interdictedAt(state, state.locationId, dayOf(state.time))
+  if (ban) {
+    return fail(
+      'shunned',
+      `${priest.name}: «На месте запрет ${orderById(ban.orderId)?.name ?? 'братства'}. Ни обрядов, ни треб».`,
+    )
+  }
   if (def.needsBishop && priest.cloth !== 'bishop') {
     return fail('unavailableHere', `${priest.name} такого не служит: тут нужен владыка.`)
   }
@@ -5847,6 +6133,9 @@ interface Draft {
   service: string | null
   siege: Siege | null
   captives: readonly Captive[]
+  orderSway: OrderSway
+  interdicts: readonly Interdict[]
+  brotherhood: Brotherhood | null
   renown: number
   reputation: Reputation
   realm: { name: string } | null
@@ -5897,6 +6186,9 @@ function open(state: GameState): Draft {
     service: state.service,
     siege: state.siege,
     captives: state.captives ?? [],
+    orderSway: state.orderSway ?? startSway(),
+    interdicts: state.interdicts ?? [],
+    brotherhood: state.brotherhood ?? null,
     renown: state.renown,
     reputation: state.reputation,
     realm: state.realm,
@@ -5954,6 +6246,21 @@ function close(draft: Draft): CommandResult {
       draft.politics = march.politics
       draft.rng = march.rng
       draft.events.push(...bandNews(draft.base, draft.locationId, march.events))
+    }
+
+    // Ордена живут свою жизнь (этап 59, О3): растут на своих землях и сходятся
+    // там, где стоят враждующие. Свара братьев людям дорога.
+    for (let i = 0; i < daysPassed; i += 1) {
+      const chapter = tickOrders(draft.base.world, draft.settlements, draft.orderSway, draft.rng)
+      draft.orderSway = chapter.sway
+      draft.settlements = chapter.settlements
+      draft.rng = chapter.rng
+      for (const clash of chapter.clashes) {
+        if (clash.locationId !== draft.locationId) continue
+        const a = orderById(clash.a)?.name ?? 'одни'
+        const b = orderById(clash.b)?.name ?? 'другие'
+        notice(draft, `${a} и ${b} сошлись прямо на улице. Людям это дорого.`, 'world')
+      }
     }
 
     // Мор идёт своими сутками: он не ждёт, пока игрок что-то сделает.
@@ -6109,6 +6416,9 @@ function close(draft: Draft): CommandResult {
     service: draft.service,
     siege: draft.siege,
     captives: draft.captives,
+    orderSway: draft.orderSway,
+    interdicts: draft.interdicts,
+    brotherhood: draft.brotherhood,
     renown: draft.renown,
     reputation: draft.reputation,
     realm: draft.realm,

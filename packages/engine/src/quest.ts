@@ -21,6 +21,13 @@ export type QuestType =
   | 'fairGoods'
   /** Заказ купца (этап 49): задаток вперёд, спрос по имени. */
   | 'merchantOrder'
+  /**
+   * Дела ордена (этап 59): их дают своим и только в своём доме. Церковь шлёт
+   * на дознание, гильдия — открывать рынок, орден — убирать чужих.
+   */
+  | 'orderHeresy'
+  | 'orderMarket'
+  | 'orderFoe'
 
 export interface Quest {
   readonly id: string
@@ -184,6 +191,13 @@ export function isComplete(state: GameState, quest: Quest): boolean {
 
 export function describeQuest(state: GameState, quest: Quest): string {
   const target = state.world.locations[quest.targetLocationId]?.name ?? 'где-то рядом'
+  // Дела ордена (этап 59): их дают в доме братства, и говорят о них иначе.
+  if (quest.type === 'orderHeresy') return `Дознание в ${target}`
+  if (quest.type === 'orderMarket') {
+    const good = quest.good ? GOODS[quest.good].label.toLowerCase() : 'товар'
+    return `Открыть рынок в ${target}: ${good}, ${quest.amount} мер`
+  }
+  if (quest.type === 'orderFoe') return `Убрать чужих у ${target}`
   if (quest.type === 'merchantOrder') {
     const good = quest.good ? GOODS[quest.good].label.toLowerCase() : 'товар'
     return `Заказ купца в ${target}: ${good}, ${quest.amount} мер`
