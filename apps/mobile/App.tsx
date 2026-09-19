@@ -17,6 +17,7 @@ import { LearnSheet } from './src/screens/LearnSheet'
 import { MapScreen } from './src/screens/MapScreen'
 import { OwnSheet } from './src/screens/OwnSheet'
 import { PeopleScreen } from './src/screens/PeopleScreen'
+import { PowerScreen } from './src/screens/PowerScreen'
 import { SavesScreen } from './src/screens/SavesScreen'
 import { TradeScreen } from './src/screens/TradeScreen'
 import { WorldScreen } from './src/screens/WorldScreen'
@@ -46,6 +47,8 @@ function sheetBody(id: SheetId, game: GameState) {
       return <MapScreen game={game} />
     case 'world':
       return <WorldScreen game={game} />
+    case 'power':
+      return <PowerScreen game={game} />
     case 'saves':
       return <SavesScreen />
   }

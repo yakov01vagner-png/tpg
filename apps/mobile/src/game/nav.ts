@@ -17,6 +17,7 @@ export type SheetId =
   | 'court'
   | 'map'
   | 'world'
+  | 'power'
   | 'saves'
 
 export const SHEET_TITLES: Record<SheetId, string> = {
@@ -29,6 +30,7 @@ export const SHEET_TITLES: Record<SheetId, string> = {
   court: 'Двор',
   map: 'Карта',
   world: 'Сводка мира',
+  power: 'Власть',
   saves: 'Сейвы',
 }
 
