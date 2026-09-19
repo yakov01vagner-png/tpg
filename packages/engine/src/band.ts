@@ -846,6 +846,16 @@ export function tickBands(
             : candidate,
         )
         events.push({ type: 'bandTook', bandId: band.id, locationId: band.locationId })
+        // Взял и не сжёг — это тоже помнят (этап 65, Т4): город, у которого
+        // осталось больше половины людей, считает себя пощажённым.
+        const kept = places[band.locationId]
+        if (kept && held.population > 0 && kept.population > held.population * 0.5) {
+          lords = lords.map((candidate) =>
+            candidate.id === band.lordId
+              ? { ...candidate, spared: (candidate.spared ?? 0) + 1 }
+              : candidate,
+          )
+        }
         // Отняли последнее — мятежу конец. Проверяем только здесь: земля
         // меняет хозяина лишь так, и обходить весь мир каждые сутки незачем.
         const previous = held.owner
@@ -909,6 +919,12 @@ export function tickBands(
             places = { ...places, [refuge]: { ...host, population: host.population + fled } }
         }
         events.push({ type: 'bandRaid', bandId: band.id, locationId: band.locationId, lost })
+        // Разорил — это помнят за ним лично (этап 65, Т4).
+        lords = lords.map((candidate) =>
+          candidate.id === band.lordId
+            ? { ...candidate, sacked: (candidate.sacked ?? 0) + 1 }
+            : candidate,
+        )
       }
       acted.push({ ...band, goal: goHome(places, band), siegeDays: 0 })
       continue

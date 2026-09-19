@@ -27,6 +27,18 @@ import {
   lordHere,
   receptionFor,
 } from './castle'
+import {
+  casusDef,
+  casusFor,
+  casusWords,
+  envoyAt,
+  envoyTemperDef,
+  envoyYields,
+  stubbornOf,
+  termAbout,
+  termWords,
+  termsFor,
+} from './casus'
 import type { ChainProgress } from './chain'
 import { chainDef, chainsOfferedAt, stepDone } from './chain'
 import type { Character } from './character'
@@ -69,6 +81,7 @@ import {
 import type { BuildingId } from './content/buildings'
 import { BUILDINGS } from './content/buildings'
 import { TOURNEY_FEE, TOURNEY_PURSE } from './content/castle'
+import { ENVOY_FAVOUR } from './content/casus'
 import type { ChainDef } from './content/chains'
 import type { CompanionDef, DeedId } from './content/companions'
 import { COMPANIONS, DEED_LABELS, TEMPERS } from './content/companions'
@@ -565,6 +578,9 @@ export type Command =
   /** Встать лагерем там, где нет крыши. */
   | { readonly type: 'camp'; readonly manner?: CampManner }
   | { readonly type: 'hunt' }
+  | { readonly type: 'meetEnvoy'; readonly answer: 'yes' | 'no' | 'press' }
+  | { readonly type: 'declareWar'; readonly kingdomId: string }
+  | { readonly type: 'offerPeace'; readonly kingdomId: string }
   | { readonly type: 'seeHealer' }
   | { readonly type: 'brewPotion'; readonly potionId: string }
   | { readonly type: 'drinkPotion'; readonly potionId: string }
@@ -894,6 +910,12 @@ export function applyCommand(
       return camp(state, command.manner ?? 'sleep')
     case 'hunt':
       return hunt(state)
+    case 'meetEnvoy':
+      return meetEnvoy(state, command.answer)
+    case 'declareWar':
+      return declareWar(state, command.kingdomId)
+    case 'offerPeace':
+      return offerPeace(state, command.kingdomId)
     case 'seeHealer':
       return seeHealer(state)
     case 'brewPotion':
@@ -3886,6 +3908,209 @@ function sicken(draft: Draft, days: number): void {
       notice(draft, `${AILMENT_DEFS.flux.about}`, 'war')
     }
   }
+}
+
+// --- война с причиной (этап 65) ---------------------------------------------
+
+/**
+ * Посольство (этап 65, Т2).
+ *
+ * Мир, союз и дань — разговор, а не бросок. Посол приезжает в столицу с чем-то
+ * одним, и говорить с ним можно тремя способами: согласиться, отказать или
+ * дожать. Дожимают убеждением, и у каждого нрава своя мера уступчивости.
+ */
+function meetEnvoy(state: GameState, answer: 'yes' | 'no' | 'press'): CommandResult {
+  const day = dayOf(state.time)
+  const envoy = envoyAt(state.world, state.politics, state.locationId, day)
+  if (!envoy) return fail('unavailableHere', 'Послов здесь сейчас нет.')
+  if (!state.service && !state.realm) {
+    return fail('requirements', 'За корону говорит тот, кто ей служит или сам себе корона.')
+  }
+  const mine =
+    state.service ??
+    Object.values(state.world.kingdoms).find((one) => one.capitalId === state.locationId)?.id ??
+    null
+  if (!mine) return fail('invalid', 'Непонятно, за кого ты говоришь.')
+
+  const draft = open(state)
+  advance(draft, hours(3))
+  practice(draft, 'persuasion', 18)
+  const def = envoyTemperDef(envoy.temper)
+  notice(draft, `${envoy.name}, ${def.label} посол: «${def.about}»`, 'people')
+  if (answer === 'no') {
+    // Отказ помнят: отношение корон — не пустая цифра.
+    draft.politics = withRelation(draft.politics, mine, envoy.fromKingdomId, -8)
+    notice(draft, 'Ты отказал. Он поклонился ровно настолько, насколько должен.', 'war')
+    return close(draft)
+  }
+  const yields = envoyYields(envoy, skillLevel(draft.character, 'persuasion'))
+  if (answer === 'press') {
+    const [gives, afterRoll] = rollChance(draft.rng, Math.min(0.9, yields / 2.5))
+    draft.rng = afterRoll
+    if (!gives) {
+      draft.politics = withRelation(draft.politics, mine, envoy.fromKingdomId, -4)
+      notice(draft, 'Он не уступил и запомнил, что его давили.', 'war')
+      return close(draft)
+    }
+    notice(draft, 'Он уступил больше, чем собирался. Дома его за это не похвалят.', 'world')
+  }
+  if (envoy.asks === 'peace') {
+    draft.politics = {
+      ...draft.politics,
+      wars: draft.politics.wars.filter((war) => !sameSides(war, mine, envoy.fromKingdomId)),
+    }
+    draft.politics = withRelation(draft.politics, mine, envoy.fromKingdomId, 15)
+    notice(draft, `Мир с ${kingdomName(draft.base, envoy.fromKingdomId)} заключён.`, 'war')
+  } else if (envoy.asks === 'alliance') {
+    draft.politics = {
+      ...draft.politics,
+      alliances: [
+        ...draft.politics.alliances,
+        { a: mine, b: envoy.fromKingdomId, since: day, byMarriage: false },
+      ],
+    }
+    draft.politics = withRelation(draft.politics, mine, envoy.fromKingdomId, 20)
+    notice(draft, `Союз с ${kingdomName(draft.base, envoy.fromKingdomId)}.`, 'world')
+  } else if (envoy.asks === 'tribute') {
+    // Дань, которую с тебя просят: заплатить — значит признать.
+    draft.politics = {
+      ...draft.politics,
+      tributes: draft.politics.tributes.filter(
+        (one) => !(one.from === mine && one.to === envoy.fromKingdomId),
+      ),
+    }
+    notice(draft, 'Дань прощена: он увозит слово, а не серебро.', 'money')
+  } else {
+    draft.politics = withRelation(draft.politics, mine, envoy.fromKingdomId, 10)
+    notice(draft, 'Проход через землю разрешён. Это дешевле войны.', 'world')
+  }
+  // Говорить за корону — тратить свою милость у неё.
+  if (state.service) {
+    const liege = draft.politics.lords.find((one) => one.kingdomId === state.service)
+    if (liege) draft.reputation = withLordRep(draft.reputation, liege.id, -ENVOY_FAVOUR)
+  }
+  return close(draft)
+}
+
+/** Воюют ли эти двое. */
+function sameSides(war: { a: string; b: string }, a: string, b: string): boolean {
+  return (war.a === a && war.b === b) || (war.a === b && war.b === a)
+}
+
+function withRelation(politics: GameState['politics'], a: string, b: string, delta: number) {
+  const key = [a, b].sort().join('|')
+  const now = politics.relations[key] ?? 0
+  return {
+    ...politics,
+    relations: { ...politics.relations, [key]: Math.max(-100, Math.min(100, now + delta)) },
+  }
+}
+
+function kingdomName(state: GameState, kingdomId: string): string {
+  return state.world.kingdoms[kingdomId]?.name ?? kingdomId
+}
+
+/**
+ * Своя война (этап 65, Т5).
+ *
+ * Своё владение объявляет войну теми же правилами, что и корона: нужен повод, и
+ * повод берётся из мира. Без повода воюют тоже — но это называется честолюбием,
+ * и соседи это видят.
+ */
+function declareWar(state: GameState, kingdomId: string): CommandResult {
+  if (!state.realm)
+    return fail('requirements', 'Войну объявляет тот, у кого есть своё имя на карте.')
+  if (!state.world.kingdoms[kingdomId]) return fail('unknownAction', 'Такой короны нет.')
+  if (atWar(state.politics, PLAYER, kingdomId)) return fail('invalid', 'Вы и так воюете.')
+
+  const draft = open(state)
+  const [casus, afterCasus] = casusFor(
+    draft.base.world,
+    draft.politics,
+    draft.settlements,
+    PLAYER,
+    kingdomId,
+    draft.rng,
+  )
+  draft.rng = afterCasus
+  const day = dayOf(draft.time)
+  draft.politics = {
+    ...draft.politics,
+    wars: [
+      ...draft.politics.wars,
+      { a: PLAYER, b: kingdomId, since: day, reason: casusWords(draft.base.world, casus), casus },
+    ],
+  }
+  draft.politics = withRelation(draft.politics, PLAYER, kingdomId, -30)
+  advance(draft, hours(4))
+  notice(
+    draft,
+    `${state.realm.name} объявляет войну короне ${kingdomName(state, kingdomId)}. Повод: ${casusWords(draft.base.world, casus)}. «${casusDef(casus.kind).says}»`,
+    'war',
+  )
+  return close(draft)
+}
+
+/**
+ * Предложить мир (этап 65, Т3 и Т5).
+ *
+ * Условия следуют из повода и из того, кто сильнее: за землю требуют землю, за
+ * набеги — виновного. Слабый платит, сильный получает.
+ */
+function offerPeace(state: GameState, kingdomId: string): CommandResult {
+  if (!state.realm) return fail('requirements', 'Мир заключает тот, кто воюет своим именем.')
+  const war = state.politics.wars.find((one) => sameSides(one, PLAYER, kingdomId))
+  if (!war) return fail('invalid', 'С этой короной ты не воюешь.')
+
+  const draft = open(state)
+  advance(draft, hours(6))
+  practice(draft, 'persuasion', 20)
+  const mine = holdingsOf(draft.settlements, PLAYER).length
+  const theirs = Object.values(draft.settlements).filter(
+    (one) => one.owner === `crown:${kingdomId}` && one.population > 0,
+  ).length
+  const ratio = theirs === 0 ? 1 : Math.min(1, mine / Math.max(1, theirs))
+  const term = war.casus ? termsFor(war.casus, 1 / Math.max(0.2, ratio)) : 'nothing'
+  // Мирятся не всегда: у иного повода своё упрямство.
+  const [agreed, afterRoll] = rollChance(
+    draft.rng,
+    Math.min(
+      0.9,
+      (0.35 + skillLevel(draft.character, 'persuasion') * 0.01) / stubbornOf(war.casus),
+    ),
+  )
+  draft.rng = afterRoll
+  if (!agreed) {
+    notice(
+      draft,
+      `${kingdomName(state, kingdomId)} отвечает отказом: «${casusDef(war.casus?.kind ?? 'ambition').says}»`,
+      'war',
+    )
+    return close(draft)
+  }
+  draft.politics = {
+    ...draft.politics,
+    wars: draft.politics.wars.filter((one) => !sameSides(one, PLAYER, kingdomId)),
+  }
+  draft.politics = withRelation(draft.politics, PLAYER, kingdomId, 20)
+  // Сильный берёт дань, слабый платит: условия видны, и они настоящие.
+  if (ratio > 1.2) {
+    draft.politics = {
+      ...draft.politics,
+      tributes: [
+        ...draft.politics.tributes,
+        { from: kingdomId, to: PLAYER, perDay: 6, untilDay: dayOf(draft.time) + 360 },
+      ],
+    }
+  } else if (ratio < 0.8) {
+    addMoney(draft, -Math.min(draft.character.money, 200))
+  }
+  notice(
+    draft,
+    `Мир с ${kingdomName(state, kingdomId)}. Условия: ${termWords(term)} — ${termAbout(term)}`,
+    'war',
+  )
+  return close(draft)
 }
 
 function siegeLift(state: GameState): CommandResult {

@@ -1,4 +1,6 @@
 import type { BattleSide } from './battle'
+import { type Casus, casusFor, casusWords, stubbornOf, termsFor } from './casus'
+import type { PeaceTermKind } from './content/casus'
 import { LORD_DEATH_AGE, LORD_START_AGE } from './content/heal'
 import { ARCHMAGE_DEED_LABELS, ARCHMAGE_NAMES, type ArchmageDeed, DEED_DAYS } from './content/lore'
 import type { TroopId } from './content/troops'
@@ -26,6 +28,11 @@ export interface War {
   readonly b: string
   readonly since: number
   readonly reason: string
+  /**
+   * Повод как вещь (этап 65, Т1): из-за какой земли, из-за кого и какого рода.
+   * Необязательно — сейвы до 0.6 знают только строку.
+   */
+  readonly casus?: Casus
 }
 
 /**
@@ -52,6 +59,12 @@ export interface Lord {
    * возраста лордов не знают, и такой считается сорокалетним.
    */
   readonly age?: number
+  /**
+   * Что за ним числится на войне (этап 65, Т4): сколько мест разорил и сколько
+   * пощадил. У войны есть полководцы, и их знают по этому, а не по числу побед.
+   */
+  readonly sacked?: number
+  readonly spared?: number
 }
 
 /**
@@ -287,6 +300,8 @@ export type WarEvent =
   | { readonly type: 'rebellion'; readonly lordId: string }
   | { readonly type: 'archmage'; readonly kingdomId: string; readonly state: Archmage['state'] }
   | { readonly type: 'archmageDeed'; readonly kingdomId: string; readonly deed: ArchmageDeed }
+  /** Чем кончилась война (этап 65, Т3 и Т6): земля, дань, брак, выдача. */
+  | { readonly type: 'peaceTerms'; readonly war: War; readonly term: PeaceTermKind }
   /** Лорд умер, и земля перешла наследнику (этап 64, Ж6). */
   | {
       readonly type: 'lordDied'
@@ -319,7 +334,7 @@ export function tickPolitics(
   let generator = rng
   let wars = [...politics.wars]
   let tributes = [...politics.tributes]
-  const current = settlements
+  let current = settlements
   const events: WarEvent[] = []
   const kingdomIds = Object.keys(world.kingdoms)
   const days = Math.max(0, day - politics.lastDay)
@@ -347,13 +362,24 @@ export function tickPolitics(
       ).length
       const rump = (side: string) => known > 0 && alive > 0 && heldBy(current, side) / alive < 0.08
       if (a && b && a !== b && !rump(a) && !rump(b) && !wars.some((war) => sameWar(war, a, b))) {
-        const [reasonIndex, afterReason] = nextInt(generator, 0, WAR_REASONS.length - 1)
-        generator = afterReason
+        // Повод берётся из мира, а не из списка (этап 65, Т1): спорная марка —
+        // та, которую и правда держат чужие; неплатёж дани — та дань, которая
+        // и правда назначена. Честолюбие остаётся на случай, когда повода нет.
+        const [casus, afterCasus] = casusFor(
+          world,
+          { ...politics, wars, tributes },
+          current,
+          a,
+          b,
+          generator,
+        )
+        generator = afterCasus
         const war: War = {
           a,
           b,
           since: politics.lastDay + i,
-          reason: WAR_REASONS[reasonIndex] ?? WAR_REASONS[0] ?? 'старые счёты',
+          reason: casusWords(world, casus),
+          casus,
         }
         wars.push(war)
         events.push({ type: 'warDeclared', war })
@@ -370,7 +396,12 @@ export function tickPolitics(
       const smallest = Math.min(heldBy(current, war.a), heldBy(current, war.b))
       const total = Object.values(current).filter((one) => one.population > 0).length
       const tiny = total > 0 && smallest / total < 0.12
-      const [peace, afterPeace] = rollChance(generator, PEACE_CHANCE * (tiny ? 5 : 1))
+      // За иной повод держатся крепче: спор о вере кончается позже спора о
+      // дани (этап 65, Т1).
+      const [peace, afterPeace] = rollChance(
+        generator,
+        (PEACE_CHANCE * (tiny ? 5 : 1)) / stubbornOf(war.casus),
+      )
       generator = afterPeace
       if (!peace) continue
       wars = wars.filter((other) => other !== war)
@@ -381,10 +412,28 @@ export function tickPolitics(
       if (mine === 0 || theirs === 0) continue
       const [loser, winner, ratio] =
         mine < theirs ? [war.a, war.b, mine / theirs] : [war.b, war.a, theirs / mine]
-      const terms = peaceTerms(loser, winner, ratio, day)
-      if (terms) {
-        tributes = [...tributes.filter((one) => one.from !== loser || one.to !== winner), terms]
-        events.push({ type: 'tribute', tribute: terms })
+      // Условия следуют из повода (этап 65, Т3): за землю требуют землю, за
+      // набеги — виновного, за честолюбие — что дадут.
+      const term = war.casus ? termsFor(war.casus, ratio) : 'tribute'
+      events.push({ type: 'peaceTerms', war, term })
+      if (term === 'land' && war.casus?.provinceId) {
+        // Спорная марка переходит победителю целиком: это и есть то, из-за чего
+        // воевали.
+        const taken: Record<string, Settlement> = { ...current }
+        for (const id of world.provinces[war.casus.provinceId]?.locationIds ?? []) {
+          const settlement = taken[id]
+          if (!settlement || settlement.population <= 0) continue
+          if (sideOfOwner(settlement.owner) !== loser) continue
+          taken[id] = { ...settlement, owner: `crown:${winner}` }
+        }
+        current = taken
+      }
+      if (term === 'tribute' || term === 'land') {
+        const terms = peaceTerms(loser, winner, ratio, day)
+        if (terms) {
+          tributes = [...tributes.filter((one) => one.from !== loser || one.to !== winner), terms]
+          events.push({ type: 'tribute', tribute: terms })
+        }
       }
     }
 
@@ -796,4 +845,12 @@ function holdsAnything(settlements: Readonly<Record<string, Settlement>>, lordId
     if (settlement.owner === lordId) return true
   }
   return false
+}
+
+/** Чья это корона: по владельцу места. */
+function sideOfOwner(owner: string | null): string | null {
+  if (!owner) return null
+  if (owner.startsWith('crown:')) return owner.slice('crown:'.length)
+  const parts = owner.split(':')
+  return parts[0] === 'lord' ? (parts[1] ?? null) : null
 }
