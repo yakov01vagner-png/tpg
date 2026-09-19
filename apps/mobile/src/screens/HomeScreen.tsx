@@ -2,9 +2,11 @@ import {
   BUILDINGS,
   CAMP_HOURS,
   CLIMATE_LABELS,
+  CLOTH_LABELS,
   type Command,
   type GameState,
   PLACE_LABELS,
+  PRIEST_TEMPERS,
   type Passage,
   type PlaceKind,
   QUARTERS,
@@ -26,6 +28,8 @@ import {
   examsAt,
   fairAt,
   feastAt,
+  feastDoingsAt,
+  feastHere,
   feudChill,
   foeName,
   foodSecurity,
@@ -33,6 +37,7 @@ import {
   formatDuration,
   hours,
   iceBound,
+  isHolySite,
   isOwnedByPlayer,
   isSite,
   jobsAt,
@@ -44,18 +49,23 @@ import {
   lordById,
   lordSays,
   matchesAt,
+  offeringFor,
   offersAt,
   ordersAt,
   ownOrder,
   ownOrderHere,
   partySize,
   passageCost,
+  pietyOf,
+  pietyWord,
   plagueAt,
+  priestAt,
   quarterFor,
   quartersOf,
   rankLabel,
   repairPrice,
   resalePrice,
+  ritesAt,
   roadsFrom,
   rumourAt,
   seaHours,
@@ -484,6 +494,8 @@ export function HomeScreen({ game }: { game: GameState }) {
 
       <Spells game={game} dispatch={dispatch} where={placeKind} />
 
+      <Temple game={game} />
+
       {settlement ? <Rumours game={game} /> : null}
 
       <Orders game={game} dispatch={dispatch} />
@@ -770,6 +782,81 @@ function Quarters({ game }: { game: GameState }) {
         })}
       </View>
       <Dim>{QUARTERS[current as QuarterId].description}</Dim>
+    </Section>
+  )
+}
+
+/**
+ * Храм и праздник (этап 51).
+ *
+ * В храме есть кто-то и есть что сделать; в праздник — тем более. У святого
+ * места в глуши своё: туда приходят не работать.
+ */
+function Temple({ game }: { game: GameState }) {
+  const day = dayOf(game.time)
+  const priest = priestAt(game.world, game.settlements, game.locationId)
+  const feast = feastHere(game.world, game.locationId, day)
+  const doings = feastDoingsAt(game.world, game.locationId, day)
+  const holy = isHolySite(game.world, game.locationId)
+  if (!priest && !feast && !holy) return null
+  const piety = pietyOf(game)
+  return (
+    <Section title={feast ?? (priest ? 'Храм' : 'Святое место')} aside={pietyWord(piety)}>
+      {priest ? (
+        <Dim>{`${priest.name}, ${CLOTH_LABELS[priest.cloth]} · ${PRIEST_TEMPERS[priest.temper].label}`}</Dim>
+      ) : null}
+      {doings.map((doing) => {
+        const command: Command = { type: 'joinFeast', doingId: doing.id }
+        return (
+          <Card
+            key={doing.id}
+            glyph={<Icon name="people" size={20} color={palette.gold} />}
+            title={doing.label}
+            description={doing.description}
+            meta={`${formatDuration(doing.minutes)}${doing.cost > 0 ? ` · ${doing.cost}` : ''}`}
+            reason={reasonOf(canApply(game, command))}
+            onPress={() => dispatch(command)}
+            tone="gold"
+          />
+        )
+      })}
+      {holy ? (
+        <Card
+          glyph={<Icon name="shrine" size={20} color={palette.good} />}
+          title="Постоять у святого места"
+          description="Не работа и не поиск: то, ради чего сюда идут. Раз в несколько месяцев."
+          meta="3 ч"
+          reason={reasonOf(canApply(game, { type: 'pilgrimage' }))}
+          onPress={() => dispatch({ type: 'pilgrimage' })}
+          tone="good"
+        />
+      ) : null}
+      {priest
+        ? ritesAt(priest).map((rite) => {
+            const command: Command = { type: 'rite', riteId: rite.id }
+            return (
+              <Card
+                key={rite.id}
+                glyph={<Icon name="shrine" size={20} color={palette.dim} />}
+                title={rite.label}
+                description={rite.description}
+                meta={`${formatDuration(rite.minutes)} · на храм ${offeringFor(priest, rite)}`}
+                reason={reasonOf(canApply(game, command))}
+                onPress={() => dispatch(command)}
+              />
+            )
+          })
+        : null}
+      {priest ? (
+        <Card
+          glyph={<Icon name="own" size={20} color={palette.gold} />}
+          title="Положить вклад"
+          description="Деньги на храм без обряда и без слов. Записывают в поминание."
+          meta="50"
+          reason={reasonOf(canApply(game, { type: 'donate', amount: 50 }))}
+          onPress={() => dispatch({ type: 'donate', amount: 50 })}
+        />
+      ) : null}
     </Section>
   )
 }

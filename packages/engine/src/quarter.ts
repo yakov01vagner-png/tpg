@@ -129,6 +129,10 @@ export function activityOf(command: Command): Activity | null {
     case 'sellShip':
     case 'foundShipping':
       return 'sea'
+    // Храм (этап 51): обряды, вклады и благословение — у алтаря.
+    case 'rite':
+    case 'donate':
+      return 'order:church'
     case 'joinOrder': {
       const kind = orderById(command.orderId)?.kind
       return kind ? `order:${kind}` : null

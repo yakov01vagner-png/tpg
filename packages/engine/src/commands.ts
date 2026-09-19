@@ -37,6 +37,8 @@ import { COMPANIONS, DEED_LABELS, TEMPERS } from './content/companions'
 import { CRAFT_MASTERS } from './content/craft'
 import type { SlotId } from './content/equipment'
 import { ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
+import { FEAST_DOINGS, PILGRIM_DAYS, PILGRIM_PIETY, RITES_BY_ID } from './content/faith'
+import { EXCOMMUNICATED } from './content/faith'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import { TEMPER_LINES } from './content/lines'
@@ -205,6 +207,17 @@ import { SKILLS } from './skills'
 import { battlePower, bestSpell, castChance } from './spell'
 import type { GameState } from './state'
 import { appendLog } from './state'
+import {
+  canPilgrimage,
+  feastDoingsAt,
+  feastHere,
+  graceFor,
+  isHolySite,
+  offeringFor,
+  pietyOf,
+  priestAt,
+  templeAccepts,
+} from './temple'
 import { DAYS_PER_YEAR, timeOfDay } from './time'
 import type { GameTime } from './time'
 import type { TimeWindow } from './time'
@@ -265,6 +278,11 @@ export type Command =
   | { readonly type: 'leaveCech' }
   /** Взять ученика в свою мастерскую (этап 50). */
   | { readonly type: 'takeApprentice' }
+  /** Храм и вера (этап 51): обряд, вклад, праздник, паломничество. */
+  | { readonly type: 'rite'; readonly riteId: string }
+  | { readonly type: 'donate'; readonly amount: number }
+  | { readonly type: 'joinFeast'; readonly doingId: string }
+  | { readonly type: 'pilgrimage' }
   /** Уйти морем: своим судном, нанятым или попутным (этап 35). */
   | { readonly type: 'sail'; readonly toLocationId: string; readonly manner: Passage }
   /** Купить судно в порту, починить своё, продать своё. */
@@ -496,6 +514,14 @@ export function applyCommand(
       return leaveCech(state)
     case 'takeApprentice':
       return takeApprentice(state)
+    case 'rite':
+      return rite(state, command.riteId)
+    case 'donate':
+      return donate(state, command.amount)
+    case 'joinFeast':
+      return joinFeast(state, command.doingId)
+    case 'pilgrimage':
+      return pilgrimage(state)
     case 'travel':
       return travel(state, command.toLocationId)
     case 'sail':
@@ -1530,6 +1556,11 @@ function joinOrder(state: GameState, orderId: string): CommandResult {
   // Кого выгнали, обратно не берут скоро: память у ордена долгая.
   if (lordRep(state.reputation, `order:${order.id}`) <= -20) {
     return fail('shunned', `${order.name} тебя помнит и не примет.`)
+  }
+  // Церковь и корона (этап 51, Х6): отлучённого в церковный орден не берут, и
+  // это не мелочь — отлучение закрывает двери, а не портит настроение.
+  if (order.kind === 'church' && pietyOf(state) <= EXCOMMUNICATED) {
+    return fail('shunned', `${order.name} не принимает отлучённого. Сперва покайся.`)
   }
   const draft = open(state)
   advance(draft, hours(2))
@@ -3064,6 +3095,10 @@ export function companionsAt(
  * скажет слово, кто-то уйдёт — и об этом будет строка в летописи.
  */
 function seeDeed(draft: Draft, deed: DeedId): void {
+  // И церковь смотрит (этап 51): разорение и брошенное слово — грех, накормить
+  // голодного и пощадить пленных — нет. Вера здесь счёт, а не украшение.
+  const sin = PIETY_DEEDS[deed] ?? 0
+  if (sin !== 0) draft.piety = Math.max(-100, Math.min(100, draft.piety + sin))
   // Свои лорды тоже смотрят (этап 43): разорение — не то, чему хотят служить.
   const felt = VASSALS_FEEL[deed] ?? 0
   if (felt !== 0 && vassalsOf(draft.base).length > 0) shiftVassals(draft, felt, null)
@@ -3610,6 +3645,12 @@ function proposeMarriage(state: GameState, lordId: string): CommandResult {
     return fail('invalid', `${lord.title} ${lord.name} не отдаст своей крови безвестному.`)
   }
 
+  // Венчает церковь (этап 51): отлучённого не венчают нигде, а в Святом
+  // королевстве не венчают и нерадивого.
+  const devout = kingdomOf(state.world, state.locationId)?.id === 'robl'
+  if (pietyOf(state) <= EXCOMMUNICATED || (devout && pietyOf(state) < -15)) {
+    return fail('shunned', 'Церковь не благословит этот брак: с тобой не станут служить.')
+  }
   const draft = open(state)
   const day = dayOf(draft.time)
   const [name, afterName] = spouseName(draft.rng)
@@ -3698,6 +3739,152 @@ export function tradeSkillAt(state: GameState): number {
  * Уступка держится до конца дня и только у этого купца; наглость он запомнит.
  * Торгуются раз в день: приставать к человеку каждый час — не торг.
  */
+/**
+ * Обряд (этап 51, Х1).
+ *
+ * В храме есть кто-то и есть что сделать: молебен, исповедь, отпевание,
+ * благословение владыки. Каждый обряд стоит времени, жертвы на храм и даёт
+ * благочестие; исповедь снимает вину, отпевание поднимает дух отряда.
+ */
+function rite(state: GameState, riteId: string): CommandResult {
+  const def = RITES_BY_ID[riteId]
+  if (!def) return fail('unknownAction', 'Такого обряда нет.')
+  const priest = priestAt(state.world, state.settlements, state.locationId)
+  if (!priest) return fail('unavailableHere', 'Здесь некому служить: храма нет.')
+  if (def.needsBishop && priest.cloth !== 'bishop') {
+    return fail('unavailableHere', `${priest.name} такого не служит: тут нужен владыка.`)
+  }
+  const piety = pietyOf(state)
+  const welcome = templeAccepts(priest, piety, def)
+  if (!welcome.accepts) return fail('shunned', `${priest.name}: «${welcome.says}»`)
+  const offering = offeringFor(priest, def)
+  if (state.character.money < offering) {
+    return fail('noMoney', `На храм просят ${offering}, а у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -offering)
+  advance(draft, def.minutes)
+  const grace = graceFor(priest, def)
+  draft.piety = Math.max(-100, Math.min(100, draft.piety + grace))
+  notice(draft, `${priest.name}: «${welcome.says}» ${def.label}: на храм ${offering}.`)
+  // Исповедь снимает не только вину: место видит, что ты покаялся.
+  if (def.id === 'confession') {
+    draft.reputation = withPlaceRep(draft.reputation, state.locationId, 4)
+  }
+  // Отпевание — по тем, кто остался в поле: отряд наутро идёт ровнее.
+  if (def.id === 'funeral') {
+    draft.party = { ...draft.party, morale: Math.min(100, draft.party.morale + 8) }
+  }
+  if (def.id === 'blessing') {
+    draft.reputation = withPlaceRep(draft.reputation, state.locationId, 8)
+    draft.renown += 1
+  }
+  practice(draft, 'concentration', 10)
+  return close(draft)
+}
+
+/** Вклад в обитель или храм: деньги за благочестие, без обряда и без слов. */
+function donate(state: GameState, amount: number): CommandResult {
+  if (!Number.isInteger(amount) || amount <= 0) return fail('invalid', 'Сколько именно?')
+  const priest = priestAt(state.world, state.settlements, state.locationId)
+  if (!priest) return fail('unavailableHere', 'Здесь некому жертвовать.')
+  if (state.character.money < amount) {
+    return fail('noMoney', `У тебя нет столько: ${amount}.`)
+  }
+  const draft = open(state)
+  addMoney(draft, -amount)
+  advance(draft, 20)
+  // Благочестие покупается плохо: сотня монет — это шесть-семь очков, не больше.
+  const grace = Math.min(15, Math.round(Math.sqrt(amount) * 0.7))
+  draft.piety = Math.max(-100, Math.min(100, draft.piety + grace))
+  draft.reputation = withPlaceRep(draft.reputation, state.locationId, 2)
+  notice(draft, `Вклад на храм: ${amount}. ${priest.name} записал тебя в поминание.`)
+  return close(draft)
+}
+
+/**
+ * Праздник (этап 51, Х2).
+ *
+ * В праздник не работают — и это уже было. Теперь в праздник есть что делать:
+ * идти в шествии, сесть за общий стол, выйти на кулачный бой. Каждое даёт
+ * своё, и каждое чем-то рискует.
+ */
+function joinFeast(state: GameState, doingId: string): CommandResult {
+  const doing = FEAST_DOINGS.find((one) => one.id === doingId)
+  if (!doing) return fail('unknownAction', 'Такого на празднике не делают.')
+  const day = dayOf(state.time)
+  const name = feastHere(state.world, state.locationId, day)
+  if (!name) return fail('unavailableHere', 'Нынче не праздник.')
+  const doings = feastDoingsAt(state.world, state.locationId, day)
+  if (!doings.some((one) => one.id === doingId)) {
+    return fail('unavailableHere', `На этом празднике такого нет: ${name}.`)
+  }
+  if (state.character.money < doing.cost) {
+    return fail('noMoney', `Нужно ${doing.cost}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -doing.cost)
+  advance(draft, doing.minutes)
+  if (doing.id === 'procession') {
+    draft.piety = Math.max(-100, Math.min(100, draft.piety + 6))
+    draft.reputation = withPlaceRep(draft.reputation, state.locationId, 5)
+    notice(draft, `${name}: ты шёл в шествии, и тебя видели рядом со святыней.`)
+    return close(draft)
+  }
+  if (doing.id === 'feastTable') {
+    draft.reputation = withPlaceRep(draft.reputation, state.locationId, 8)
+    draft.party = { ...draft.party, morale: Math.min(100, draft.party.morale + 6) }
+    addFatigue(draft, 10)
+    notice(draft, `${name}: за общим столом тебя запомнили — и твоих людей тоже.`)
+    return close(draft)
+  }
+  // Кулачный бой: слава и синяки. Побеждает сила и ловкость, а не железо.
+  const [roll, next] = nextFloat(draft.rng)
+  draft.rng = next
+  const strength = state.character.attributes.strength + state.character.attributes.agility
+  const won = roll < Math.min(0.85, 0.25 + strength * 0.04)
+  addFatigue(draft, 25)
+  practice(draft, 'athletics', 25)
+  if (won) {
+    draft.renown += 1
+    draft.reputation = withPlaceRep(draft.reputation, state.locationId, 10)
+    addMoney(draft, 20)
+    notice(draft, `${name}: стенка на стенку — и ты устоял. Посад это запомнит.`)
+  } else {
+    draft.reputation = withPlaceRep(draft.reputation, state.locationId, 2)
+    notice(draft, `${name}: тебя уронили на глазах у всего посада. Бывает.`)
+  }
+  return close(draft)
+}
+
+/**
+ * Паломничество (этап 51, Х5).
+ *
+ * Святое место в глуши — цель пути. Даёт много благочестия, но раз в
+ * несколько месяцев: ходить к одному роднику каждую неделю — не паломничество,
+ * а прогулка.
+ */
+function pilgrimage(state: GameState): CommandResult {
+  if (!isHolySite(state.world, state.locationId)) {
+    return fail('unavailableHere', 'Это место не свято: тут не молятся, тут ходят.')
+  }
+  const day = dayOf(state.time)
+  if (!canPilgrimage(state, day)) {
+    const left = PILGRIM_DAYS - (day - (state.pilgrimDay ?? 0))
+    return fail('closed', `Ты был у святого места недавно. Придёшь через ${left} суток.`)
+  }
+  const draft = open(state)
+  advance(draft, hours(3))
+  draft.piety = Math.max(-100, Math.min(100, draft.piety + PILGRIM_PIETY))
+  draft.pilgrimDay = day
+  practice(draft, 'concentration', 30)
+  const here = state.world.locations[state.locationId]?.name ?? 'святое место'
+  notice(draft, `Ты дошёл до ${here} и стоял, пока не стемнело. Это помнят на небе и в людях.`)
+  return close(draft)
+}
+
 function haggleWith(state: GameState, merchantId: string, push: HagglePush): CommandResult {
   const settlement = state.settlements[state.locationId]
   const merchant = settlement
@@ -3842,6 +4029,21 @@ function sellTo(state: GameState, merchantId: string, good: GoodId, amount: numb
  */
 function dealStanding(total: number): number {
   return Math.min(3, Math.max(1, Math.round(total / 400)))
+}
+
+/**
+ * Чем церковь считает поступки (этап 51, Х4).
+ *
+ * Разорение города — тяжкий грех, набег — грех, брошенное слово — тоже.
+ * Накормить голодного и пощадить пленных — то, за что и прощают.
+ */
+const PIETY_DEEDS: Readonly<Partial<Record<DeedId, number>>> = {
+  sack: -18,
+  raid: -8,
+  abandonQuest: -5,
+  starve: -6,
+  feedHungry: 7,
+  sparePrisoners: 6,
 }
 
 /** Ниже этого купец не подаёт руки. */
@@ -4478,6 +4680,8 @@ interface Draft {
   dealings: Readonly<Record<string, Dealing>>
   craft: Readonly<Record<string, number>>
   cech: CechMembership | null
+  piety: number
+  pilgrimDay: number | undefined
   battle: Battle | null
   politics: Politics
   /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
@@ -4520,6 +4724,8 @@ function open(state: GameState): Draft {
     dealings: state.dealings ?? {},
     craft: state.craft ?? {},
     cech: state.cech ?? null,
+    piety: state.piety ?? 0,
+    pilgrimDay: state.pilgrimDay,
     battle: state.battle,
     politics: state.politics,
     world: state.world,
@@ -4730,6 +4936,8 @@ function close(draft: Draft): CommandResult {
     dealings: draft.dealings,
     craft: draft.craft,
     cech: draft.cech,
+    piety: draft.piety,
+    ...(draft.pilgrimDay !== undefined ? { pilgrimDay: draft.pilgrimDay } : {}),
     battle: draft.battle,
     politics: draft.politics,
     bands: draft.bands,

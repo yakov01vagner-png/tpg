@@ -120,6 +120,13 @@ export interface GameState {
   /** Членство в цехе города (этап 50): одно на героя, как и орден. */
   readonly cech?: CechMembership | null
   /**
+   * Благочестие (этап 51): как на тебя смотрит церковь. Растёт от обрядов и
+   * паломничества, падает от разорения и святотатства. Ниже −50 — отлучение.
+   */
+  readonly piety?: number
+  /** Когда в последний раз ходил к святому месту: паломничество не еженедельно. */
+  readonly pilgrimDay?: number
+  /**
    * Отведённый мор (этап 41): где и до какого дня чары держат смерть вполовину.
    * Необязательно — сейвы до 0.5 чар не знают.
    */
@@ -188,6 +195,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     dealings: {},
     craft: {},
     cech: null,
+    piety: 0,
     party: EMPTY_PARTY,
     ship: null,
     guild: null,

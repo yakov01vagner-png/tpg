@@ -12,6 +12,7 @@ import {
 import { hasBuilding } from './holding'
 import type { Rng } from './rng'
 import { nextFloat } from './rng'
+import { titheFor, titheSupport } from './temple'
 import type { Season } from './time'
 import { daysToHarvest, seasonOf } from './time'
 import type { LocationArchetype, PlaceKind, Terrain, World } from './world/types'
@@ -198,11 +199,15 @@ export function carryingCapacity(
   const base =
     landCapacityOf(location.archetype, location.terrain, fertility) *
     seaCatch(location.archetype, location.shore)
+  // Обитель держится не пашней, а округой (этап 51): к её двум сотням душ
+  // прибавляются те, кого кормит десятина провинции. Без этого обитель была
+  // обречена на свою землю и за век усыхала на две трети.
+  const kept = base + titheSupport(world, locationId)
   // Мельница кормит больше ртов с той же земли — значит, и предел выше.
   // Усталость земли сюда не входит: она бьёт по урожаю, а не по тому, сколько
   // народу тут поместится. Когда било по пределу, мир вставал намертво — все
   // места оказывались выше него, расти было некуда, а голода всё равно не было.
-  return Math.round(base * (settlement && hasBuilding(settlement, 'mill') ? 1.18 : 1))
+  return Math.round(kept * (settlement && hasBuilding(settlement, 'mill') ? 1.18 : 1))
 }
 
 /**
@@ -442,6 +447,10 @@ export function tickDays(
   for (let day = 0; day < days; day += 1) {
     current = produceAndEat(world, current, config, events, fromDay + day)
     const today = fromDay + day
+    // Обитель живёт не землёй, а тем, что ей несут (этап 51, Х3): своей пашни
+    // под ней на две сотни душ. Десятина берётся с людей её провинции — это
+    // перенос, а не подарок: сколько пришло в обитель, столько ушло из округи.
+    current = collectTithe(world, current, config)
     current = share(world, current, byProvince, config.provinceTransfer, config, today)
     current = share(world, current, byRegion, config.regionTransfer, config, today)
     current = share(world, current, byKingdom, config.kingdomTransfer, config, today)
@@ -640,6 +649,53 @@ function produceAndEat(
  */
 function keepDays(settlement: Settlement, config: LifeConfig, day: number): number {
   return Math.min(stockDays(settlement, config), daysToHarvest(day) + 10)
+}
+
+/**
+ * Десятина обителям (этап 51, Х3).
+ *
+ * Обитель кормится не пашней, а вкладами: с людей своей провинции идёт малая
+ * доля хлеба. Берётся только с тех, у кого он есть, и только сверх своего
+ * дневного прокорма — голодная деревня обители не подаёт.
+ */
+function collectTithe(
+  world: World,
+  settlements: Record<string, Settlement>,
+  config: LifeConfig,
+): Record<string, Settlement> {
+  const next = settlements
+  for (const province of Object.values(world.provinces)) {
+    const monasteries = province.locationIds.filter(
+      (id) => world.locations[id]?.archetype === 'monastery' && next[id],
+    )
+    if (monasteries.length === 0) continue
+    for (const monasteryId of monasteries) {
+      const wanted = titheFor(world, next, monasteryId) * config.foodPerPerson
+      if (wanted <= 0) continue
+      let got = 0
+      for (const id of province.locationIds) {
+        if (id === monasteryId) continue
+        const donor = next[id]
+        if (!donor || donor.population <= 0) continue
+        const eats = donor.population * config.foodPerPerson
+        const spare = Math.max(0, donor.stock.grain - eats * 2)
+        if (spare <= 0) continue
+        const give = Math.min(spare * 0.02, wanted - got)
+        if (give <= 0) continue
+        next[id] = takeGrain(donor, give)
+        got += give
+        if (got >= wanted) break
+      }
+      const monastery = next[monasteryId]
+      if (monastery && got > 0) {
+        next[monasteryId] = {
+          ...monastery,
+          stock: { ...monastery.stock, grain: monastery.stock.grain + got },
+        }
+      }
+    }
+  }
+  return next
 }
 
 function share(
