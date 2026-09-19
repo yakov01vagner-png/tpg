@@ -398,6 +398,7 @@ import {
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
 import type { PriceLog } from './market'
 import { recordPrices } from './market'
+import { opinionPrice, playStyle, worldOpinion } from './memory'
 import type { Dealing, HagglePush } from './merchant'
 import {
   NO_DEALING,
@@ -8814,8 +8815,11 @@ function buy(state: GameState, good: GoodId, amount: number): CommandResult {
   if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
 
   const tradeSkill = tradeSkillAt(state)
-  // Своим уступают, чужих обдирают.
-  const welcome = priceFactor(placeRep(state.reputation, state.locationId))
+  // Своим уступают, чужих обдирают. Мнение короны о тебе читается здесь же
+  // (этап 92, Па6): где тебя держат за врага, тебе всё дороже.
+  const welcome =
+    priceFactor(placeRep(state.reputation, state.locationId)) *
+    opinionPrice(state, state.world, state.locationId, dayOf(state.time))
   const quote = quoteBuy(state.world, settlement, good, amount, tradeSkill)
   if (quote.amount < amount) {
     return fail('noGoods', `Столько тут не купить: ${GOODS[good].label.toLowerCase()} в обрез.`)
@@ -8852,14 +8856,18 @@ function sell(state: GameState, good: GoodId, amount: number): CommandResult {
 
   const tradeSkill = tradeSkillAt(state)
   const quote = quoteSell(state.world, settlement, good, amount, tradeSkill)
+  // За твой товар здесь дают тем меньше, чем хуже о тебе думают (этап 92, Па6).
+  const welcome = 2 - opinionPrice(state, state.world, state.locationId, dayOf(state.time))
+
+  const total = Math.max(1, Math.round(quote.total * welcome))
 
   const draft = open(state)
-  notice(draft, `Продано: ${GOODS[good].label.toLowerCase()}, ${amount} — за ${quote.total}.`)
+  notice(draft, `Продано: ${GOODS[good].label.toLowerCase()}, ${amount} — за ${total}.`)
   advance(draft, TRADE_MINUTES)
-  addMoney(draft, quote.total)
+  addMoney(draft, total)
   addGoods(draft, good, -amount)
   draft.settlements = { ...draft.settlements, [state.locationId]: quote.settlement }
-  practice(draft, 'trade', Math.min(30, quote.total * 0.12))
+  practice(draft, 'trade', Math.min(30, total * 0.12))
   return close(draft)
 }
 
