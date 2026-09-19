@@ -45,6 +45,7 @@ import { createRng } from './rng'
 import type { RoyalMarriage } from './royal'
 import type { Ship } from './ship'
 import type { Siege } from './siege'
+import type { Spy } from './spy'
 import type { GameTime } from './time'
 import { WORLD_START } from './time'
 import type { Claim, Crowning } from './title'
@@ -309,6 +310,13 @@ export interface GameState {
    * помнить. Сами дома — супруги, дети, наследники — выводятся из короны и дня.
    */
   readonly marriages?: readonly RoyalMarriage[]
+  /**
+   * Свои соглядатаи (этап 82): кто где сидит и с какого дня. Донесения не
+   * хранятся — они считаются из мира в день, когда их спросили.
+   */
+  readonly spies?: readonly Spy[]
+  /** Пущенные слухи (этап 82, С6): против кого и до какого дня. */
+  readonly rumours?: readonly { readonly against: string; readonly untilDay: number }[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -405,6 +413,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     embassies: [],
     treaties: [],
     marriages: [],
+    spies: [],
+    rumours: [],
     factions: {},
     spellcraft: {},
     weather: [],

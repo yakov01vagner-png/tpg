@@ -507,6 +507,22 @@ import {
 import type { SkillId } from './skills'
 import { SKILLS } from './skills'
 import { battlePower, bestSpell, castChance } from './spell'
+import {
+  CAUGHT,
+  RUMOUR,
+  type Spy,
+  type SpySeat,
+  bribeTargets,
+  catchChance,
+  leakFactor,
+  reportOf,
+  seatDef,
+  spiesOf,
+  spyCost,
+  spyIn,
+  spyWages,
+  watchers,
+} from './spy'
 import type { GameState } from './state'
 import { appendLog } from './state'
 import {
@@ -843,6 +859,11 @@ export type Command =
       readonly secret?: SecretId
       readonly guarantor?: string
     }
+  /** Соглядатаи (этап 82): завести, отозвать, купить советника, пустить слух. */
+  | { readonly type: 'plantSpy'; readonly kingdomId: string; readonly seat: SpySeat }
+  | { readonly type: 'recallSpy'; readonly kingdomId: string }
+  | { readonly type: 'bribeAdvisor'; readonly kingdomId: string; readonly lordId: string }
+  | { readonly type: 'spreadRumour'; readonly kingdomId: string }
   /** Заявить право на чужой трон по крови (этап 81, Р4). */
   | { readonly type: 'claimThrone'; readonly kingdomId: string }
   /** Порвать договор (этап 80, Г3). */
@@ -1269,6 +1290,14 @@ export function applyCommand(
         ...(command.secret ? { secret: command.secret } : {}),
         ...(command.guarantor ? { guarantor: command.guarantor } : {}),
       })
+    case 'plantSpy':
+      return plantSpy(state, command.kingdomId, command.seat)
+    case 'recallSpy':
+      return recallSpy(state, command.kingdomId)
+    case 'bribeAdvisor':
+      return bribeAdvisor(state, command.kingdomId, command.lordId)
+    case 'spreadRumour':
+      return spreadRumour(state, command.kingdomId)
     case 'claimThrone':
       return claimThrone(state, command.kingdomId)
     case 'breakTreaty':
@@ -9088,6 +9117,8 @@ interface Draft {
   embassies: readonly Embassy[]
   treaties: readonly Treaty[]
   marriages: readonly RoyalMarriage[]
+  spies: readonly Spy[]
+  rumours: readonly { against: string; untilDay: number }[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9170,6 +9201,8 @@ function open(state: GameState): Draft {
     embassies: state.embassies ?? [],
     treaties: state.treaties ?? [],
     marriages: state.marriages ?? [],
+    spies: state.spies ?? [],
+    rumours: state.rumours ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9454,6 +9487,8 @@ function close(draft: Draft): CommandResult {
       }
     }
 
+    // Соглядатаев берут за руку, а слухи стихают (этап 82, С4 и С6).
+    tickSpies(draft, daysPassed)
     // Колена корон сменяются сами (этап 81, Р3): у соседей новый государь.
     tickSuccession(draft, daysPassed)
     // Договоры кончаются сами, а тайное становится явным (этап 80, Г2 и Г5).
@@ -9558,6 +9593,8 @@ function close(draft: Draft): CommandResult {
     embassies: draft.embassies,
     treaties: draft.treaties,
     marriages: draft.marriages,
+    spies: draft.spies,
+    rumours: draft.rumours,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -9810,6 +9847,65 @@ function warNews(
  * и половину отцовых обид он не наследует. Бездетный дом — событие для всех
  * соседей: на такой трон найдётся кому заявить право.
  */
+/**
+ * Соглядатаи за прошедшие сутки (этап 82, С4 и С6).
+ *
+ * Свои люди едят жалованье и однажды попадаются: чем дольше человек сидит, тем
+ * вернее его возьмут. Взятого не спасают — за него отвечает тот, кто его послал:
+ * отношение, имя, а иногда и война.
+ */
+function tickSpies(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  const wages = spyWages(draft) * days
+  if (wages > 0) addMoney(draft, -Math.round(wages))
+
+  // Слух ходит и стихает сам.
+  const rumours = (draft.rumours ?? []).filter((one) => one.untilDay > day)
+  if (rumours.length !== (draft.rumours ?? []).length) draft.rumours = rumours
+
+  const mine = spiesOf(draft)
+  if (mine.length === 0) return
+  // Один бросок на всех: по броску на человека — это лишняя случайность там,
+  // где событие и так редкое.
+  let none = 1
+  for (const spy of mine) none *= (1 - catchChance(spy, day)) ** days
+  const [caught, afterRoll] = rollChance(draft.rng, 1 - none)
+  draft.rng = afterRoll
+  if (!caught) return
+  const [pick, afterPick] = nextInt(draft.rng, 0, mine.length - 1)
+  draft.rng = afterPick
+  const spy = mine[pick] ?? mine[0]
+  if (!spy) return
+  draft.spies = (draft.spies ?? []).map((one) =>
+    one.id === spy.id ? { ...one, caught: true } : one,
+  )
+  draft.politics = withRelation(draft.politics, PLAYER, spy.kingdomId, CAUGHT.relation)
+  shameOn(draft, 'broke')
+  notice(
+    draft,
+    `Твоего человека взяли в ${kingdomName(draft.base, spy.kingdomId)}. Об этом будут помнить.`,
+    'world',
+  )
+  const [war, afterWar] = rollChance(draft.rng, CAUGHT.war)
+  draft.rng = afterWar
+  if (war && !atWar(draft.politics, PLAYER, spy.kingdomId)) {
+    draft.politics = {
+      ...draft.politics,
+      wars: [
+        ...draft.politics.wars,
+        {
+          a: spy.kingdomId,
+          b: PLAYER,
+          since: day,
+          reason: 'соглядатай, взятый при дворе',
+        },
+      ],
+    }
+    notice(draft, `${kingdomName(draft.base, spy.kingdomId)} объявил тебе войну за это.`, 'war')
+  }
+}
+
 function tickSuccession(draft: Draft, days: number): void {
   if (days <= 0) return
   const day = dayOf(draft.time)
@@ -9868,8 +9964,11 @@ function tickTreaties(draft: Draft, days: number): void {
     (one) => one.secret !== undefined && one.secret.known !== true && one.brokenBy === undefined,
   )
   if (secrets.length === 0) return
+  // Чужие глаза при твоём дворе ускоряют утечку (этап 82, С5): чем больше
+  // корон следит за тобой, тем короче жизнь твоей тайны.
+  const eyes = leakFactor(watchers(draft.base, draft.base.world, day).length)
   let none = 1
-  for (const treaty of secrets) none *= (1 - leakChance(treaty, day)) ** days
+  for (const treaty of secrets) none *= (1 - leakChance(treaty, day) * eyes) ** days
   const [leaked, afterRoll] = rollChance(draft.rng, 1 - none)
   draft.rng = afterRoll
   if (!leaked) return
@@ -9906,6 +10005,116 @@ function treatyKindOf(errand: EmbassyErrand): TreatyKind | null {
   if (errand === 'passage') return 'passage'
   if (errand === 'mediation') return 'peace'
   return null
+}
+
+/**
+ * Завести соглядатая (этап 82, С1).
+ *
+ * Человек при дворе видит больше и стоит дороже; человек на торгу дешевле и
+ * незаметнее. Оба со временем видят больше — и со временем их вернее берут: это
+ * одна и та же причина.
+ */
+function plantSpy(state: GameState, kingdomId: string, seat: SpySeat): CommandResult {
+  if (!state.realm) return fail('requirements', 'Своих людей держит держава.')
+  if (!state.world.kingdoms[kingdomId]) return fail('unknownAction', 'Такой короны нет.')
+  if (spyIn(state, kingdomId)) return fail('invalid', 'Там уже сидит твой человек.')
+  const cost = spyCost(seat)
+  if (state.character.money < cost) return fail('noMoney', `Такого человека надо завести: ${cost}.`)
+
+  const draft = open(state)
+  addMoney(draft, -cost)
+  const day = dayOf(draft.time)
+  draft.spies = [
+    ...spiesOf(draft),
+    { id: `spy:${kingdomId}:${day}`, kingdomId, seat, sinceDay: day },
+  ]
+  advance(draft, hours(6))
+  notice(
+    draft,
+    `Свой человек ${seatDef(seat).label} ${kingdomName(state, kingdomId)}: ${cost} вперёд и ${seatDef(seat).wage} в сутки.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/** Отозвать: пока он не попался, его можно вернуть. */
+function recallSpy(state: GameState, kingdomId: string): CommandResult {
+  const spy = spyIn(state, kingdomId)
+  if (!spy) return fail('invalid', 'Там твоих людей нет.')
+  const draft = open(state)
+  draft.spies = spiesOf(draft).filter((one) => one.id !== spy.id)
+  advance(draft, hours(2))
+  notice(draft, `Твой человек из ${kingdomName(state, kingdomId)} отозван.`, 'world')
+  return close(draft)
+}
+
+/**
+ * Купить чужого советника (этап 82, С3).
+ *
+ * Цена считается от того, чего стоит его земля, и от того, насколько он верен:
+ * ропщущий продаётся вдвое дешевле верного. Купленный полгода говорит тебе то,
+ * что знает, — а верность его к своей короне падает.
+ */
+function bribeAdvisor(state: GameState, kingdomId: string, lordId: string): CommandResult {
+  if (!state.realm) return fail('requirements', 'Советников покупает держава.')
+  const day = dayOf(state.time)
+  const target = bribeTargets(state, state.world, kingdomId, day).find((one) => one.id === lordId)
+  if (!target) return fail('invalid', 'Этого человека не купишь.')
+  if (state.character.money < target.price) {
+    return fail('noMoney', `Он берёт ${target.price}, а у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -target.price)
+  draft.politics = {
+    ...draft.politics,
+    lords: draft.politics.lords.map((one) =>
+      one.id === lordId ? { ...one, loyalty: Math.max(0, one.loyalty - 18) } : one,
+    ),
+  }
+  // Купленный — это глаза при дворе, пусть и на срок: заводим его как своего.
+  if (!spyIn(draft, kingdomId)) {
+    draft.spies = [
+      ...spiesOf(draft),
+      { id: `spy:куплен:${lordId}:${day}`, kingdomId, seat: 'court', sinceDay: day },
+    ]
+  }
+  draft.lordDeeds = withLordDeed(draft.lordDeeds, lordId, 'gifted')
+  advance(draft, hours(8))
+  notice(draft, `${target.name} взял ${target.price}. «${target.says}»`, 'world')
+  return close(draft)
+}
+
+/**
+ * Пустить слух против соседа (этап 82, С6).
+ *
+ * Молва (этап 68) работает и на державу: слух портит чужое имя у всех прочих
+ * корон сразу. Дорого, медленно и без обратного хода: своё имя от этого тоже не
+ * выигрывает.
+ */
+function spreadRumour(state: GameState, kingdomId: string): CommandResult {
+  if (!state.realm) return fail('requirements', 'Слухи пускает держава.')
+  if (!state.world.kingdoms[kingdomId]) return fail('unknownAction', 'Такой короны нет.')
+  if ((state.rumours ?? []).some((one) => one.against === kingdomId)) {
+    return fail('invalid', 'Этот слух уже пущен и ещё ходит.')
+  }
+  if (state.character.money < RUMOUR.cost) return fail('noMoney', `Нужно ${RUMOUR.cost}.`)
+
+  const draft = open(state)
+  addMoney(draft, -RUMOUR.cost)
+  const day = dayOf(draft.time)
+  draft.rumours = [...(draft.rumours ?? []), { against: kingdomId, untilDay: day + RUMOUR.days }]
+  for (const id of Object.keys(state.world.kingdoms)) {
+    if (id === kingdomId) continue
+    draft.politics = withRelation(draft.politics, id, kingdomId, RUMOUR.spoils)
+  }
+  advance(draft, hours(6))
+  notice(
+    draft,
+    `О ${kingdomName(state, kingdomId)} заговорили дурное. Слух пойдёт ${RUMOUR.days} суток.`,
+    'world',
+  )
+  return close(draft)
 }
 
 /**
