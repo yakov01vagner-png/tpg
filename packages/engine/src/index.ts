@@ -8,6 +8,7 @@
  */
 export * from './attributes'
 export * from './biography'
+export * from './chronicle'
 export * from './character'
 export * from './commands'
 export * from './content'

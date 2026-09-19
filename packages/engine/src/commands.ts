@@ -51,6 +51,7 @@ import {
   fatigueFactor,
   skillLevel,
 } from './character'
+import { type Generation, type Marks, closeGeneration, withMark } from './chronicle'
 import type { CompanionRole } from './companion'
 import type { Companion } from './companion'
 import {
@@ -5427,6 +5428,9 @@ export function companionsAt(
  * скажет слово, кто-то уйдёт — и об этом будет строка в летописи.
  */
 function seeDeed(draft: Draft, deed: DeedId): void {
+  // Карта памяти (этап 69, И5): место, где ты сделал что-то заметное,
+  // перестаёт быть точкой на дороге.
+  draft.marks = withMark(draft.marks, draft.locationId)
   // Пять слав вместо одной (этап 68, Ф3): круги считают то же дело по-своему.
   draft.fame = withDeed(draft.fame, deed)
   // И позор перекрывается делом того же круга, а не деньгами (Ф6).
@@ -6599,9 +6603,28 @@ function retire(state: GameState): CommandResult {
       },
     }
   }
+  // Летопись рода (этап 69, И4): прежде чем имя перейдёт, колено закрывают —
+  // чем он был, что успел и под каким прозвищем его запомнили.
+  draft.house = [
+    ...draft.house,
+    closeGeneration(
+      state,
+      state.character.bornDay,
+      day,
+      holdingsOf(draft.settlements, PLAYER).length,
+    ),
+  ]
   // Слава не наследуется целиком: сына знают по отцу вполовину.
   draft.renown = Math.floor(draft.renown / 2)
-  notice(draft, `Ты отошёл от дел. Теперь ты ${heir.name}, и всё, чему тебя учили, — при тебе.`)
+  // И слава по кругам тоже: круги помнят род, а не человека (этап 68).
+  const halved: Record<string, number> = {}
+  for (const [circle, value] of Object.entries(draft.fame)) halved[circle] = Math.round(value / 2)
+  draft.fame = halved
+  notice(
+    draft,
+    `Ты отошёл от дел. Теперь ты ${heir.name}, и всё, чему тебя учили, — при тебе. В летописи рода на одно колено больше.`,
+    'people',
+  )
   return close(draft)
 }
 
@@ -8077,6 +8100,8 @@ interface Draft {
   renown: number
   fame: Fame
   shames: readonly Shame[]
+  house: readonly Generation[]
+  marks: Marks
   reputation: Reputation
   realm: { name: string; sinceDay?: number } | null
   quests: readonly Quest[]
@@ -8145,6 +8170,8 @@ function open(state: GameState): Draft {
     renown: state.renown,
     fame: state.fame ?? {},
     shames: state.shames ?? [],
+    house: state.house ?? [],
+    marks: state.marks ?? {},
     reputation: state.reputation,
     realm: state.realm,
     quests: state.quests,
@@ -8468,6 +8495,8 @@ function close(draft: Draft): CommandResult {
     renown: draft.renown,
     fame: draft.fame,
     shames: draft.shames,
+    house: draft.house,
+    marks: draft.marks,
     reputation: draft.reputation,
     realm: draft.realm,
     quests: draft.quests,

@@ -7,6 +7,7 @@ import type { Brotherhood } from './brotherhood'
 import type { Captive } from './captive'
 import type { ChainProgress } from './chain'
 import type { Character } from './character'
+import type { Generation, Marks } from './chronicle'
 import type { Companion } from './companion'
 import type { BuildingId } from './content/buildings'
 import { PLAIN_LAW } from './content/estate'
@@ -280,6 +281,13 @@ export interface GameState {
   readonly searchedSites: readonly string[]
   /** Игра кончена: герой погиб. Пермадэт редкий, но настоящий. */
   readonly over: boolean
+  /**
+   * Летопись рода и карта памяти (этап 69). Колена рода пишутся, когда имя
+   * переходит наследнику; места отмечаются тем, что в них было.
+   * Необязательно — сейвы до 0.6 этого не знают.
+   */
+  readonly house?: readonly Generation[]
+  readonly marks?: Marks
   readonly log: readonly LogEntry[]
 }
 
@@ -341,6 +349,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     renown: 0,
     fame: {},
     shames: [],
+    house: [],
+    marks: {},
     reputation: NO_REPUTATION,
     realm: null,
     quests: [],

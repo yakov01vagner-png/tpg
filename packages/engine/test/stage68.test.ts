@@ -179,7 +179,7 @@ describe('Ф6: позор', () => {
     // И чужим делом не перекрыть: купеческое купеческим.
     expect(coverShames(shames, 'feedHungry').shames).toHaveLength(1)
     // Позор виден кругу, перед которым он висит.
-    const state = { shames } as GameState
+    const state: Pick<GameState, 'shames'> = { shames }
     expect(shameBefore(state, 'warriors')?.id).toBe('fled')
     expect(shameBefore(state, 'traders')).toBeNull()
   })
