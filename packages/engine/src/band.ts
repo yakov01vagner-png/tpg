@@ -14,6 +14,16 @@ import type { Season } from './time'
 import { seasonOf } from './time'
 import type { Lord, Politics } from './war'
 import { atWar, isRebel } from './war'
+import {
+  aimSideOf,
+  avoidsBattle,
+  fistReady,
+  pickTarget,
+  rallyPoint,
+  relieveTarget,
+  retreats,
+  tooFewAlone,
+} from './warmind'
 import { neighbourSettlements, roadsFrom } from './world/queries'
 import { fordShut, isFlood } from './world/rivers'
 import type { Terrain, World } from './world/types'
@@ -442,6 +452,14 @@ function chooseGoal(
   )
   if (threatened) return [{ type: 'defend', targetId: threatened.locationId }, rng]
 
+  // Выручка своим (этап 90, Во4): осаждённое место своей короны важнее любой
+  // добычи — пока его держат, его можно спасти.
+  const relieve = relieveTarget(world, politics, settlements, bands, band)
+  if (relieve) return [{ type: 'defend', targetId: relieve }, rng]
+
+  // Отступление (Во2): тот, перед кем стоит вдвое большее войско, уходит.
+  if (retreats(politics, bands, band)) return [goHome(settlements, band), rng]
+
   // Мятеж унимают в первую очередь: иначе мятежник сидит на земле вечно.
   if (crownOf) {
     const rebels = politics.lords.filter(
@@ -470,7 +488,12 @@ function chooseGoal(
   const want = plan?.want ?? 'war'
   const best = rankTargets(settlements, enemies, want).slice(0, 2)
   const [index, afterIndex] = nextInt(rng, 0, Math.max(0, best.length - 1))
-  const target = best[index] ?? best[0] ?? enemies[0]
+  // Цель кампании вместо ближайшего села (этап 90, Во3 и Во5): земля той
+  // короны, с которой идёт война, весит больше; слабое место — больше
+  // крепкого. Бросок остаётся тем же: он выбирает между двумя лучшими,
+  // когда кампания не подсказывает ничего.
+  const aimed = pickTarget(settlements, politics, enemies, reach, aimSideOf(politics, crownOf))
+  const target = aimed ?? best[index] ?? best[0] ?? enemies[0]
   // Бросок тратится всегда: без этого случайность мира сдвинулась бы от одного
   // сытого года на чужой земле.
   const [wantsSiege, afterRoll] = rollChance(
@@ -478,6 +501,18 @@ function chooseGoal(
     (bandSize(band) > 24 ? 0.45 : 0.12) * siegeTaste(want),
   )
   if (!target || (plan && !marchesOut(want))) return [{ type: 'muster' }, afterRoll]
+
+  // Сбор сил (Во1): горстью в поход не выходят. Дружина идёт к месту сбора
+  // своей короны и ждёт там, пока не наберётся кулак.
+  if (tooFewAlone(band) && !fistReady(bands, band)) {
+    const rally = rallyPoint(world, politics, settlements, bands, band)
+    if (rally && rally !== band.locationId) return [{ type: 'home', targetId: rally }, afterRoll]
+    if (rally === band.locationId) return [{ type: 'muster' }, afterRoll]
+  }
+
+  // Боя, который не выиграть, не принимают (Во2).
+  if (avoidsBattle(politics, bands, band, target)) return [{ type: 'muster' }, afterRoll]
+
   return [{ type: wantsSiege ? 'siege' : 'raid', targetId: target }, afterRoll]
 }
 
