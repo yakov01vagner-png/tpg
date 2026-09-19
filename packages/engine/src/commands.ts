@@ -188,6 +188,7 @@ import { NAVY_WORDS, WARSHIP_DEFS, type WarshipKind } from './content/navy'
 import type { AnswerId } from './content/overture'
 import type { MediatorKind, PeaceTerm } from './content/peace'
 import type { QuarterId } from './content/quarters'
+import type { ConcessionId } from './content/revolt'
 import {
   GUARD_HIRE,
   GUARD_WAGE,
@@ -556,6 +557,18 @@ import {
 } from './realm'
 import { isShunned, lordRep, placeRep, priceFactor, withLordRep, withPlaceRep } from './reputation'
 import type { Reputation } from './reputation'
+import {
+  REVOLT,
+  bribePriceFor,
+  concessionsFor,
+  courtMood,
+  grudgeScore,
+  grudgesOf,
+  lessonWords,
+  mercyGain,
+  plotAgainst,
+  reprisalCost,
+} from './revolt'
 import type { Rng } from './rng'
 import { nextFloat, nextInt, rollChance } from './rng'
 import {
@@ -1030,6 +1043,9 @@ export type Command =
   | { readonly type: 'openTalks'; readonly against: string; readonly mediator?: MediatorKind }
   | { readonly type: 'tableTerms'; readonly terms: readonly PeaceTerm[] }
   | { readonly type: 'endTalks' }
+  /** Мятеж (этап 94): унять уступкой или силой. */
+  | { readonly type: 'appeasePlot'; readonly concession: ConcessionId }
+  | { readonly type: 'crushPlot' }
   /** Наследство (этап 93): поставить закон. */
   | { readonly type: 'setHeirLaw'; readonly law: LawId }
   /** Чужие послы (этап 91): принять, отказать, торговаться. */
@@ -1520,6 +1536,10 @@ export function applyCommand(
       return answerOverture(state, command.id, command.answer)
     case 'setHeirLaw':
       return setHeirLaw(state, command.law)
+    case 'appeasePlot':
+      return appeasePlot(state, command.concession)
+    case 'crushPlot':
+      return crushPlot(state)
     case 'askLetter':
       return askLetter(state, command.against)
     case 'callCongress':
@@ -9833,6 +9853,8 @@ function close(draft: Draft): CommandResult {
     // Свои люди возвращаются из поездок (этап 75, Д5): с серебром, с людьми,
     // с чужим словом или с тем, что на дорогах стало тише.
     returnOfficers(draft)
+    // Твоя знать говорит между собой, и разговоры зреют (этап 94).
+    tickRevolt(draft, daysPassed)
     // Верность своих лордов ходит сама (этап 74, В4): подать, суд, война, позор
     // и соседи — всё, что вассал видит у себя во дворе.
     tickVassals(draft, daysPassed)
@@ -11807,6 +11829,144 @@ function tickPeace(draft: Draft, days: number): void {
 const OVERTURE_BEAT = 15
 const COMPANY_BEAT = 10
 const NAVY_BEAT = 5
+
+/**
+ * Унять заговор уступкой (этап 94, Мя4).
+ *
+ * Вольность, земля, голова советника или серебро: каждая уступка платится
+ * своим и унимает по-своему. Дешёвая уступка унимает ненадолго — недовольство
+ * никуда не девается, оно только отступает.
+ */
+function appeasePlot(state: GameState, concession: ConcessionId): CommandResult {
+  const day = dayOf(state.time)
+  const plot = plotAgainst(state, state.world, day)
+  if (!plot) return fail('invalid', 'Унимать некого: твоя знать спокойна.')
+  const offer = concessionsFor(state, plot).find((one) => one.id === concession)
+  if (!offer) return fail('invalid', 'Такой уступки не бывает.')
+  if (!offer.can) return fail('requirements', offer.why)
+
+  const draft = open(state)
+  advance(draft, hours(10))
+  const price = bribePriceFor(plot)
+  if (concession === 'gold') {
+    if (draft.character.money < price) {
+      return fail('noMoney', `Просят ${price}, у тебя ${draft.character.money}.`)
+    }
+    addMoney(draft, -price)
+  }
+  if (concession === 'liberty') {
+    // Грамота на суд и подать: то же, что жалуют миром (этап 76, З2).
+    draft.charters = {
+      ...draft.charters,
+      [plot.leaderId]: { kind: 'liberty' as const, sinceDay: day, paid: 0 },
+    }
+  }
+  if (concession === 'land') {
+    // Лен из своей руки: самое дорогое, что можно дать, и самое верное.
+    const mine = [...holdingsOf(draft.settlements, PLAYER)].sort(
+      (a, b) => a.population - b.population,
+    )[0]
+    if (!mine) return fail('requirements', 'Земли, которую можно пожаловать, нет.')
+    draft.settlements = {
+      ...draft.settlements,
+      [mine.locationId]: { ...mine, owner: plot.leaderId },
+    }
+  }
+  if (concession === 'head') {
+    // Виноват не ты, а тот, кто советовал: советника выдают знати.
+    const seats = Object.entries(draft.offices ?? {}).filter(([, one]) => one !== undefined)
+    const first = seats[0]
+    if (!first) return fail('requirements', 'Советников у тебя нет.')
+    const offices = { ...(draft.offices ?? {}) }
+    delete offices[first[0] as keyof typeof offices]
+    draft.offices = offices
+    // Своим это тоже видно: при дворе такое помнят.
+    draft.fame = { ...draft.fame, nobles: Math.round((draft.fame.nobles ?? 0) - 4) }
+  }
+  // Уступка унимает: верность заговорщиков поднимается на её вес.
+  for (const id of plot.members) shiftVassals(draft, offer.calms / 3, id)
+  notice(
+    draft,
+    `${offer.label}: ${offer.costs}. ${plot.leaderName} доволен — пока. Унято на ${offer.calms} счёта недовольства.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Унять силой (этап 94, Мя5 и Мя6).
+ *
+ * Мятеж можно кончить и так: зачинщик теряет землю и присягу, а ты — славу
+ * среди знати и доверие остальных вассалов. Чужие дворы это тоже видят.
+ */
+function crushPlot(state: GameState): CommandResult {
+  const day = dayOf(state.time)
+  const plot = plotAgainst(state, state.world, day)
+  if (!plot) return fail('invalid', 'Унимать некого: твоя знать спокойна.')
+  const leader = lordById(state.politics, plot.leaderId)
+  if (!leader) return fail('invalid', 'Зачинщика уже нет.')
+
+  const draft = open(state)
+  advance(draft, hours(12))
+  const cost = reprisalCost(draft.base, plot)
+  // Земля зачинщика отходит тебе, присяга кончается.
+  let places = draft.settlements
+  for (const one of Object.values(places)) {
+    if (one.owner !== plot.leaderId) continue
+    places = { ...places, [one.locationId]: { ...one, owner: PLAYER } }
+  }
+  draft.settlements = places
+  draft.politics = {
+    ...draft.politics,
+    lords: draft.politics.lords.filter((one) => one.id !== plot.leaderId),
+  }
+  const oaths = { ...draft.oaths }
+  delete oaths[plot.leaderId]
+  draft.oaths = oaths
+  // Остальные боятся — и верят меньше.
+  shiftVassals(draft, cost.fear, null)
+  draft.fame = { ...draft.fame, nobles: Math.round((draft.fame.nobles ?? 0) + cost.fame) }
+  notice(draft, `${cost.says} ${lessonWords(true)}`, 'world')
+  return close(draft)
+}
+
+/**
+ * Сутки твоей знати (этап 94, Мя2 и Мя3).
+ *
+ * Недовольство считается не каждый день — раз в декаду: считать заговор чаще,
+ * чем он зреет, незачем. Созревший заговор становится мятежом сам: зачинщик
+ * уходит из присяги и уводит с собой тех, кто был с ним.
+ */
+function tickRevolt(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % REVOLT_BEAT !== 0) return
+  const plot = plotAgainst(draft.base, draft.base.world, day)
+  if (!plot) return
+  if (plot.ripeness < REVOLT.riseLine) {
+    // Пока только разговоры — но о них можно узнать заранее.
+    if (plot.seen && plot.seenBy) {
+      notice(draft, `${plot.seenBy} доносят: ${plot.says}`, 'world')
+    }
+    return
+  }
+  // Мятеж: зачинщик и те, кто с ним, выходят из присяги.
+  const rising = new Set(plot.members)
+  draft.politics = {
+    ...draft.politics,
+    lords: draft.politics.lords.map((lord) =>
+      rising.has(lord.id) ? { ...lord, kingdomId: null, loyalty: 0 } : lord,
+    ),
+  }
+  notice(
+    draft,
+    `${plot.says} Из присяги вышли ${rising.size}; выжидают ${plot.waiting.length}.`,
+    'war',
+  )
+}
+
+/** Как часто считают настроение своей знати. */
+const REVOLT_BEAT = 10
 
 /**
  * Поставить закон о наследстве (этап 93, Сл2).
