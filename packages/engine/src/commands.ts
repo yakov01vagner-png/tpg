@@ -65,6 +65,7 @@ import { FEAST_DOINGS, PILGRIM_DAYS, PILGRIM_PIETY, RITES_BY_ID } from './conten
 import { EXCOMMUNICATED } from './content/faith'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
+import { KIN_ASK, KIN_GIFT, UPBRINGING_MINUTES } from './content/home'
 import { TEMPER_LINES } from './content/lines'
 import { ROWS_BY_ID } from './content/merchants'
 import type { QuarterId } from './content/quarters'
@@ -126,6 +127,18 @@ import {
   isOwnedByPlayer,
   takeLand,
 } from './holding'
+import type { Home } from './home'
+import {
+  atHome,
+  bentWords,
+  canRetire,
+  canTeachChild,
+  childBent,
+  homeComfort,
+  homeDef,
+  homesAt,
+  kinOf,
+} from './home'
 import type { Journey } from './journey'
 import { journeyLeft, legHoursFor, paceOf } from './journey'
 import type { Knowledge } from './knowledge'
@@ -339,6 +352,13 @@ export type Command =
   | { readonly type: 'readBook'; readonly bookId: string }
   | { readonly type: 'debate' }
   | { readonly type: 'takeStudent' }
+  /** Дом и семья (этап 56). */
+  | { readonly type: 'buyHome'; readonly kind: string }
+  | { readonly type: 'storeAtHome'; readonly good: GoodId; readonly amount: number }
+  | { readonly type: 'takeFromHome'; readonly good: GoodId; readonly amount: number }
+  | { readonly type: 'teachChild'; readonly childName: string }
+  | { readonly type: 'helpKin'; readonly kinId: string }
+  | { readonly type: 'retire' }
   /** Уйти морем: своим судном, нанятым или попутным (этап 35). */
   | { readonly type: 'sail'; readonly toLocationId: string; readonly manner: Passage }
   /** Купить судно в порту, починить своё, продать своё. */
@@ -598,6 +618,18 @@ export function applyCommand(
       return debate(state)
     case 'takeStudent':
       return takeStudent(state)
+    case 'buyHome':
+      return buyHome(state, command.kind)
+    case 'storeAtHome':
+      return storeAtHome(state, command.good, command.amount)
+    case 'takeFromHome':
+      return takeFromHome(state, command.good, command.amount)
+    case 'teachChild':
+      return teachChild(state, command.childName)
+    case 'helpKin':
+      return helpKin(state, command.kinId)
+    case 'retire':
+      return retire(state)
     case 'travel':
       return travel(state, command.toLocationId)
     case 'sail':
@@ -3864,6 +3896,174 @@ export function tradeSkillAt(state: GameState): number {
  * Уступка держится до конца дня и только у этого купца; наглость он запомнит.
  * Торгуются раз в день: приставать к человеку каждый час — не торг.
  */
+/** Купить дом (этап 56, Д3): место, куда возвращаются. */
+function buyHome(state: GameState, kind: string): CommandResult {
+  const def = homeDef(kind)
+  if (!def) return fail('unknownAction', 'Такого дома не бывает.')
+  if (!homesAt(state.world, state.settlements, state.locationId).some((one) => one.id === kind)) {
+    return fail('unavailableHere', 'Здесь такого дома не купишь.')
+  }
+  if (state.home) {
+    return fail(
+      'invalid',
+      `У тебя уже есть дом в ${state.world.locations[state.home.locationId]?.name ?? 'другом месте'}.`,
+    )
+  }
+  if (state.character.money < def.price) {
+    return fail('noMoney', `За дом просят ${def.price}, а у тебя ${state.character.money}.`)
+  }
+  const draft = open(state)
+  addMoney(draft, -def.price)
+  advance(draft, hours(4))
+  draft.home = { kind, locationId: state.locationId, sinceDay: dayOf(state.time), stash: {} }
+  notice(draft, `${def.label} теперь твой. ${def.about}`)
+  return close(draft)
+}
+
+/** Оставить дома: поклажу, которую не носят с собой. */
+function storeAtHome(state: GameState, good: GoodId, amount: number): CommandResult {
+  const problem = checkTradeRequest(good, amount)
+  if (problem) return problem
+  if (!atHome(state)) return fail('unavailableHere', 'Складывать надо дома, а ты не дома.')
+  const def = homeDef(state.home?.kind ?? '')
+  if (!state.home || !def) return fail('invalid', 'Дома нет.')
+  if (carried(state.character, good) < amount) {
+    return fail('noGoods', `У тебя нет столько: ${GOODS[good].label.toLowerCase()}.`)
+  }
+  const stored = Object.values(state.home.stash).reduce((sum, one) => sum + one, 0)
+  if (stored + amount > def.storage) {
+    return fail('noRoom', `В доме больше не помещается: предел ${def.storage}.`)
+  }
+  const draft = open(state)
+  advance(draft, 20)
+  addGoods(draft, good, -amount)
+  draft.home = {
+    ...state.home,
+    stash: { ...state.home.stash, [good]: (state.home.stash[good] ?? 0) + amount },
+  }
+  notice(draft, `Оставлено дома: ${GOODS[good].label.toLowerCase()}, ${amount}.`)
+  return close(draft)
+}
+
+function takeFromHome(state: GameState, good: GoodId, amount: number): CommandResult {
+  const problem = checkTradeRequest(good, amount)
+  if (problem) return problem
+  if (!atHome(state) || !state.home) return fail('unavailableHere', 'Брать надо дома.')
+  if ((state.home.stash[good] ?? 0) < amount) {
+    return fail('noGoods', 'Дома столько нет.')
+  }
+  const weight = GOODS[good].weight * amount
+  const capacity = partyCapacity(state.character, state.party) + horseCarry(state.character)
+  if (carriedWeight(state.character) + weight > capacity) {
+    return fail('overloaded', 'Столько не унести.')
+  }
+  const draft = open(state)
+  advance(draft, 20)
+  addGoods(draft, good, amount)
+  draft.home = {
+    ...state.home,
+    stash: { ...state.home.stash, [good]: (state.home.stash[good] ?? 0) - amount },
+  }
+  notice(draft, `Взято из дома: ${GOODS[good].label.toLowerCase()}, ${amount}.`)
+  return close(draft)
+}
+
+/**
+ * Учить ребёнка (этап 56, Д2).
+ *
+ * Вложенное в ребёнка — единственное, что наследник получает сверх имени: его
+ * умения считаются по тому, чему ты успел научить, а не по твоему листу.
+ */
+function teachChild(state: GameState, childName: string): CommandResult {
+  const child = state.character.family.children.find((one) => one.name === childName)
+  if (!child) return fail('unknownAction', 'Такого ребёнка у тебя нет.')
+  if (!atHome(state)) return fail('unavailableHere', 'Детей учат дома, а не в дороге.')
+  const day = dayOf(state.time)
+  const able = canTeachChild(state, child, day)
+  if (!able.can) return fail('requirements', able.why)
+
+  const draft = open(state)
+  advance(draft, UPBRINGING_MINUTES)
+  addFatigue(draft, 10)
+  const now = (draft.upbringing[childName] ?? 0) + 1
+  draft.upbringing = { ...draft.upbringing, [childName]: now }
+  notice(draft, `${childName} учится у тебя: ${bentWords(child)} (вложено ${now}).`)
+  return close(draft)
+}
+
+/**
+ * Родня (этап 56, Д5).
+ *
+ * Свои просят и помогают. Отказать можно — но род это помнит, а помощь
+ * возвращается тогда, когда её не ждёшь.
+ */
+function helpKin(state: GameState, kinId: string): CommandResult {
+  const day = dayOf(state.time)
+  const kin = kinOf(state.character.family, day).find((one) => one.id === kinId)
+  if (!kin) return fail('unknownAction', 'Такой родни у тебя нет.')
+  const draft = open(state)
+  advance(draft, hours(1))
+  if (kin.asks) {
+    if (state.character.money < KIN_ASK) {
+      return fail('noMoney', `${kin.name} просит ${KIN_ASK}, а у тебя ${state.character.money}.`)
+    }
+    addMoney(draft, -KIN_ASK)
+    draft.renown += 1
+    notice(draft, `${kin.name} получил помощь. Род это запомнит.`)
+    return close(draft)
+  }
+  addMoney(draft, KIN_GIFT)
+  notice(draft, `${kin.name} прислал ${KIN_GIFT}: у своих так заведено.`)
+  return close(draft)
+}
+
+/**
+ * Уйти на покой (этап 56, Д6).
+ *
+ * После пятидесяти пяти это не поражение, а выбор: передать имя и землю
+ * взрослому наследнику и дожить своё. Играют дальше за него.
+ */
+function retire(state: GameState): CommandResult {
+  const day = dayOf(state.time)
+  if (!canRetire(state, day)) {
+    return fail('requirements', 'На покой уходят в летах и когда есть кому передать.')
+  }
+  const heir = heirOf(state.character.family, day)
+  if (!heir) return fail('requirements', 'Наследник ещё не вырос.')
+
+  const draft = open(state)
+  advance(draft, hours(8))
+  const taught = draft.upbringing[heir.name] ?? 0
+  draft.character = heirCharacter(state.character, heir, day)
+  // Чему успел научить — то и осталось: воспитание прибавляет умений сверх
+  // общей трети (этап 56, Д2).
+  if (taught > 0) {
+    const bent = childBent(heir)
+    const skill: SkillId =
+      bent === 'sword'
+        ? 'heavyWeapons'
+        : bent === 'book'
+          ? 'scholarship'
+          : bent === 'coin'
+            ? 'trade'
+            : bent === 'land'
+              ? 'survival'
+              : 'concentration'
+    const progress = draft.character.skills[skill]
+    draft.character = {
+      ...draft.character,
+      skills: {
+        ...draft.character.skills,
+        [skill]: { ...progress, level: progress.level + taught },
+      },
+    }
+  }
+  // Слава не наследуется целиком: сына знают по отцу вполовину.
+  draft.renown = Math.floor(draft.renown / 2)
+  notice(draft, `Ты отошёл от дел. Теперь ты ${heir.name}, и всё, чему тебя учили, — при тебе.`)
+  return close(draft)
+}
+
 /** Купить книгу (этап 55, Н6): в школе — свои, в большом городе — мирские. */
 function buyBook(state: GameState, bookId: string): CommandResult {
   const book = bookById(bookId)
@@ -5144,9 +5344,16 @@ function sleep(state: GameState): CommandResult {
   const wakeUp = nextTimeOfDay(state.time, 6)
   const slept = wakeUp - state.time
   const draft = open(state)
-  notice(draft, 'Сон до утра.')
+  // Дома спится лучше (этап 56): своя постель, своя дверь и никто не будит.
+  const comfort = homeComfort(state)
+  notice(draft, comfort > 0 ? 'Сон в своём доме до утра.' : 'Сон до утра.')
   advance(draft, slept)
-  addFatigue(draft, (-SLEEP_RECOVERY_PER_HOUR * slept) / MINUTES_PER_HOUR)
+  addFatigue(draft, (-SLEEP_RECOVERY_PER_HOUR * (1 + comfort) * slept) / MINUTES_PER_HOUR)
+  // И раны дома заживают скорее: под крышей, на своей еде.
+  const wound = draft.character.wound
+  if (comfort > 0 && wound && wound.daysLeft > 1) {
+    draft.character = { ...draft.character, wound: { ...wound, daysLeft: wound.daysLeft - 1 } }
+  }
   return close(draft)
 }
 
@@ -5276,6 +5483,8 @@ interface Draft {
   talked: Readonly<Record<string, number>>
   fallen: readonly { id: string; name: string; day: number; locationId: string }[]
   books: Readonly<Record<string, { read: boolean; days: number }>>
+  home: Home | null
+  upbringing: Readonly<Record<string, number>>
   student: { id: string; name: string; since: number; learned: number } | null
   battle: Battle | null
   politics: Politics
@@ -5324,6 +5533,8 @@ function open(state: GameState): Draft {
     talked: state.talked ?? {},
     fallen: state.fallen ?? [],
     books: state.books ?? {},
+    home: state.home ?? null,
+    upbringing: state.upbringing ?? {},
     student: state.student ?? null,
     battle: state.battle,
     politics: state.politics,
@@ -5539,6 +5750,8 @@ function close(draft: Draft): CommandResult {
     talked: draft.talked,
     fallen: draft.fallen,
     books: draft.books,
+    home: draft.home,
+    upbringing: draft.upbringing,
     student: draft.student,
     ...(draft.pilgrimDay !== undefined ? { pilgrimDay: draft.pilgrimDay } : {}),
     battle: draft.battle,

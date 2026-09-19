@@ -9,11 +9,16 @@ import {
   LIFE,
   MAGIC_RANKS,
   PLAYER,
+  SPOUSE_TEMPERS,
   type Settlement,
   TROOPS,
   TROOP_IDS,
   VASSAL_SHARE,
+  ageOf,
+  atHome,
+  bentWords,
   canApply,
+  canRetire,
   cechAt,
   courtCase,
   dailyTax,
@@ -25,14 +30,20 @@ import {
   garrisonSize,
   garrisonWages,
   holdingsOf,
+  homeDef,
+  homesAt,
   isOwnedByPlayer,
   isSite,
+  kinOf,
   kingdomOf,
   lordById,
   loyaltyWord,
   ownOrder,
   rankLabel,
   rankOfShifts,
+  spouseSays,
+  spouseTemper,
+  upbringingOf,
   vassalsOf,
   warsOf,
 } from '@tpg/engine'
@@ -81,6 +92,8 @@ export function OwnSheet({ game }: { game: GameState }) {
       <Affairs game={game} />
 
       <CraftSection game={game} />
+
+      <HomeSection game={game} />
 
       <Section title={settlement && isOwnedByPlayer(settlement) ? 'Твоя земля' : 'Это место'}>
         {!settlement || !here ? <Empty text="Здесь нечем владеть." /> : null}
@@ -545,4 +558,76 @@ function CraftSection({ game }: { game: GameState }) {
 function reasonFor(game: GameState, command: Command): string | undefined {
   const check = canApply(game, command)
   return check.ok ? undefined : check.message
+}
+
+/**
+ * Дом и семья (этап 56): свой дом, супруг с его мнением, дети и родня.
+ */
+function HomeSection({ game }: { game: GameState }) {
+  const day = dayOf(game.time)
+  const offered = homesAt(game.world, game.settlements, game.locationId)
+  const family = game.character.family
+  const kin = kinOf(family, day)
+  if (!game.home && offered.length === 0 && !family.spouse && kin.length === 0) return null
+  const def = game.home ? homeDef(game.home.kind) : null
+  return (
+    <Section
+      title="Дом"
+      aside={game.home ? (atHome(game) ? 'ты дома' : 'в другом месте') : undefined}
+    >
+      {def && game.home ? (
+        <Row
+          title={def.label}
+          subtitle={`${game.world.locations[game.home.locationId]?.name ?? ''} · сложено ${Object.values(game.home.stash).reduce((sum, one) => sum + one, 0)} из ${def.storage}`}
+        />
+      ) : null}
+      {!game.home
+        ? offered.map((home) => (
+            <Card
+              key={home.id}
+              title={home.label}
+              description={home.about}
+              meta={`${home.price}`}
+              reason={reasonFor(game, { type: 'buyHome', kind: home.id })}
+              onPress={() => dispatch({ type: 'buyHome', kind: home.id })}
+            />
+          ))
+        : null}
+      {family.spouse ? (
+        <Card
+          title={family.spouse.name}
+          description={`«${spouseSays(game)}»`}
+          meta={SPOUSE_TEMPERS[spouseTemper(family) ?? 'steady'].label}
+        />
+      ) : null}
+      {family.children.map((child) => (
+        <Card
+          key={child.name}
+          title={`${child.name}, ${ageOf(child.bornDay, day)} лет`}
+          description={bentWords(child)}
+          meta={`вложено ${upbringingOf(game, child)}`}
+          reason={reasonFor(game, { type: 'teachChild', childName: child.name })}
+          onPress={() => dispatch({ type: 'teachChild', childName: child.name })}
+        />
+      ))}
+      {kin.map((one) => (
+        <Card
+          key={one.id}
+          title={one.name}
+          description={one.asks ? 'Просит помощи: у своих так заведено.' : 'Предлагает помощь.'}
+          reason={reasonFor(game, { type: 'helpKin', kinId: one.id })}
+          onPress={() => dispatch({ type: 'helpKin', kinId: one.id })}
+        />
+      ))}
+      {canRetire(game, day) ? (
+        <Card
+          title="Уйти на покой"
+          description="Передать имя и землю взрослому наследнику и дожить своё. Играть будешь за него."
+          reason={reasonFor(game, { type: 'retire' })}
+          onPress={() => dispatch({ type: 'retire' })}
+          tone="gold"
+        />
+      ) : null}
+    </Section>
+  )
 }

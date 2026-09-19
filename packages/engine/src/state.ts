@@ -11,6 +11,7 @@ import { createSettlements } from './economy'
 import type { Enterprise } from './enterprise'
 import type { GameEvent, LogKind } from './events'
 import { describeEvent, kindOf } from './events'
+import type { Home } from './home'
 import type { Journey } from './journey'
 import type { Knowledge } from './knowledge'
 import { startKnowledge } from './knowledge'
@@ -140,6 +141,10 @@ export interface GameState {
    */
   readonly books?: Readonly<Record<string, { readonly read: boolean; readonly days: number }>>
   /** Свой ученик (этап 55, Н5): кто идёт следом и с какого дня. */
+  /** Свой дом (этап 56): где он, какой и что в нём оставлено. */
+  readonly home?: Home | null
+  /** Что вложено в детей (этап 56): по имени ребёнка. */
+  readonly upbringing?: Readonly<Record<string, number>>
   readonly student?: {
     readonly id: string
     readonly name: string
@@ -225,6 +230,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     talked: {},
     fallen: [],
     books: {},
+    home: null,
+    upbringing: {},
     student: null,
     party: EMPTY_PARTY,
     ship: null,
