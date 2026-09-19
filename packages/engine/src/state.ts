@@ -43,6 +43,7 @@ import type { Ship } from './ship'
 import type { Siege } from './siege'
 import type { GameTime } from './time'
 import { WORLD_START } from './time'
+import type { Oath } from './vassal'
 import type { Politics } from './war'
 import { createPolitics } from './war'
 import type { WildMemory } from './wild'
@@ -255,6 +256,12 @@ export interface GameState {
    * партии. Необязательно — сейвы до 0.6 этого не знают.
    */
   readonly lordDeeds?: Readonly<Record<string, readonly LordDeedId[]>>
+  /**
+   * Присяги своих вассалов (этап 74): чем каждый платит, что ему оставлено и
+   * сколько людей он обязан привести. Сам вассал — обычный лорд с
+   * `kingdomId === PLAYER`; в состоянии лежит только договор с ним.
+   */
+  readonly oaths?: Readonly<Record<string, Oath>>
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -341,6 +348,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     ailment: null,
     maims: [],
     lordDeeds: {},
+    oaths: {},
     factions: {},
     spellcraft: {},
     weather: [],

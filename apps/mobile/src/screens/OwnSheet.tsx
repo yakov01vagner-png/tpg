@@ -27,13 +27,13 @@ import {
   TOUR_HOURS,
   TROOPS,
   TROOP_IDS,
-  VASSAL_SHARE,
   ageOf,
   arrearsFactor,
   atHome,
   bentWords,
   bribePrice,
   brokenList,
+  callWord,
   canApply,
   canRetire,
   caravanMaster,
@@ -62,6 +62,9 @@ import {
   lawOf,
   lordById,
   loyaltyWord,
+  oathAsks,
+  oathOf,
+  oathWords,
   ownOrder,
   ownRoads,
   patrolCost,
@@ -75,6 +78,7 @@ import {
   spouseSays,
   spouseTemper,
   surrenderChance,
+  swearCandidates,
   travellersAt,
   upbringingOf,
   vassalsOf,
@@ -257,21 +261,60 @@ function Court({
   const holder = settlement ? lordById(game.politics, settlement.owner ?? '') : null
   const here = game.world.locations[game.locationId]
   const pending = courtCase(game)
+  // Кого можно взять под руку здесь и сейчас: безземельные и те, кто своей
+  // короне больше не верит (этап 74, В2).
+  const candidates = swearCandidates(game).slice(0, 3)
   return (
     <Section
       title="Двор"
       aside={vassals.length > 0 ? `вассалов ${vassals.length}` : 'без вассалов'}
     >
       {vassals.length === 0 ? (
-        <Dim>Под твоей рукой пока никого: лордов зовут в «Людях», когда они тебе верят.</Dim>
+        <Dim>
+          Под твоей рукой пока никого: лена и присяги просят у тех, кто без земли или не верит своей
+          короне.
+        </Dim>
+      ) : null}
+      {vassals.length > 0 ? (
+        <Card
+          title="Созвать по присяге"
+          description={vassals
+            .map((lord) => `${lord.name}: ${callWord(lord, oathOf(game, lord.id))}`)
+            .join('; ')}
+          meta="двое суток сбора; собранные люди встают в твой отряд"
+          reason={reasonFor({ type: 'summonVassals' })}
+          onPress={() => dispatch({ type: 'summonVassals' })}
+        />
+      ) : null}
+      {candidates.length > 0 && settlement && isOwnedByPlayer(settlement) && here ? (
+        <Card
+          title={`Дать ${here.name} в лен`}
+          description={candidates
+            .map((lord) => `${lord.title} ${lord.name} — ${oathAsks(lord)}`)
+            .join(' · ')}
+          meta="он поставит свои условия: чем платит, что оставит себе, скольких приведёт"
+          reason={reasonFor({
+            type: 'swearOath',
+            lordId: candidates[0]?.id ?? '',
+            locationId: game.locationId,
+          })}
+          onPress={() =>
+            dispatch({
+              type: 'swearOath',
+              lordId: candidates[0]?.id ?? '',
+              locationId: game.locationId,
+            })
+          }
+        />
       ) : null}
       {vassals.map((lord) => {
         const held = holdingsOf(game.settlements, lord.id)
+        const oath = oathOf(game, lord.id)
         return (
           <Row
             key={lord.id}
             title={`${lord.title} ${lord.name}`}
-            subtitle={`${loyaltyWord(lord.loyalty)} (${lord.loyalty}) · земли: ${held.length} · доля с неё ${Math.round(VASSAL_SHARE * 100)}%`}
+            subtitle={`${loyaltyWord(lord.loyalty)} (${lord.loyalty}) · земли: ${held.length} · ${oathWords(oath, lord)}`}
             right={
               settlement && isOwnedByPlayer(settlement) && here ? (
                 <Button

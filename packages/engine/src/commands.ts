@@ -493,6 +493,22 @@ import {
   nextTimeOfDay,
   seasonOf,
 } from './time'
+import {
+  type Oath,
+  RAISE_MOOD,
+  answersCall,
+  fiefsOf,
+  grantable,
+  lordFromCompanion,
+  loyaltyDrift,
+  oathFor,
+  oathOf,
+  oathWords,
+  serviceOf,
+  shareOf,
+  swearCandidates,
+  titleForFiefs,
+} from './vassal'
 import type { Lord } from './war'
 import { allied, pairOf } from './war'
 import type { Politics } from './war'
@@ -702,6 +718,13 @@ export type Command =
   | { readonly type: 'abandonQuest'; readonly questId: string }
   | { readonly type: 'proclaimRealm'; readonly name: string }
   | { readonly type: 'inviteLord'; readonly lordId: string }
+  /**
+   * Присяга (этап 74, В1 и В2): землю в лен — и человека под руку. Условия
+   * ставит он, а не ты: чем платит, что оставляет себе и сколько людей ведёт.
+   */
+  | { readonly type: 'swearOath'; readonly lordId: string; readonly locationId: string }
+  /** Созвать вассалов по присяге (этап 74, В3). */
+  | { readonly type: 'summonVassals' }
   /** Двор (этап 43): пожаловать лен вассалу, отнять его, рассудить дело. */
   | { readonly type: 'grantFief'; readonly lordId: string; readonly locationId: string }
   | { readonly type: 'revokeFief'; readonly locationId: string }
@@ -1091,6 +1114,10 @@ export function applyCommand(
       return proclaimRealm(state, command.name)
     case 'inviteLord':
       return inviteLord(state, command.lordId)
+    case 'swearOath':
+      return swearOath(state, command.lordId, command.locationId)
+    case 'summonVassals':
+      return summonVassals(state)
     case 'grantFief':
       return grantFief(state, command.lordId, command.locationId)
     case 'revokeFief':
@@ -5111,8 +5138,28 @@ function revokeFief(state: GameState, locationId: string): CommandResult {
   }
   shiftVassals(draft, -5, null)
   shiftVassals(draft, -25, holder.id)
+  // Отнятое помнит он сам, и помнит дольше, чем дают (этап 66, Л4).
+  draft.lordDeeds = withLordDeed(draft.lordDeeds, holder.id, 'robbed')
   advance(draft, hours(3))
   const name = state.world.locations[locationId]?.name ?? 'земля'
+  const left = fiefsOf(draft.settlements, holder.id).length
+  if (left === 0) {
+    // Лорд без земли — не лорд: присяга кончается вместе с леном, и он уходит
+    // со двора человеком без держания (этап 74, В6).
+    draft.politics = {
+      ...draft.politics,
+      lords: draft.politics.lords.filter((one) => one.id !== holder.id),
+    }
+    const oaths = { ...draft.oaths }
+    delete oaths[holder.id]
+    draft.oaths = oaths
+    notice(
+      draft,
+      `${name} отнята. ${holder.title} ${holder.name} остался без земли и ушёл со двора.`,
+      'world',
+    )
+    return close(draft)
+  }
   notice(
     draft,
     `${name} отнята у ${holder.title.toLowerCase()} ${holder.name}. Остальные это заметили.`,
@@ -5200,7 +5247,7 @@ function inviteLord(state: GameState, lordId: string): CommandResult {
   if (lord.kingdomId === PLAYER) return fail('invalid', 'Он и так твой.')
   if (lord.loyalty > 35) return fail('requirements', 'Он слишком верен своей короне.')
   if (lordRep(state.reputation, lordId) < 30) {
-    return fail('requirements', 'Он тебя недостаточно знает, чтобы idти под твою руку.')
+    return fail('requirements', 'Он тебя недостаточно знает, чтобы идти под твою руку.')
   }
 
   const draft = open(state)
@@ -5211,7 +5258,182 @@ function inviteLord(state: GameState, lordId: string): CommandResult {
       candidate.id === lordId ? { ...candidate, kingdomId: PLAYER, loyalty: 55 } : candidate,
     ),
   }
+  // Перешедший со своей землёй присягает по обычаю: землю ему не жаловали, и
+  // условий он не ставил (этап 74, В2).
+  const day = dayOf(state.time)
+  draft.oaths = {
+    ...draft.oaths,
+    [lordId]: {
+      gives: 'both',
+      share: VASSAL_SHARE,
+      justice: true,
+      levy: 0.3,
+      sinceDay: day,
+    },
+  }
   advance(draft, hours(3))
+  return close(draft)
+}
+
+/**
+ * Присяга (этап 74, В1 и В2).
+ *
+ * Лен даётся не даром и не всякому: вассал смотрит на тебя, на себя и на землю
+ * и ставит свои условия. Отказ — тоже ответ, и он объясним словами; после
+ * отказа человек помнит, что его звали и он сказал «нет».
+ */
+function swearOath(state: GameState, lordId: string, locationId: string): CommandResult {
+  if (!state.realm) return fail('requirements', 'Присягают имени: у тебя его ещё нет.')
+  // Своего человека сперва поднимают в лорды: спутник, севший на землю,
+  // перестаёт быть спутником (этап 74, В1).
+  const companion = state.companions.find((one) => one.id === lordId)
+  if (companion) return raiseCompanion(state, companion, locationId)
+  const lord = lordById(state.politics, lordId)
+  if (!lord) return fail('unknownAction', 'Такого лорда нет.')
+  if (lord.kingdomId === PLAYER) return fail('invalid', 'Он и так под твоей рукой.')
+  if (!swearCandidates(state).some((one) => one.id === lordId)) {
+    return fail('requirements', 'Ему есть кому служить: своей короне он верен.')
+  }
+  const settlement = state.settlements[locationId]
+  if (!settlement || !grantable(state, locationId)) {
+    return fail('notYours', 'Жалуют своё и живое: это место не подходит.')
+  }
+  if (state.locationId !== locationId) {
+    return fail('unavailableHere', 'Землю жалуют, стоя на ней.')
+  }
+
+  const day = dayOf(state.time)
+  const offer = oathFor(state, lord, locationId, day)
+  const draft = open(state)
+  advance(draft, hours(3))
+  notice(draft, `${lord.title} ${lord.name}: «${offer.asks}»`, 'people')
+  if (!offer.accepts) {
+    notice(draft, `${lord.name}: «${offer.says}»`, 'people')
+    // Отказавший помнит, что его звали: во второй раз он говорит то же самое,
+    // пока не изменится то, из-за чего он отказал.
+    draft.lordDeeds = withLordDeed(draft.lordDeeds, lord.id, 'refused')
+    return close(draft)
+  }
+
+  const fiefs = fiefsOf(draft.settlements, lord.id).length + 1
+  draft.politics = {
+    ...draft.politics,
+    lords: draft.politics.lords.map((one) =>
+      one.id === lordId
+        ? { ...one, kingdomId: PLAYER, loyalty: 55, title: titleForFiefs(fiefs) }
+        : one,
+    ),
+  }
+  draft.settlements = {
+    ...draft.settlements,
+    [locationId]: { ...settlement, owner: lordId },
+  }
+  draft.oaths = { ...draft.oaths, [lordId]: offer.terms }
+  draft.lordDeeds = withLordDeed(draft.lordDeeds, lord.id, 'gifted')
+  const where = state.world.locations[locationId]?.name ?? 'земля'
+  notice(
+    draft,
+    `${lord.name}: «${offer.says}» ${where} за ним; по присяге — ${oathWords(offer.terms, lord)}.`,
+    'world',
+  )
+  draft.renown += 1
+  return close(draft)
+}
+
+/**
+ * Поднять своего в лорды (этап 74, В1).
+ *
+ * Первый вассал у начинающего государя — не перебежчик с чужой земли, а тот,
+ * кто с ним ходил. Спутник с земли уходит из отряда: держать лен и идти за
+ * тобой по дорогам — разные жизни.
+ */
+function raiseCompanion(state: GameState, companion: Companion, locationId: string): CommandResult {
+  if (companion.captive) return fail('invalid', 'Он в плену: ему не до земли.')
+  if (companion.mood < RAISE_MOOD) {
+    return fail('requirements', `${companion.name} тебе не настолько верит, чтобы сесть на землю.`)
+  }
+  const settlement = state.settlements[locationId]
+  if (!settlement || !grantable(state, locationId)) {
+    return fail('notYours', 'Жалуют своё и живое: это место не подходит.')
+  }
+  if (state.locationId !== locationId) {
+    return fail('unavailableHere', 'Землю жалуют, стоя на ней.')
+  }
+
+  const draft = open(state)
+  const day = dayOf(draft.time)
+  const index = draft.politics.lords.filter((one) => one.kingdomId === PLAYER).length + 1
+  const lord = lordFromCompanion(companion, settlement, index, day)
+  draft.politics = { ...draft.politics, lords: [...draft.politics.lords, lord] }
+  draft.settlements = {
+    ...draft.settlements,
+    [locationId]: { ...settlement, owner: lord.id },
+  }
+  // Условия свои он ставит по тому нраву, который у него теперь есть.
+  const offer = oathFor({ ...draft.base, politics: draft.politics }, lord, locationId, day)
+  draft.oaths = { ...draft.oaths, [lord.id]: offer.terms }
+  draft.companions = draft.companions.filter((one) => one.id !== companion.id)
+  advance(draft, hours(4))
+  const where = state.world.locations[locationId]?.name ?? 'земля'
+  notice(
+    draft,
+    `${companion.name} сел на землю: ${lord.title} ${lord.name}, ${where}. По присяге — ${oathWords(offer.terms, lord)}.`,
+    'world',
+  )
+  draft.renown += 1
+  return close(draft)
+}
+
+/**
+ * Созвать вассалов (этап 74, В3).
+ *
+ * Присяга становится видимой только здесь: одни приводят людей, другие
+ * присылают извинения. Кто придёт — известно заранее (`serviceOf`), и в этом
+ * весь смысл: верность копится годами, а нужна в один день.
+ */
+function summonVassals(state: GameState): CommandResult {
+  const vassals = vassalsOf(state)
+  if (vassals.length === 0) return fail('requirements', 'Звать некого: под твоей рукой никого.')
+  const draft = open(state)
+  // Люди идут не мгновенно: сбор — это двое суток дороги для всех разом.
+  advance(draft, hours(48))
+  const day = dayOf(draft.time)
+  let came = 0
+  let units = draft.party.units
+  const oaths: Record<string, Oath> = { ...draft.oaths }
+  for (const lord of vassals) {
+    const oath = oathOf(draft, lord.id)
+    const men = serviceOf(lord, oath)
+    if (!answersCall(lord, oath)) {
+      notice(
+        draft,
+        oath?.gives === 'tax'
+          ? `${lord.title} ${lord.name} платит подать, а не кровь: людей не прислал.`
+          : `${lord.title} ${lord.name} на зов не вышел.`,
+        'war',
+      )
+      if (oath && oath.gives !== 'tax') shiftVassals(draft, -3, lord.id)
+      continue
+    }
+    came += men
+    // Ведёт он своих: две трети ополчения, треть — люди при оружии.
+    const militia = Math.max(1, Math.round(men * 0.66))
+    const armed = Math.max(0, men - militia)
+    units = {
+      ...units,
+      militia: (units.militia ?? 0) + militia,
+      ...(armed > 0 ? { manAtArms: (units.manAtArms ?? 0) + armed } : {}),
+    }
+    if (oath) oaths[lord.id] = { ...oath, calledDay: day }
+    notice(draft, `${lord.title} ${lord.name} привёл ${men} человек.`, 'war')
+    // Собранные люди — не даровые: двор пустеет, и это помнят.
+    shiftVassals(draft, -2, lord.id)
+  }
+  draft.oaths = oaths
+  draft.party = { ...draft.party, units }
+  if (came === 0)
+    notice(draft, 'Никто не пришёл. Это и есть цена присяги, которой не верят.', 'war')
+  else notice(draft, `Собрано по присяге: ${came} человек.`, 'war')
   return close(draft)
 }
 
@@ -8165,6 +8387,7 @@ interface Draft {
   ailment: { kind: Ailment; since: number } | null
   maims: readonly string[]
   lordDeeds: Readonly<Record<string, readonly LordDeedId[]>>
+  oaths: Readonly<Record<string, Oath>>
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -8237,6 +8460,7 @@ function open(state: GameState): Draft {
     ailment: state.ailment ?? null,
     maims: state.maims ?? [],
     lordDeeds: state.lordDeeds ?? {},
+    oaths: state.oaths ?? {},
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -8521,6 +8745,9 @@ function close(draft: Draft): CommandResult {
       }
     }
 
+    // Верность своих лордов ходит сама (этап 74, В4): подать, суд, война, позор
+    // и соседи — всё, что вассал видит у себя во дворе.
+    tickVassals(draft, daysPassed)
     payUpkeep(draft, daysPassed)
     expireQuests(draft)
     growOlder(draft, daysPassed)
@@ -8598,6 +8825,7 @@ function close(draft: Draft): CommandResult {
     ailment: draft.ailment,
     maims: draft.maims,
     lordDeeds: draft.lordDeeds,
+    oaths: draft.oaths,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -8808,6 +9036,33 @@ function warNews(
  * Это и есть главный ограничитель войска: нанять дешевле, чем водить. Голодный
  * и неоплаченный отряд теряет дух и расходится сам — без всяких запретов.
  */
+/**
+ * Верность вассалов за прошедшие сутки (этап 74, В4).
+ *
+ * Не бросок и не «отношение к сюзерену»: понятные вещи, которые вассал видит у
+ * себя, — твоя подать, оставлен ли ему суд, зовут ли его на твою войну, что о
+ * тебе говорят и с кем ему тесно. Считается раз в такт и на всех сразу.
+ */
+function tickVassals(draft: Draft, days: number): void {
+  const vassals = vassalsOf(draft.base)
+  if (vassals.length === 0 || days <= 0) return
+  const day = dayOf(draft.time)
+  const moved = new Map<string, number>()
+  for (const lord of vassals) {
+    const drift = loyaltyDrift(draft.base, draft.base.world, lord, oathOf(draft, lord.id), day)
+    if (drift !== 0) moved.set(lord.id, drift * days)
+  }
+  if (moved.size === 0) return
+  draft.politics = {
+    ...draft.politics,
+    lords: draft.politics.lords.map((lord) => {
+      const shift = moved.get(lord.id)
+      if (shift === undefined) return lord
+      return { ...lord, loyalty: Math.max(0, Math.min(100, lord.loyalty + shift)) }
+    }),
+  }
+}
+
 function payUpkeep(draft: Draft, days: number): void {
   collectHoldings(draft, days)
   paySailors(draft, days)
@@ -8916,11 +9171,15 @@ function collectHoldings(draft: Draft, days: number): void {
   // берёт по тому обычаю, который ты поставил (этап 61, В3).
   const tolls = dailyTolls(draft.base.world, settlements, PLAYER) * days * tollTake(law)
 
-  // Вассал платит с пожалованной земли долю (этап 43): лен даётся не даром.
+  // Вассал платит с пожалованной земли долю — ту, о которой договорились
+  // (этап 74, В2): у служилого она нулевая, у податного больше трети нет.
   let tribute = 0
   for (const vassal of vassalsOf(draft.base)) {
+    const oath = oathOf(draft, vassal.id)
+    const share = oath ? shareOf(oath) : VASSAL_SHARE
+    if (share <= 0) continue
     for (const held of holdingsOf(draft.settlements, vassal.id)) {
-      tribute += dailyTax(held, foodSecurity(held)) * VASSAL_SHARE * days
+      tribute += dailyTax(held, foodSecurity(held)) * share * days
     }
   }
   income += tribute
