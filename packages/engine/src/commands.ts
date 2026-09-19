@@ -51,6 +51,7 @@ import {
 } from './companion'
 import type { Availability, Content, Requirements } from './content'
 import { CONTENT } from './content'
+import { DEBATE_MINUTES, DEBATE_XP, STUDENT_UPKEEP } from './content/books'
 import type { BuildingId } from './content/buildings'
 import { BUILDINGS } from './content/buildings'
 import { TOURNEY_FEE, TOURNEY_PURSE } from './content/castle'
@@ -231,6 +232,17 @@ import { SKILLS } from './skills'
 import { battlePower, bestSpell, castChance } from './spell'
 import type { GameState } from './state'
 import { appendLog } from './state'
+import {
+  bookById,
+  bookProgress,
+  bookRead,
+  booksAt,
+  canRead,
+  canTakeStudent,
+  hasBook,
+  studentDone,
+  studentNameFor,
+} from './study'
 import { answerOf, speakerById, stillTalks } from './talk'
 import {
   canPilgrimage,
@@ -322,6 +334,11 @@ export type Command =
   | { readonly type: 'talk'; readonly speakerId: string; readonly topicId: string }
   /** Помочь спутнику с его делом (этап 54). */
   | { readonly type: 'grantWish'; readonly companionId: string }
+  /** Учение (этап 55): книги, спор в школе, свой ученик. */
+  | { readonly type: 'buyBook'; readonly bookId: string }
+  | { readonly type: 'readBook'; readonly bookId: string }
+  | { readonly type: 'debate' }
+  | { readonly type: 'takeStudent' }
   /** Уйти морем: своим судном, нанятым или попутным (этап 35). */
   | { readonly type: 'sail'; readonly toLocationId: string; readonly manner: Passage }
   /** Купить судно в порту, починить своё, продать своё. */
@@ -573,6 +590,14 @@ export function applyCommand(
       return talk(state, command.speakerId, command.topicId)
     case 'grantWish':
       return grantWish(state, command.companionId)
+    case 'buyBook':
+      return buyBook(state, command.bookId)
+    case 'readBook':
+      return readBook(state, command.bookId)
+    case 'debate':
+      return debate(state)
+    case 'takeStudent':
+      return takeStudent(state)
     case 'travel':
       return travel(state, command.toLocationId)
     case 'sail':
@@ -3839,6 +3864,123 @@ export function tradeSkillAt(state: GameState): number {
  * Уступка держится до конца дня и только у этого купца; наглость он запомнит.
  * Торгуются раз в день: приставать к человеку каждый час — не торг.
  */
+/** Купить книгу (этап 55, Н6): в школе — свои, в большом городе — мирские. */
+function buyBook(state: GameState, bookId: string): CommandResult {
+  const book = bookById(bookId)
+  if (!book) return fail('unknownAction', 'Такой книги нет.')
+  if (!booksAt(state).some((one) => one.id === bookId)) {
+    return fail('unavailableHere', 'Здесь такой книги не продают.')
+  }
+  if (hasBook(state, bookId)) return fail('invalid', 'Эта книга у тебя уже есть.')
+  if (state.character.money < book.price) {
+    return fail('noMoney', `За книгу просят ${book.price}, а у тебя ${state.character.money}.`)
+  }
+  const draft = open(state)
+  addMoney(draft, -book.price)
+  advance(draft, 30)
+  draft.books = { ...draft.books, [bookId]: { read: false, days: 0 } }
+  notice(draft, `Куплена книга: ${book.label}. Читать её ${book.days} суток.`)
+  return close(draft)
+}
+
+/**
+ * Читать книгу (этап 55, Н6).
+ *
+ * Читают сутками и не наспех: за один присест прочитывается один день. Книга
+ * даёт то, чего наставник не даст, — и это единственная дверь самоучки к
+ * школьному знанию.
+ */
+function readBook(state: GameState, bookId: string): CommandResult {
+  const book = bookById(bookId)
+  if (!book) return fail('unknownAction', 'Такой книги нет.')
+  if (!hasBook(state, bookId)) return fail('noGoods', 'У тебя нет этой книги.')
+  if (bookRead(state, bookId)) return fail('invalid', 'Эту книгу ты уже прочёл.')
+  const able = canRead(state, book)
+  if (!able.can) return fail('requirements', able.why)
+  const blocked = checkWindow(state.time, DAY_WINDOW, 'Читают при свете:')
+  if (blocked) return blocked
+
+  const draft = open(state)
+  advance(draft, hours(6))
+  addFatigue(draft, 12)
+  const days = bookProgress(state, bookId) + 1
+  const done = days >= book.days
+  draft.books = { ...draft.books, [bookId]: { read: done, days } }
+  if (!done) {
+    practice(draft, 'scholarship', 12)
+    notice(draft, `${book.label}: прочитано ${days} из ${book.days} суток.`)
+    return close(draft)
+  }
+  for (const [skill, xp] of Object.entries(book.teaches)) {
+    practice(draft, skill as SkillId, xp ?? 0)
+  }
+  notice(draft, `${book.label} прочитана. ${book.about}`)
+  if (book.spellId) {
+    notice(draft, 'В книге было записано заклинание — теперь оно твоё, если хватит умения.')
+  }
+  return close(draft)
+}
+
+/**
+ * Спор в школе (этап 55, Н3).
+ *
+ * Ученики и магистры спорят о том, чего никто не знает наверняка. Выигравший
+ * поднимается в глазах главы, проигравший узнаёт больше — и это не шутка, а
+ * то, как устроено учение.
+ */
+function debate(state: GameState): CommandResult {
+  const school = schoolAt(state.world, state.locationId)
+  if (!school) return fail('unavailableHere', 'Спорить тут не с кем: школы нет.')
+  const blocked = checkFatigue(state.character, 15)
+  if (blocked) return blocked
+
+  const draft = open(state)
+  advance(draft, DEBATE_MINUTES)
+  addFatigue(draft, 15)
+  const [roll, next] = nextFloat(draft.rng)
+  draft.rng = next
+  const learning = skillLevel(state.character, 'scholarship') + skillLevel(state.character, 'magic')
+  const won = roll < Math.min(0.85, 0.2 + learning * 0.01)
+  if (won) {
+    practice(draft, 'magic', DEBATE_XP * 0.6)
+    practice(draft, 'persuasion', 40)
+    draft.reputation = withLordRep(draft.reputation, school.master.id, 6)
+    notice(draft, `Спор в школе «${school.name}»: твоё слово осталось последним.`)
+  } else {
+    practice(draft, 'magic', DEBATE_XP)
+    practice(draft, 'scholarship', 40)
+    draft.reputation = withLordRep(draft.reputation, school.master.id, -2)
+    notice(draft, `Спор в школе «${school.name}»: тебя разбили — и ты узнал больше, чем хотел.`)
+  }
+  return close(draft)
+}
+
+/** Взять ученика (этап 55, Н5): учить может магистр и выше. */
+function takeStudent(state: GameState): CommandResult {
+  const able = canTakeStudent(state)
+  if (!able.can) return fail('requirements', able.why)
+  const day = dayOf(state.time)
+  const draft = open(state)
+  advance(draft, hours(2))
+  const name = studentNameFor(state.world, state.locationId, day)
+  draft.student = { id: `student:${state.locationId}:${day}`, name, since: day, learned: 0 }
+  notice(draft, `${name} пошёл к тебе в ученики. Кормить и учить — твоё дело.`)
+  return close(draft)
+}
+
+/** Ученик учится и однажды уходит: держать его дольше нечестно. */
+function tickStudent(draft: Draft, days: number): void {
+  const student = draft.student
+  if (!student) return
+  const day = dayOf(draft.time)
+  addMoney(draft, -STUDENT_UPKEEP * days)
+  draft.student = { ...student, learned: student.learned + days }
+  if (!studentDone(draft, day)) return
+  notice(draft, `${student.name} выучился и уходит своей дорогой. Так было и с тобой когда-то.`)
+  draft.renown += 2
+  draft.student = null
+}
+
 /**
  * Помочь спутнику с его делом (этап 54, С2).
  *
@@ -4950,6 +5092,16 @@ function takeExam(state: GameState, examId: string, content: Content): CommandRe
     // Школа помнит своих: с этого дня ты для неё не чужак.
     draft.reputation = withLordRep(draft.reputation, school.master.id, 10)
     draft.reputation = withPlaceRep(draft.reputation, state.locationId, 3)
+    // Испытание с судьбой (этап 55, Н2): чем выше ступень, тем громче о ней
+    // говорят, а посвящение в архоны — событие мира, а не запись в листе.
+    const fame = Math.max(1, rankTier(exam.rank) - 2)
+    draft.renown += fame
+    if (exam.rank === 'archon') {
+      notice(draft, 'Архон посвящён. Такое случается раз в поколение, и об этом узнают все короны.')
+      draft.renown += 5
+    } else if (fame > 1) {
+      notice(draft, `${MAGIC_RANKS[exam.rank].label}: о таком говорят и за стенами школы.`)
+    }
   } else {
     draft.events.push({ type: 'examFailed', rank: exam.rank })
     // Провал тоже чему-то учит — но дешевле было бы прийти подготовленным. И
@@ -5123,6 +5275,8 @@ interface Draft {
   pilgrimDay: number | undefined
   talked: Readonly<Record<string, number>>
   fallen: readonly { id: string; name: string; day: number; locationId: string }[]
+  books: Readonly<Record<string, { read: boolean; days: number }>>
+  student: { id: string; name: string; since: number; learned: number } | null
   battle: Battle | null
   politics: Politics
   /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
@@ -5169,6 +5323,8 @@ function open(state: GameState): Draft {
     pilgrimDay: state.pilgrimDay,
     talked: state.talked ?? {},
     fallen: state.fallen ?? [],
+    books: state.books ?? {},
+    student: state.student ?? null,
     battle: state.battle,
     politics: state.politics,
     world: state.world,
@@ -5382,6 +5538,8 @@ function close(draft: Draft): CommandResult {
     piety: draft.piety,
     talked: draft.talked,
     fallen: draft.fallen,
+    books: draft.books,
+    student: draft.student,
     ...(draft.pilgrimDay !== undefined ? { pilgrimDay: draft.pilgrimDay } : {}),
     battle: draft.battle,
     politics: draft.politics,
@@ -5571,6 +5729,7 @@ function payUpkeep(draft: Draft, days: number): void {
   payCech(draft)
   advanceWishes(draft, 1)
   quarrel(draft, 1)
+  tickStudent(draft, 1)
   // Новый день — новое терпение: вчерашние разговоры не в счёт (этап 53).
   draft.talked = {}
   if (partySize(draft.party) === 0) return

@@ -92,6 +92,10 @@ export function activityOf(command: Command): Activity | null {
       return 'work'
     case 'study':
     case 'takeExam':
+    // Книги, споры и ученики — при школе (этап 55).
+    case 'buyBook':
+    case 'debate':
+    case 'takeStudent':
       return 'learn'
     case 'buy':
     case 'sell':

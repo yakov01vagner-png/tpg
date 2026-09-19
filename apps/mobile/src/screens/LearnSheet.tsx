@@ -4,13 +4,18 @@ import {
   MAGIC_RANKS,
   MASTER_TEMPERS,
   SKILLS,
+  bookById,
+  booksAt,
   canApply,
+  canDebate,
+  canTakeStudent,
   coursesAt,
   dayOf,
   eligibleRank,
   examsAt,
   formatDuration,
   formatWindowShort,
+  hasBook,
   isSelfTaught,
   masterSays,
   masterStance,
@@ -106,6 +111,7 @@ export function LearnSheet({ game }: { game: GameState }) {
           )
         })}
       </Section>
+      <Books game={game} />
     </ScrollView>
   )
 }
@@ -120,3 +126,70 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
 })
+
+/**
+ * Книги, споры и ученики (этап 55): то, что есть в школе помимо испытаний.
+ */
+function Books({ game }: { game: GameState }) {
+  const sold = booksAt(game)
+  const mine = Object.entries(game.books ?? {})
+  const student = game.student
+  if (sold.length === 0 && mine.length === 0 && !canDebate(game)) return null
+  return (
+    <Section title="Книги и учение">
+      {canDebate(game) ? (
+        <Card
+          title="Поспорить в школе"
+          description="Ученики и магистры спорят о том, чего никто не знает наверняка. Проигравший узнаёт больше."
+          meta="3 ч"
+          reason={reasonOf(game, { type: 'debate' })}
+          onPress={() => dispatch({ type: 'debate' })}
+        />
+      ) : null}
+      {student ? (
+        <Card
+          title={`Твой ученик: ${student.name}`}
+          description={`Учится ${student.learned} суток. Кормить и учить — твоё дело.`}
+        />
+      ) : canTakeStudent(game).can ? (
+        <Card
+          title="Взять ученика"
+          description="Учить может магистр и выше. Он пойдёт следом и однажды уйдёт своей дорогой."
+          reason={reasonOf(game, { type: 'takeStudent' })}
+          onPress={() => dispatch({ type: 'takeStudent' })}
+        />
+      ) : null}
+      {mine.map(([id, state]) => {
+        const book = bookById(id)
+        if (!book) return null
+        return (
+          <Card
+            key={id}
+            title={book.label}
+            description={state.read ? book.about : `Прочитано ${state.days} из ${book.days} суток.`}
+            meta={state.read ? 'прочитана' : 'читать день'}
+            reason={state.read ? undefined : reasonOf(game, { type: 'readBook', bookId: id })}
+            onPress={state.read ? undefined : () => dispatch({ type: 'readBook', bookId: id })}
+          />
+        )
+      })}
+      {sold
+        .filter((book) => !hasBook(game, book.id))
+        .map((book) => (
+          <Card
+            key={book.id}
+            title={book.label}
+            description={book.about}
+            meta={`${book.price} · ${book.days} суток чтения`}
+            reason={reasonOf(game, { type: 'buyBook', bookId: book.id })}
+            onPress={() => dispatch({ type: 'buyBook', bookId: book.id })}
+          />
+        ))}
+    </Section>
+  )
+}
+
+function reasonOf(game: GameState, command: Command): string | undefined {
+  const check = canApply(game, command)
+  return check.ok ? undefined : check.message
+}

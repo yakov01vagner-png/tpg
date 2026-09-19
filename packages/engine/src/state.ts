@@ -135,6 +135,17 @@ export interface GameState {
    * Павшие спутники (этап 54): имя, день и место. Их помнят и о них говорят;
    * встретить их снова нельзя.
    */
+  /**
+   * Книги на руках (этап 55): что куплено и найдено, и что уже прочитано.
+   */
+  readonly books?: Readonly<Record<string, { readonly read: boolean; readonly days: number }>>
+  /** Свой ученик (этап 55, Н5): кто идёт следом и с какого дня. */
+  readonly student?: {
+    readonly id: string
+    readonly name: string
+    readonly since: number
+    readonly learned: number
+  } | null
   readonly fallen?: readonly {
     readonly id: string
     readonly name: string
@@ -213,6 +224,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     piety: 0,
     talked: {},
     fallen: [],
+    books: {},
+    student: null,
     party: EMPTY_PARTY,
     ship: null,
     guild: null,
