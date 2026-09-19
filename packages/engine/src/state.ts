@@ -9,6 +9,7 @@ import type { Captive } from './captive'
 import type { ChainProgress } from './chain'
 import type { Character } from './character'
 import type { Generation, Marks } from './chronicle'
+import type { Pact } from './city'
 import type { Companion } from './companion'
 import type { Commission, Company } from './company'
 import type { Congress, CongressRecord } from './congress'
@@ -369,6 +370,8 @@ export interface GameState {
   readonly pledges?: readonly Pledge[]
   /** Закон о наследстве (этап 93): что станет с державой без тебя. */
   readonly heirLaw?: LawId
+  /** Городские вольности по договору (этап 95). */
+  readonly pacts?: readonly Pact[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -483,6 +486,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     overtures: [],
     pledges: [],
     heirLaw: 'eldest',
+    pacts: [],
     factions: {},
     spellcraft: {},
     weather: [],

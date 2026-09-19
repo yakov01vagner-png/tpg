@@ -71,6 +71,20 @@ import {
   skillLevel,
 } from './character'
 import { type Generation, type Marks, closeGeneration, withMark } from './chronicle'
+import type { Pact } from './city'
+import {
+  CITY,
+  citiesOf,
+  cityAsks,
+  cityLedger,
+  cityOf,
+  pactAt,
+  pactPrice,
+  pactsOf,
+  riotCost,
+  riotRisk,
+  sideOfAsk,
+} from './city'
 import type { CompanionRole } from './companion'
 import type { Companion } from './companion'
 import {
@@ -133,6 +147,7 @@ import { BUILDINGS } from './content/buildings'
 import { TOURNEY_FEE, TOURNEY_PURSE } from './content/castle'
 import { ENVOY_FAVOUR } from './content/casus'
 import type { ChainDef } from './content/chains'
+import type { CityAsk } from './content/city'
 import { COMPANY_WORDS, TEMPER_DEFS } from './content/companies'
 import type { CompanionDef, DeedId } from './content/companions'
 import { COMPANIONS, DEED_LABELS, TEMPERS } from './content/companions'
@@ -1043,6 +1058,13 @@ export type Command =
   | { readonly type: 'openTalks'; readonly against: string; readonly mediator?: MediatorKind }
   | { readonly type: 'tableTerms'; readonly terms: readonly PeaceTerm[] }
   | { readonly type: 'endTalks' }
+  /** Города (этап 95): ответить городу, дать вольность по договору. */
+  | { readonly type: 'answerCity'; readonly locationId: string; readonly ask: CityAsk }
+  | {
+      readonly type: 'grantPact'
+      readonly locationId: string
+      readonly guarantor?: string
+    }
   /** Мятеж (этап 94): унять уступкой или силой. */
   | { readonly type: 'appeasePlot'; readonly concession: ConcessionId }
   | { readonly type: 'crushPlot' }
@@ -1540,6 +1562,10 @@ export function applyCommand(
       return appeasePlot(state, command.concession)
     case 'crushPlot':
       return crushPlot(state)
+    case 'answerCity':
+      return answerCity(state, command.locationId, command.ask)
+    case 'grantPact':
+      return grantPact(state, command.locationId, command.guarantor)
     case 'askLetter':
       return askLetter(state, command.against)
     case 'callCongress':
@@ -9435,6 +9461,7 @@ interface Draft {
   overtures: readonly Overture[]
   pledges: readonly Pledge[]
   heirLaw: LawId
+  pacts: readonly Pact[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9535,6 +9562,7 @@ function open(state: GameState): Draft {
     overtures: state.overtures ?? [],
     pledges: state.pledges ?? [],
     heirLaw: state.heirLaw ?? 'eldest',
+    pacts: state.pacts ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9853,6 +9881,8 @@ function close(draft: Draft): CommandResult {
     // Свои люди возвращаются из поездок (этап 75, Д5): с серебром, с людьми,
     // с чужим словом или с тем, что на дорогах стало тише.
     returnOfficers(draft)
+    // Города считают свой хлеб и свои пошлины (этап 95).
+    tickCities(draft, daysPassed)
     // Твоя знать говорит между собой, и разговоры зреют (этап 94).
     tickRevolt(draft, daysPassed)
     // Верность своих лордов ходит сама (этап 74, В4): подать, суд, война, позор
@@ -9963,6 +9993,7 @@ function close(draft: Draft): CommandResult {
     overtures: draft.overtures,
     pledges: draft.pledges,
     heirLaw: draft.heirLaw,
+    pacts: draft.pacts,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -11829,6 +11860,177 @@ function tickPeace(draft: Draft, days: number): void {
 const OVERTURE_BEAT = 15
 const COMPANY_BEAT = 10
 const NAVY_BEAT = 5
+
+/**
+ * Ответить городу (этап 95, На2 и На4).
+ *
+ * Согласие унимает тех, кто просил, и злит тех, кто не просил: две правды в
+ * одном городе — это и есть та вещь, между которыми приходится выбирать. За
+ * согласие платят сразу — хлебом, пошлиной, людьми или правом.
+ */
+function answerCity(state: GameState, locationId: string, ask: CityAsk): CommandResult {
+  const settlement = state.settlements[locationId]
+  if (!settlement || settlement.owner !== PLAYER) {
+    return fail('invalid', 'Это не твой город.')
+  }
+  const city = cityOf(state, state.world, locationId)
+  if (!city) return fail('invalid', 'Это не город: своей воли у него нет.')
+  const offer = cityAsks(state, state.world, city).find((one) => one.ask === ask)
+  if (!offer) return fail('requirements', 'Об этом город сейчас не просит.')
+
+  const draft = open(state)
+  advance(draft, hours(6))
+  // Хлеб везут из своих амбаров: у согласия есть вес в зерне.
+  if (ask === 'grain') {
+    const need = Math.round(settlement.population * 0.05 * 30)
+    const barns = holdingsOf(draft.settlements, PLAYER).filter(
+      (one) => one.locationId !== locationId,
+    )
+    let left = need
+    let places = draft.settlements
+    for (const barn of barns) {
+      if (left <= 0) break
+      const has = places[barn.locationId]
+      if (!has) continue
+      const takes = Math.min(left, Math.round(has.stock.grain * 0.4))
+      if (takes <= 0) continue
+      places = {
+        ...places,
+        [barn.locationId]: {
+          ...has,
+          stock: { ...has.stock, grain: has.stock.grain - takes },
+        },
+      }
+      left -= takes
+    }
+    const brought = need - left
+    const city2 = places[locationId]
+    if (city2) {
+      places = {
+        ...places,
+        [locationId]: { ...city2, stock: { ...city2.stock, grain: city2.stock.grain + brought } },
+      }
+    }
+    draft.settlements = places
+    if (brought <= 0) return fail('requirements', 'Хлеба в своих амбарах нет: везти нечего.')
+  }
+  if (ask === 'toll' || ask === 'monopoly') {
+    // Снятая пошлина и отданное право — это деньги, которых не будет.
+    addMoney(draft, -Math.round(city.people * 0.2))
+  }
+  if (ask === 'guard') {
+    const place = draft.settlements[locationId]
+    if (place) {
+      draft.settlements = {
+        ...draft.settlements,
+        [locationId]: { ...place, banditry: Math.max(0, place.banditry - 0.2) },
+      }
+    }
+  }
+  if (ask === 'charter') {
+    return grantPactInner(draft, locationId, city, undefined)
+  }
+  // Кто просил — доволен; кто не просил — считает, что ты слушаешь не тех.
+  const side = sideOfAsk(ask)
+  draft.reputation = withPlaceRep(draft.reputation, locationId, offer.calms / 4)
+  notice(
+    draft,
+    `${city.name}: ${offer.label}. Платишь ${offer.costs}. ${
+      side === 'both'
+        ? 'Довольны все.'
+        : side === 'commons'
+          ? `Чернь довольна, купцы — нет (${CITY.spite} против).`
+          : `Купцы довольны, чернь — нет (${CITY.spite} против).`
+    }`,
+    'people',
+  )
+  return close(draft)
+}
+
+/**
+ * Дать городу вольность по договору (этап 95, На5).
+ *
+ * С городом договариваются, как с короной: он платит разом, платит подать
+ * вполовину, судит своих сам — и договор этот на срок, а не навсегда. Поручитель
+ * делает его дороже для того, кто захочет его порвать.
+ */
+function grantPact(state: GameState, locationId: string, guarantor?: string): CommandResult {
+  const settlement = state.settlements[locationId]
+  if (!settlement || settlement.owner !== PLAYER) return fail('invalid', 'Это не твой город.')
+  const city = cityOf(state, state.world, locationId)
+  if (!city) return fail('invalid', 'Это не город: договариваться не с кем.')
+  if (pactAt(state, locationId)) return fail('invalid', 'У этого города вольность уже есть.')
+  const draft = open(state)
+  advance(draft, hours(8))
+  return grantPactInner(draft, locationId, city, guarantor)
+}
+
+function grantPactInner(
+  draft: Draft,
+  locationId: string,
+  city: ReturnType<typeof cityOf>,
+  guarantor: string | undefined,
+): CommandResult {
+  if (!city) return fail('invalid', 'Это не город.')
+  const day = dayOf(draft.time)
+  const paid = pactPrice(city)
+  addMoney(draft, paid)
+  draft.pacts = [
+    ...pactsOf(draft),
+    {
+      locationId,
+      sinceDay: day,
+      untilDay: day + CITY.pactDays,
+      paid,
+      guarantor: guarantor ?? null,
+    },
+  ]
+  draft.reputation = withPlaceRep(draft.reputation, locationId, 15)
+  notice(
+    draft,
+    `${city.name} получил вольность по договору: ${paid} разом, подать вполовину, свой суд, срок ${Math.round(CITY.pactDays / 365)} лет${guarantor ? `, поручитель — ${guarantor}` : ''}.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Сутки городов (этап 95, На3).
+ *
+ * Бунт — не случайность, а то, к чему шло: голод, дороговизна, подать и разбой
+ * складываются в счёт, и счёт этот виден заранее. Считается раз в декаду.
+ */
+function tickCities(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % CITY_BEAT !== 0) return
+  for (const city of citiesOf(draft.base, draft.base.world)) {
+    const risk = riotRisk(draft.base, draft.base.world, city)
+    if (!risk.nigh) {
+      if (risk.risk >= CITY.riotLine * 0.7) {
+        notice(draft, `${city.name}: до бунта недалеко — ${risk.why}.`, 'people')
+      }
+      continue
+    }
+    const cost = riotCost(city)
+    const place = draft.settlements[city.locationId]
+    if (!place) continue
+    draft.settlements = {
+      ...draft.settlements,
+      [city.locationId]: {
+        ...place,
+        population: Math.max(0, place.population - cost.dead),
+        banditry: Math.min(1, place.banditry + CITY.riotBanditry),
+        stock: { ...place.stock, grain: Math.round(place.stock.grain * 0.7) },
+      },
+    }
+    draft.reputation = withPlaceRep(draft.reputation, city.locationId, CITY.riotMood)
+    notice(draft, cost.says, 'people')
+  }
+}
+
+/** Как часто считают города. */
+const CITY_BEAT = 10
 
 /**
  * Унять заговор уступкой (этап 94, Мя4).
