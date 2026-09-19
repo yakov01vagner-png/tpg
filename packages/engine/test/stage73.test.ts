@@ -502,7 +502,10 @@ describe('Б5: старые сейвы', () => {
       'quarter',
     ]
     for (const key of gone) delete old[key]
-    old.schemaVersion = SCHEMA_VERSION - 1
+    // Версия та, на которой кончалась 0.5: сейв поднимается через все
+    // миграции, а не через последнюю. С закрытием каждой версии их становится
+    // больше, и «предыдущая» — это не «SCHEMA_VERSION − 1», а своё число.
+    old.schemaVersion = 21
     const loaded = deserialize(JSON.stringify(old))
     if (!loaded.ok) throw new Error(loaded.error)
     const state = loaded.state

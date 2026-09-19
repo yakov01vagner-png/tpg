@@ -1,5 +1,6 @@
 import { musterBands } from './band'
 import { startSway } from './brother'
+import { COMPANIES } from './content/companies'
 import { PLAIN_LAW } from './content/estate'
 import { NO_FAMILY, START_AGE, birthDayFor } from './dynasty'
 import { createSettlements, initialStock, recruitPool } from './economy'
@@ -380,6 +381,80 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
       ailment: data.ailment ?? null,
       maims: data.maims ?? [],
       cleansed: data.cleansed ?? null,
+    }
+  },
+  /**
+   * v22 → v23: вся глубина версии 0.7 (этапы 74–98).
+   *
+   * Версия добавила державу: присягу вассалов, должности, казну, титулы,
+   * посольства, договоры, королевские дома, соглядатаев, съезды, кампании,
+   * флот, роты, мир как торг, наследство, города и счёт церкви. Каждое поле до
+   * сих пор читалось через `?? по умолчанию`; здесь они дописываются разом —
+   * как в новорождённой игре, потому что ничего из этого у героя 0.6 и правда
+   * не было.
+   *
+   * Два поля пишутся не пустыми, а осмысленными. Закон о наследстве — это
+   * решение, и молчание здесь хуже выбора: старой державе ставится
+   * первородство, как самое частое. Роты в мире были и до игрока: они
+   * дописываются из содержимого целыми, никому не служащими, — иначе мир после
+   * загрузки окажется беднее, чем новый.
+   */
+  22: (data) => {
+    const world = (data.world ?? {}) as Record<string, unknown>
+    const locations = (world.locations ?? {}) as Record<string, { population?: number }>
+    const places = Object.entries(locations)
+      .filter(([, one]) => (one.population ?? 0) > 0)
+      .map(([id]) => id)
+    return {
+      ...data,
+      // Держава: присяга, должности, казна, титул.
+      oaths: data.oaths ?? {},
+      offices: data.offices ?? {},
+      charters: data.charters ?? {},
+      debts: data.debts ?? [],
+      queue: data.queue ?? [],
+      crowned: data.crowned ?? null,
+      claims: data.claims ?? [],
+      // Дипломатия: посольства, договоры, браки, соглядатаи, съезды.
+      embassies: data.embassies ?? [],
+      treaties: data.treaties ?? [],
+      marriages: data.marriages ?? [],
+      spies: data.spies ?? [],
+      rumours: data.rumours ?? [],
+      congress: data.congress ?? null,
+      congresses: data.congresses ?? [],
+      overtures: data.overtures ?? [],
+      pledges: data.pledges ?? [],
+      // Война: кампания, донесения, гарнизоны, флот, запоры, грамота.
+      campaign: data.campaign ?? null,
+      dispatches: data.dispatches ?? [],
+      garrisons: data.garrisons ?? {},
+      navy: data.navy ?? [],
+      blockades: data.blockades ?? [],
+      letter: data.letter ?? null,
+      // Роты: они были в мире и до тебя.
+      companies:
+        data.companies ??
+        COMPANIES.map((def, index) => ({
+          id: def.id,
+          men: def.men,
+          hiredBy: null,
+          untilDay: 0,
+          owed: 0,
+          unpaidDays: 0,
+          fame: 0,
+          locationId: places[(index * 37 + def.men) % Math.max(1, places.length)] ?? '',
+        })),
+      commission: data.commission ?? null,
+      // Мир как торг и память о нём.
+      talks: data.talks ?? null,
+      peaces: data.peaces ?? [],
+      grievances: data.grievances ?? [],
+      // Наследство, города, церковь.
+      heirLaw: data.heirLaw ?? 'eldest',
+      pacts: data.pacts ?? [],
+      churchAnger: data.churchAnger ?? 0,
+      censure: data.censure ?? null,
     }
   },
 }

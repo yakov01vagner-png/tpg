@@ -146,8 +146,17 @@ describe('Р2 и Р5: брак как договор', () => {
       applyCommand(warm, { type: 'sendEnvoy', to: id, errand: 'marriage', byLetter: true }),
     )
     let later = sent
+    let paidOn: { before: number; after: number } | null = null
     for (let day = 0; day < 50; day += 1) {
+      const before = later.character.money
+      const had = later.marriages?.length ?? 0
       later = ok(applyCommand(later, { type: 'tick', minutes: MINUTES_PER_DAY }))
+      // Приданое платится в тот день, когда сладился брак: за пятьдесят суток
+      // держава успевает заработать больше, чем стоил брак, и разницу на концах
+      // считать нечестно.
+      if ((later.marriages?.length ?? 0) > had) {
+        paidOn = { before, after: later.character.money }
+      }
     }
     const wed = marriedTo(later, id)
     console.log(
@@ -157,7 +166,8 @@ describe('Р2 и Р5: брак как договор', () => {
     )
     if (wed) {
       expect(later.marriages).toHaveLength(1)
-      expect(later.character.money).toBeLessThan(warm.character.money)
+      expect(paidOn).toBeTruthy()
+      if (paidOn) expect(paidOn.after).toBeLessThan(paidOn.before)
     }
   })
 })
