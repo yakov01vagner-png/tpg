@@ -8,6 +8,7 @@ import { LORD_NAMES, LORD_TITLES } from './content/world'
 import type { Settlement } from './economy'
 import { PLAYER } from './holding'
 import { foodSecurity } from './life'
+import { crownWarlust, temperDeeds } from './lordlife'
 import type { Rng } from './rng'
 import { nextFloat, nextInt, rollChance } from './rng'
 import { DAYS_PER_YEAR } from './time'
@@ -341,14 +342,20 @@ export function tickPolitics(
 
   for (let i = 0; i < days; i += 1) {
     // Мир кончается.
-    const [declares, afterDeclare] = rollChance(generator, DECLARE_CHANCE)
+    // Сперва кто с кем, потом — дойдёт ли до объявления: нрав короны входит в
+    // тот же бросок (этап 66, Л5), а не в отдельный. Лишний бросок на каждые
+    // сутки мира сдвинул бы всю случайность вместе с собой.
+    const [first, afterFirst] = nextInt(generator, 0, kingdomIds.length - 1)
+    const [second, afterSecond] = nextInt(afterFirst, 0, kingdomIds.length - 1)
+    generator = afterSecond
+    const a = kingdomIds[first]
+    const b = kingdomIds[second]
+    const [declares, afterDeclare] = rollChance(
+      generator,
+      DECLARE_CHANCE * (a ? crownWarlust(a) : 1),
+    )
     generator = afterDeclare
     if (declares && kingdomIds.length > 1) {
-      const [first, afterFirst] = nextInt(generator, 0, kingdomIds.length - 1)
-      const [second, afterSecond] = nextInt(afterFirst, 0, kingdomIds.length - 1)
-      generator = afterSecond
-      const a = kingdomIds[first]
-      const b = kingdomIds[second]
       // На добитого не идут. Пока это было можно, малое королевство доедали
       // вчетвером: Дор-Хазад оставался с одним местом из тринадцати в двух
       // мирах из трёх. Огрызок никому не стоит войны — и соседи не хотят, чтобы
@@ -398,9 +405,13 @@ export function tickPolitics(
       const tiny = total > 0 && smallest / total < 0.12
       // За иной повод держатся крепче: спор о вере кончается позже спора о
       // дани (этап 65, Т1).
+      // Мирится не всякий одинаково (этап 66, Л5): воинственная корона тянет
+      // войну, расчётливая ищет, как её кончить. Считаем по упрямейшей из
+      // двух — мир заключают оба, и хватает одного, кто не хочет.
+      const willing = Math.max(crownWarlust(war.a), crownWarlust(war.b))
       const [peace, afterPeace] = rollChance(
         generator,
-        (PEACE_CHANCE * (tiny ? 5 : 1)) / stubbornOf(war.casus),
+        (PEACE_CHANCE * (tiny ? 5 : 1)) / (stubbornOf(war.casus) * willing),
       )
       generator = afterPeace
       if (!peace) continue
@@ -665,7 +676,13 @@ function tickLords(
     const crownLand = (ownedBy.get(`crown:${lord.kingdomId}`) ?? []).length
     const ownLand = (ownedBy.get(lord.id) ?? []).length
     if (ownLand >= 3 && ownLand >= crownLand) drift -= 0.035
-    const loyalty = Math.max(0, Math.min(100, lord.loyalty + drift * days))
+    // Нрав держит корону крепче или слабее (этап 66, Л1): набожный терпит, где
+    // корыстный уже считает свои выгоды.
+    const held = temperDeeds(lord).loyal
+    const loyalty = Math.max(
+      0,
+      Math.min(100, lord.loyalty + (drift > 0 ? drift * held : drift / held) * days),
+    )
 
     // Момент для мятежа: верности нет, а архимаг короны занят своим.
     // Мятеж — событие, а не погода. Пока война считалась кубиком, лорды

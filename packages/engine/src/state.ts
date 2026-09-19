@@ -11,6 +11,7 @@ import type { Companion } from './companion'
 import type { BuildingId } from './content/buildings'
 import { PLAIN_LAW } from './content/estate'
 import type { Ailment } from './content/heal'
+import type { LordDeedId } from './content/lords'
 import type { QuarterId } from './content/quarters'
 import type { CechMembership } from './craft'
 import type { Settlement } from './economy'
@@ -239,6 +240,12 @@ export interface GameState {
   readonly ailment?: { readonly kind: Ailment; readonly since: number } | null
   /** Увечья: что осталось от плохо заживших ран. */
   readonly maims?: readonly string[]
+  /**
+   * Лорды как люди (этап 66). Что лорды о тебе помнят и как к тебе придворные
+   * партии. Необязательно — сейвы до 0.6 этого не знают.
+   */
+  readonly lordDeeds?: Readonly<Record<string, readonly LordDeedId[]>>
+  readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   readonly realm: { readonly name: string } | null
   /** Взятые поручения. */
@@ -305,6 +312,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     potions: {},
     ailment: null,
     maims: [],
+    lordDeeds: {},
+    factions: {},
     spellcraft: {},
     weather: [],
     artifacts: [],

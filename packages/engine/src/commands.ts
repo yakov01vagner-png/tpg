@@ -116,6 +116,7 @@ import {
 } from './content/heal'
 import { KIN_ASK, KIN_GIFT, UPBRINGING_MINUTES } from './content/home'
 import { TEMPER_LINES } from './content/lines'
+import { FACTION_FAVOUR, FACTION_SPITE, type FactionId, type LordDeedId } from './content/lords'
 import {
   ARCHMAGE_DEED_LABELS,
   ARTIFACTS,
@@ -279,6 +280,7 @@ import {
 } from './knowledge'
 import type { HarvestEvent, LifeEvent } from './life'
 import { LIFE, foodSecurity, rollHarvest, tickDays } from './life'
+import { crownOf, factionDef, factionKey, factionMood, heirRegard, withLordDeed } from './lordlife'
 import {
   type Artifact,
   type Spellcraft,
@@ -578,6 +580,7 @@ export type Command =
   /** Встать лагерем там, где нет крыши. */
   | { readonly type: 'camp'; readonly manner?: CampManner }
   | { readonly type: 'hunt' }
+  | { readonly type: 'askFaction'; readonly kingdomId: string; readonly factionId: FactionId }
   | { readonly type: 'meetEnvoy'; readonly answer: 'yes' | 'no' | 'press' }
   | { readonly type: 'declareWar'; readonly kingdomId: string }
   | { readonly type: 'offerPeace'; readonly kingdomId: string }
@@ -910,6 +913,8 @@ export function applyCommand(
       return camp(state, command.manner ?? 'sleep')
     case 'hunt':
       return hunt(state)
+    case 'askFaction':
+      return askFaction(state, command.kingdomId, command.factionId)
     case 'meetEnvoy':
       return meetEnvoy(state, command.answer)
     case 'declareWar':
@@ -2515,6 +2520,8 @@ function seizePlace(draft: Draft, locationId: string, mode: 'storm' | 'terms'): 
     draft.reputation = withPlaceRep(draft.reputation, locationId, stormed ? -45 : -8)
     if (taken.owner && !taken.owner.startsWith('crown:') && taken.owner !== PLAYER) {
       draft.reputation = withLordRep(draft.reputation, taken.owner, stormed ? -25 : -18)
+      // Лорд помнит не число, а дело (этап 66, Л4).
+      draft.lordDeeds = withLordDeed(draft.lordDeeds, taken.owner, 'robbed')
     }
   }
   draft.siege = null
@@ -2979,6 +2986,9 @@ function captiveFate(state: GameState, captiveId: string, fate: CaptiveFate): Co
   draft.renown += outcome.renown
   if (fate === 'execute') seeDeed(draft, 'sack')
   if (fate === 'release') seeDeed(draft, 'sparePrisoners')
+  // И это он помнит лично (этап 66, Л4): милость и верёвку помнят дольше денег.
+  if (fate === 'release') draft.lordDeeds = withLordDeed(draft.lordDeeds, captive.id, 'saved')
+  if (fate === 'oath') draft.lordDeeds = withLordDeed(draft.lordDeeds, captive.id, 'served')
   advance(draft, hours(2))
   notice(draft, outcome.word, 'war')
   return close(draft)
@@ -4113,6 +4123,49 @@ function offerPeace(state: GameState, kingdomId: string): CommandResult {
   return close(draft)
 }
 
+// --- лорды как люди (этап 66) -----------------------------------------------
+
+/**
+ * Пойти к придворной партии (этап 66, Л6).
+ *
+ * При всякой короне их две пары, и они всегда об одном: воевать или копить,
+ * старая кровь или новые люди. Милость одной — немилость другой: это и делает
+ * двор двором, а не списком имён.
+ */
+function askFaction(state: GameState, kingdomId: string, factionId: FactionId): CommandResult {
+  const kingdom = state.world.kingdoms[kingdomId]
+  if (!kingdom) return fail('unknownAction', 'Такой короны нет.')
+  if (state.locationId !== kingdom.capitalId) {
+    return fail('unavailableHere', 'Партии сидят при дворе, а двор — в столице.')
+  }
+  const mood = factionMood(state, kingdomId, factionId)
+  if (mood < -40) return fail('shunned', 'Эти с тобой разговаривать не станут.')
+
+  const draft = open(state)
+  advance(draft, hours(4))
+  practice(draft, 'persuasion', 16)
+  const def = factionDef(factionId)
+  const against = def.against
+  draft.factions = {
+    ...draft.factions,
+    [factionKey(kingdomId, factionId)]: Math.min(100, mood + FACTION_FAVOUR),
+    [factionKey(kingdomId, against)]: Math.max(
+      -100,
+      factionMood(draft, kingdomId, against) - FACTION_SPITE,
+    ),
+  }
+  // Поддержка партии — это и милость её людей: лорды короны смотрят на тебя
+  // её глазами.
+  const crown = crownOf(kingdomId)
+  notice(
+    draft,
+    `${def.label} при дворе ${crown.title}а ${crown.name}а: «${def.asks}» Тебя услышали.`,
+    'people',
+  )
+  notice(draft, `${factionDef(against).label} этого не простит.`, 'people')
+  return close(draft)
+}
+
 function siegeLift(state: GameState): CommandResult {
   if (!state.siege) return fail('invalid', 'Ты никого не осаждаешь.')
   const draft = open(state)
@@ -4699,6 +4752,7 @@ function finishQuest(state: GameState, questId: string): CommandResult {
   const owner = state.settlements[quest.issuerLocationId]?.owner
   if (owner && !owner.startsWith('crown:') && owner !== PLAYER) {
     draft.reputation = withLordRep(draft.reputation, owner, 8)
+    draft.lordDeeds = withLordDeed(draft.lordDeeds, owner, 'served')
   }
   draft.renown += 1
   draft.quests = draft.quests.filter((candidate) => candidate.id !== questId)
@@ -7815,6 +7869,8 @@ interface Draft {
   potions: Readonly<Record<string, number>>
   ailment: { kind: Ailment; since: number } | null
   maims: readonly string[]
+  lordDeeds: Readonly<Record<string, readonly LordDeedId[]>>
+  factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
   artifacts: readonly Artifact[]
@@ -7879,6 +7935,8 @@ function open(state: GameState): Draft {
     potions: state.potions ?? {},
     ailment: state.ailment ?? null,
     maims: state.maims ?? [],
+    lordDeeds: state.lordDeeds ?? {},
+    factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
     artifacts: state.artifacts ?? [],
@@ -7978,6 +8036,19 @@ function close(draft: Draft): CommandResult {
     draft.politics = politics.politics
     draft.settlements = politics.settlements
     draft.events.push(...warNews(draft.base, draft.locationId, politics.events))
+    // Наследник знает тебя по рассказам (этап 66, Л3): милость к нему
+    // начинается с половины отцовой, и дурное из неё помнится вдвое.
+    for (const event of politics.events) {
+      if (event.type !== 'lordDied') continue
+      const regard = heirRegard(draft.base, event.lordId)
+      if (regard !== 0) draft.reputation = withLordRep(draft.reputation, event.heirId, regard)
+      // Дела отца сыну не в счёт: память о них уходит вместе с ним.
+      if (draft.lordDeeds[event.lordId]) {
+        const rest = { ...draft.lordDeeds }
+        delete rest[event.lordId]
+        draft.lordDeeds = rest
+      }
+    }
 
     // Дружины ходят по тем же суткам. Дней может пройти много — считаем каждый:
     // войско, прошедшее полстраны за один такт, — это опять телепорт.
@@ -8185,6 +8256,8 @@ function close(draft: Draft): CommandResult {
     potions: draft.potions,
     ailment: draft.ailment,
     maims: draft.maims,
+    lordDeeds: draft.lordDeeds,
+    factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
     artifacts: draft.artifacts,

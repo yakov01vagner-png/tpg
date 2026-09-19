@@ -5,6 +5,7 @@ import type { TroopId } from './content/troops'
 import type { Settlement } from './economy'
 import { takeLand } from './holding'
 import { ARMY_PACE, legHoursFor } from './journey'
+import { temperDeeds } from './lordlife'
 import type { Party } from './party'
 import { type Rng, nextFloat, nextInt, rollChance } from './rng'
 import type { Season } from './time'
@@ -894,7 +895,11 @@ export function tickBands(
         generator = afterSeverity
         // Дозорная башня: люди успевают уйти за стены, набег берёт вдвое меньше.
         const warned = victim.buildings.includes('watchtower') ? 0.5 : 1
-        const lost = Math.round(victim.population * (0.005 + severity * 0.015) * warned)
+        // Нрав лорда виден в деле (этап 66, Л1): мрачный разоряет вдвое против
+        // набожного, и это не строка в описании, а люди, которых не стало.
+        const leader = politics.lords.find((one) => one.id === band.lordId)
+        const cruelty = leader ? temperDeeds(leader).cruel : 1
+        const lost = Math.round(victim.population * (0.005 + severity * 0.015) * warned * cruelty)
         // Не всех уводят и не все гибнут: часть уходит к соседям и вернётся,
         // когда всё утихнет. Пока этого не было, набег был чистым вычитанием, и
         // за век войны большие места худели на пятую часть (долг версии 0.3).
