@@ -39,6 +39,7 @@ import type { Offices } from './office'
 import type { Interdict, Membership } from './order'
 import type { Party } from './party'
 import { EMPTY_PARTY } from './party'
+import type { Grievance, PeaceRecord, Talks } from './peace'
 import type { Plague } from './plague'
 import { arrivalQuarter } from './quarter'
 import type { Quest } from './quest'
@@ -354,6 +355,12 @@ export interface GameState {
   readonly blockades?: readonly Blockade[]
   /** Корсарская грамота: чей разбой на воде считается службой. */
   readonly letter?: Letter | null
+  /** Идущие переговоры о мире (этап 88). */
+  readonly talks?: Talks | null
+  /** Заключённые миры: для летописи и для памяти об обиде. */
+  readonly peaces?: readonly PeaceRecord[]
+  /** Обиды, которые зреют в повод новой войны. */
+  readonly grievances?: readonly Grievance[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -462,6 +469,9 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     navy: [],
     blockades: [],
     letter: null,
+    talks: null,
+    peaces: [],
+    grievances: [],
     factions: {},
     spellcraft: {},
     weather: [],

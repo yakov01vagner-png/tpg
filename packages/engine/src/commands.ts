@@ -185,6 +185,7 @@ import {
 } from './content/lore'
 import { ROWS_BY_ID } from './content/merchants'
 import { NAVY_WORDS, WARSHIP_DEFS, type WarshipKind } from './content/navy'
+import type { MediatorKind, PeaceTerm } from './content/peace'
 import type { QuarterId } from './content/quarters'
 import {
   GUARD_HIRE,
@@ -478,6 +479,25 @@ import {
   veteransOf,
   withUnits,
 } from './party'
+import type { Grievance, PeaceRecord, Talks } from './peace'
+import {
+  PEACE,
+  PEACE_WORDS,
+  asksOf,
+  grievanceFrom,
+  grievancesOf,
+  grudgeRipe,
+  harshness,
+  mediatorDef,
+  mediatorsFor,
+  offerWeight,
+  peaceChronicle,
+  peacesOf,
+  shameOf,
+  talksOf,
+  termDef,
+  warToll,
+} from './peace'
 import { isAvailableAt } from './place'
 import type { Plague, PlagueEvent } from './plague'
 import { plagueAt, tickPlague } from './plague'
@@ -978,6 +998,10 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Мир и его цена (этап 88): сесть за стол, предложить условия, встать. */
+  | { readonly type: 'openTalks'; readonly against: string; readonly mediator?: MediatorKind }
+  | { readonly type: 'tableTerms'; readonly terms: readonly PeaceTerm[] }
+  | { readonly type: 'endTalks' }
   /** Съезд корон (этап 83): созвать, купить голос. */
   | {
       readonly type: 'callCongress'
@@ -1454,6 +1478,12 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'openTalks':
+      return openTalks(state, command.against, command.mediator)
+    case 'tableTerms':
+      return tableTerms(state, command.terms)
+    case 'endTalks':
+      return endTalks(state)
     case 'askLetter':
       return askLetter(state, command.against)
     case 'callCongress':
@@ -9333,6 +9363,9 @@ interface Draft {
   navy: readonly Warship[]
   blockades: readonly Blockade[]
   letter: Letter | null
+  talks: Talks | null
+  peaces: readonly PeaceRecord[]
+  grievances: readonly Grievance[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9427,6 +9460,9 @@ function open(state: GameState): Draft {
     navy: state.navy ?? [],
     blockades: state.blockades ?? [],
     letter: state.letter ?? null,
+    talks: state.talks ?? null,
+    peaces: state.peaces ?? [],
+    grievances: state.grievances ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9717,6 +9753,8 @@ function close(draft: Draft): CommandResult {
 
     // Войско ест каждый день, а донесения идут своим ходом (этап 84, Ка3 и Ка5).
     tickCampaign(draft, daysPassed)
+    // Обиды зреют в поводы, а нарушенные миры уходят в летопись (этап 88).
+    tickPeace(draft, daysPassed)
     // Флот ест содержание, суда сходят со стапеля, запертые гавани беднеют
     // (этап 87, Ф1 и Ф4).
     tickNavy(draft, daysPassed)
@@ -9843,6 +9881,9 @@ function close(draft: Draft): CommandResult {
     navy: draft.navy,
     blockades: draft.blockades,
     letter: draft.letter,
+    talks: draft.talks,
+    peaces: draft.peaces,
+    grievances: draft.grievances,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -11513,6 +11554,194 @@ function shutOwnHarbours(draft: Draft, days: number): void {
   draft.settlements = places
   if (shut > 0 && day % 10 === 0) {
     notice(draft, `Чужие суда держат твои гавани: заперто ${shut}. Пошлина не идёт.`, 'war')
+  }
+}
+
+/**
+ * Сесть за стол (этап 88, М1 и М4).
+ *
+ * Мир перестаёт быть броском: его начинают нарочно. За столом сразу видно, во
+ * что война встала обеим сторонам и чего другая сторона просит; посредник
+ * стоит денег и делает разговор легче.
+ */
+function openTalks(state: GameState, against: string, mediator?: MediatorKind): CommandResult {
+  if (state.talks) return fail('invalid', 'Переговоры уже идут.')
+  const war = state.politics.wars.find((one) => sameSides(one, PLAYER, against))
+  if (!war) return fail('invalid', 'С этой короной ты не воюешь.')
+  const day = dayOf(state.time)
+  const offer = mediator
+    ? mediatorsFor(state, state.world, against, day).find((one) => one.kind === mediator)
+    : null
+  if (mediator && !offer) return fail('requirements', 'Такого посредника здесь не найти.')
+  if (offer && state.character.money < offer.fee) {
+    return fail('noMoney', `${offer.name} берёт ${offer.fee}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  if (offer) addMoney(draft, -offer.fee)
+  advance(draft, hours(8))
+  const asks = asksOf(draft.base, draft.base.world, against, day)
+  draft.talks = { against, sinceDay: day, asks, mediator: mediator ?? null, rounds: 0 }
+  const ours = warToll(draft.base, draft.base.world, PLAYER, war, day)
+  const theirs = warToll(draft.base, draft.base.world, against, war, day)
+  notice(
+    draft,
+    `Стол накрыт${offer ? `, мирит ${offer.name} (берёт ${offer.fee}: ${offer.takes})` : ''}. Твой счёт войны ${ours.cost}, их — ${theirs.cost}. Просят: ${asks.map((one) => termDef(one).label).join(', ')}.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Положить условия на стол (этап 88, М1 и М3).
+ *
+ * Условий бывает несколько разом, и вес у них разный: земля тяжелее дани, дань
+ * тяжелее выкупа, признание вины не стоит ничего и обиднее всего. Примут или
+ * нет — считается положением, а не красноречием.
+ */
+function tableTerms(state: GameState, terms: readonly PeaceTerm[]): CommandResult {
+  const talks = talksOf(state)
+  if (!talks) return fail('invalid', 'Стол не накрыт: переговоров нет.')
+  if (terms.length === 0) return fail('invalid', 'Мир без условий — это не мир, а передышка.')
+  const war = state.politics.wars.find((one) => sameSides(one, PLAYER, talks.against))
+  if (!war) return fail('invalid', 'Война уже кончилась.')
+  const day = dayOf(state.time)
+
+  const draft = open(state)
+  advance(draft, hours(6))
+  practice(draft, 'persuasion', 20)
+  const chance = offerWeight(draft.base, draft.base.world, talks.against, terms, day)
+  const [taken, afterRoll] = rollChance(draft.rng, chance)
+  draft.rng = afterRoll
+  if (!taken) {
+    const rounds = talks.rounds + 1
+    // Терпение за столом не бесконечно: после трёх отказов послы встают.
+    if (rounds >= 3) {
+      draft.talks = null
+      notice(draft, `${PEACE_WORDS.walked} (${Math.round(chance * 100)} из ста)`, 'world')
+      return close(draft)
+    }
+    draft.talks = { ...talks, rounds }
+    notice(
+      draft,
+      `Условия отклонены: ${terms.map((one) => termDef(one).label).join(', ')} — слишком дорого. (${Math.round(chance * 100)} из ста)`,
+      'world',
+    )
+    return close(draft)
+  }
+
+  // Мир заключён: война уходит из состояния, условия ложатся в летопись.
+  draft.politics = {
+    ...draft.politics,
+    wars: draft.politics.wars.filter((one) => !sameSides(one, PLAYER, talks.against)),
+  }
+  const hard = harshness(terms)
+  const ours = warToll(draft.base, draft.base.world, PLAYER, war, day)
+  const theirs = warToll(draft.base, draft.base.world, talks.against, war, day)
+  const yielded = ours.cost <= theirs.cost ? talks.against : PLAYER
+  const record: PeaceRecord = {
+    against: talks.against,
+    day,
+    terms: [...terms],
+    mediator: talks.mediator,
+    harshness: hard,
+    yielded,
+  }
+  draft.peaces = [...peacesOf(draft), record]
+  // Условия, у которых есть вес в мире, ложатся в мир.
+  if (terms.includes('tribute')) {
+    draft.politics = {
+      ...draft.politics,
+      tributes: [
+        ...draft.politics.tributes.filter(
+          (one) => !(one.from === talks.against && one.to === PLAYER),
+        ),
+        { from: talks.against, to: PLAYER, perDay: 6, untilDay: day + 1800 },
+      ],
+    }
+  }
+  if (terms.includes('ransom')) addMoney(draft, 600)
+  draft.politics = withRelation(
+    draft.politics,
+    PLAYER,
+    talks.against,
+    terms.includes('marriage') ? 12 : 4,
+  )
+  // Тяжёлый мир помнят: он сам становится поводом (М5).
+  const grudge = grievanceFrom(record, day)
+  if (grudge) {
+    draft.grievances = [...grievancesOf(draft), grudge]
+  }
+  draft.talks = null
+  notice(
+    draft,
+    `${PEACE_WORDS.struck} ${terms.map((one) => termDef(one).label).join(', ')}; вес условий ${hard}, обиды ${shameOf(terms)}. ${grudge ? PEACE_WORDS.forced : PEACE_WORDS.fair}${talks.mediator ? ` Мирил ${mediatorDef(talks.mediator).label}.` : ''}`,
+    'world',
+  )
+  return close(draft)
+}
+
+/** Встать из-за стола. */
+function endTalks(state: GameState): CommandResult {
+  if (!state.talks) return fail('invalid', 'Переговоров нет.')
+  const draft = open(state)
+  advance(draft, hours(2))
+  draft.talks = null
+  notice(draft, 'Ты встал из-за стола: война продолжается.', 'world')
+  return close(draft)
+}
+
+/**
+ * Память о мире (этап 88, М5 и М6).
+ *
+ * Обида зреет полтора года и становится поводом: корона, которую заставили
+ * подписать под ножом, объявляет войну сама — и это та же война, что и любая
+ * другая, только с именем у причины. Нарушенный мир отмечается в летописи.
+ */
+function tickPeace(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  const ripe = grievancesOf(draft).filter((one) => grudgeRipe(one, day))
+  if (ripe.length > 0) {
+    let wars = draft.politics.wars
+    const left = grievancesOf(draft).filter((one) => !grudgeRipe(one, day))
+    for (const grudge of ripe) {
+      const foe = grudge.who === PLAYER ? grudge.against : grudge.who
+      const us = grudge.who === PLAYER ? PLAYER : grudge.against
+      if (us !== PLAYER && foe !== PLAYER) continue
+      if (atWar(draft.politics, PLAYER, foe === PLAYER ? us : foe)) continue
+      const other = foe === PLAYER ? us : foe
+      wars = [
+        ...wars,
+        {
+          a: other,
+          b: PLAYER,
+          since: day,
+          reason: 'прежний мир, подписанный под ножом',
+          casus: { kind: 'feud' as const },
+        },
+      ]
+      notice(
+        draft,
+        `${kingdomName(draft.base, other)} вспомнил прежний мир: война объявлена снова.`,
+        'war',
+      )
+      // Старый мир считается нарушенным: летопись это помнит.
+      draft.peaces = peacesOf(draft).map((one) =>
+        one.against === other && !one.brokenDay ? { ...one, brokenDay: day } : one,
+      )
+    }
+    draft.politics = { ...draft.politics, wars }
+    draft.grievances = left
+  }
+  // Мир, нарушенный не обидой, а войной: отмечаем и такое.
+  for (const record of peacesOf(draft)) {
+    if (record.brokenDay) continue
+    if (atWar(draft.politics, PLAYER, record.against)) {
+      draft.peaces = peacesOf(draft).map((one) =>
+        one === record ? { ...one, brokenDay: day } : one,
+      )
+    }
   }
 }
 
