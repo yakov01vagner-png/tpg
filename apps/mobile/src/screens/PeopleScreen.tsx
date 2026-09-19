@@ -31,6 +31,7 @@ import {
   partyCapacity,
   partySize,
   partyStrength,
+  peopleAt,
   receptionFor,
   speakersAt,
   talkedTo,
@@ -98,6 +99,8 @@ export function PeopleScreen({ game }: { game: GameState }) {
         </Stats>
         {size === 0 ? <Dim>Наёмных людей можно взять там, где они есть.</Dim> : null}
       </Panel>
+
+      <Folk game={game} />
 
       {game.bands.some((band) => band.locationId === game.locationId && !band.travel) ? (
         <Section title="Войско у ворот">
@@ -467,4 +470,29 @@ function wishLine(companion: Companion): string {
   if (wishDone(companion)) return ` · ${wish.label}: сделано`
   const share = Math.round(wishShare(companion) * 100)
   return ` · ${wish.label}${share > 0 ? ` (${share}%)` : ''}`
+}
+
+/**
+ * Кто здесь есть (этап 71, У1).
+ *
+ * Один список на всех: купец, мастер, лекарь, священник, лорд с двором, братья,
+ * свой управляющий, свой караванщик, шкипер, отшельник. До сих пор каждый экран
+ * собирал своих, и человек выглядел по-разному в зависимости от того, с какой
+ * стороны на него смотрят.
+ */
+function Folk({ game }: { game: GameState }) {
+  const people = peopleAt(game)
+  if (people.length === 0) return null
+  return (
+    <Section title="Кто здесь есть" aside={`${people.length}`}>
+      {people.map((one) => (
+        <Row
+          key={one.id}
+          glyph={<Portrait seed={one.id} size={34} age={40} />}
+          title={one.name}
+          subtitle={`${one.about} · ${one.attitude}${one.says ? ` — «${one.says}»` : ''}`}
+        />
+      ))}
+    </Section>
+  )
 }

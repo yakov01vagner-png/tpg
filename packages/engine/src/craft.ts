@@ -77,9 +77,12 @@ export interface CraftMaster {
 
 export function masterOf(locationId: string, job: JobDef): CraftMaster {
   const hash = hashOf(`${locationId}|${job.id}`)
+  // Перемешиваем прежде, чем брать остаток: на близких строках младшие разряды
+  // повторяются, и два мастера в одном урочище звались одинаково (этап 71).
+  const mixed = (hash ^ (hash >>> 13) ^ (hash >>> 21)) >>> 0
   return {
     id: `master:${locationId}:${job.id}`,
-    name: CRAFT_MASTER_NAMES[hash % CRAFT_MASTER_NAMES.length] ?? 'Мастер',
+    name: CRAFT_MASTER_NAMES[mixed % CRAFT_MASTER_NAMES.length] ?? 'Мастер',
     temper: MASTER_TEMPER_IDS[(hash >>> 9) % MASTER_TEMPER_IDS.length] ?? 'fair',
     jobId: job.id,
     locationId,
