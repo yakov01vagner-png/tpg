@@ -184,6 +184,7 @@ import {
   WIND_HARVEST,
 } from './content/lore'
 import { ROWS_BY_ID } from './content/merchants'
+import { NAVY_WORDS, WARSHIP_DEFS, type WarshipKind } from './content/navy'
 import type { QuarterId } from './content/quarters'
 import {
   GUARD_HIRE,
@@ -407,6 +408,27 @@ import {
   orderFrom,
   talesOf,
 } from './merchant'
+import type { Blockade, Letter, Warship } from './navy'
+import {
+  NAVY,
+  afloat,
+  blockadeBite,
+  blockadesOf,
+  crownFleet,
+  fleetCarries,
+  fleetForce,
+  fleetUpkeep,
+  landingLoss,
+  landingSites,
+  navyOf,
+  prizeAt,
+  seaFight,
+  seaLedger,
+  seaSupplied,
+  shipForce,
+  warshipDef,
+  windAt,
+} from './navy'
 import {
   type Appointment,
   ERRAND_COST,
@@ -948,6 +970,14 @@ export type Command =
   | { readonly type: 'dismissCompany'; readonly companyId: string }
   | { readonly type: 'takeCommission'; readonly kingdomId: string; readonly days: number }
   | { readonly type: 'leaveCommission' }
+  /** Флот и десант (этап 87). */
+  | { readonly type: 'buildWarship'; readonly kind: WarshipKind }
+  | { readonly type: 'landTroops'; readonly locationId: string; readonly men: number }
+  | { readonly type: 'blockadePort'; readonly locationId: string }
+  | { readonly type: 'liftBlockade'; readonly locationId: string }
+  | { readonly type: 'huntTrade'; readonly locationId: string }
+  | { readonly type: 'seaSortie'; readonly locationId: string }
+  | { readonly type: 'askLetter'; readonly against: string }
   /** Съезд корон (этап 83): созвать, купить голос. */
   | {
       readonly type: 'callCongress'
@@ -1412,6 +1442,20 @@ export function applyCommand(
       return takeCommission(state, command.kingdomId, command.days)
     case 'leaveCommission':
       return leaveCommission(state)
+    case 'buildWarship':
+      return buildWarship(state, command.kind)
+    case 'landTroops':
+      return landTroops(state, command.locationId, command.men)
+    case 'blockadePort':
+      return blockadePort(state, command.locationId)
+    case 'liftBlockade':
+      return liftBlockade(state, command.locationId)
+    case 'huntTrade':
+      return huntTrade(state, command.locationId)
+    case 'seaSortie':
+      return seaSortie(state, command.locationId)
+    case 'askLetter':
+      return askLetter(state, command.against)
     case 'callCongress':
       return callCongress(state, command.question, command.about)
     case 'buyVote':
@@ -9286,6 +9330,9 @@ interface Draft {
   garrisons: Readonly<Record<string, GarrisonOrder>>
   companies: readonly Company[]
   commission: Commission | null
+  navy: readonly Warship[]
+  blockades: readonly Blockade[]
+  letter: Letter | null
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9377,6 +9424,9 @@ function open(state: GameState): Draft {
     garrisons: state.garrisons ?? {},
     companies: state.companies ?? [],
     commission: state.commission ?? null,
+    navy: state.navy ?? [],
+    blockades: state.blockades ?? [],
+    letter: state.letter ?? null,
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9667,6 +9717,9 @@ function close(draft: Draft): CommandResult {
 
     // Войско ест каждый день, а донесения идут своим ходом (этап 84, Ка3 и Ка5).
     tickCampaign(draft, daysPassed)
+    // Флот ест содержание, суда сходят со стапеля, запертые гавани беднеют
+    // (этап 87, Ф1 и Ф4).
+    tickNavy(draft, daysPassed)
     // Роты служат, требуют жалованья и уходят к тому, кто платит больше
     // (этап 86, Н2 и Н3); без нанимателя они кормятся разбоем (Н5).
     tickCompanies(draft, daysPassed)
@@ -9787,6 +9840,9 @@ function close(draft: Draft): CommandResult {
     garrisons: draft.garrisons,
     companies: draft.companies,
     commission: draft.commission,
+    navy: draft.navy,
+    blockades: draft.blockades,
+    letter: draft.letter,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -10171,6 +10227,13 @@ function tickCampaign(draft: Draft, days: number): void {
         }
         draft.reputation = withPlaceRep(draft.reputation, supply.fromId, SUPPLY.forageMood * days)
       }
+      fedBands.push(host)
+      continue
+    }
+    // Берег кормится с моря (этап 87, Ф3): пока гавань за тобой и флот на
+    // плаву, десанту везут. Отрезали — и он голодает, как всякое войско.
+    const sea = seaSupplied(draft.base, draft.base.world, host, day)
+    if (sea.fed) {
       fedBands.push(host)
       continue
     }
@@ -11054,6 +11117,402 @@ function tickCommission(draft: Draft, days: number): void {
     )
     draft.renown += 2
     draft.commission = null
+  }
+}
+
+/**
+ * Заложить боевое судно (этап 87, Ф1).
+ *
+ * Флот строят в гавани и строят долго: ушкуй — двадцать пять суток, насад —
+ * восемьдесят. Пока судно на стапеле, оно есть в списке, но не воюет: у войны
+ * на воде длинное начало.
+ */
+function buildWarship(state: GameState, kind: WarshipKind): CommandResult {
+  const here = state.world.locations[state.locationId]
+  if (!here) return fail('invalid', 'Непонятно, где находится герой.')
+  if (!isHarbour(state.world, state.locationId)) {
+    return fail('unavailableHere', NAVY_WORDS.noHarbour)
+  }
+  const settlement = state.settlements[state.locationId]
+  if (!settlement || !isOwnedByPlayer(settlement)) {
+    return fail('requirements', 'Верфь закладывают в своей гавани.')
+  }
+  const def = WARSHIP_DEFS[kind]
+  if (state.character.money < def.price) {
+    return fail('noMoney', `${def.label} стоит ${def.price}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  const day = dayOf(draft.time)
+  addMoney(draft, -def.price)
+  advance(draft, hours(8))
+  const [index, afterName] = nextInt(draft.rng, 0, SHIP_NAMES.length - 1)
+  draft.rng = afterName
+  const name = SHIP_NAMES[index] ?? 'Чайка'
+  draft.navy = [
+    ...navyOf(draft),
+    {
+      id: `ship:${day}:${draft.navy.length}`,
+      kind,
+      name,
+      condition: 1,
+      crew: def.crew,
+      portId: state.locationId,
+      readyDay: day + def.days,
+    },
+  ]
+  notice(
+    draft,
+    `${def.label} «${name}» заложен в ${here.name}: ${def.price} серебром, на воду через ${def.days} сут.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Высадить людей на чужой берег (этап 87, Ф3).
+ *
+ * Десант — это часть на карте (этап 84, Ка5), поставленная там, куда по суше
+ * не дойти. Цена высадки платится сразу: на урезе воды строй ломается, а если
+ * берег защищают — ломается вдвое.
+ */
+function landTroops(state: GameState, locationId: string, men: number): CommandResult {
+  const day = dayOf(state.time)
+  const ships = afloat(state, day)
+  if (ships.length === 0) return fail('requirements', NAVY_WORDS.noFleet)
+  if (!Number.isInteger(men) || men <= 0) return fail('invalid', 'Сколько людей высаживать?')
+  if (men > partySize(state.party)) return fail('requirements', 'Столько людей у тебя нет.')
+  if (men > fleetCarries(ships)) {
+    return fail('requirements', `Флот поднимет ${fleetCarries(ships)} человек, не больше.`)
+  }
+  const shore = landingSites(state.world, state.locationId)
+  if (!shore.includes(locationId)) {
+    return fail('unavailableHere', 'Туда морем отсюда не дойти.')
+  }
+  const target = state.world.locations[locationId]
+  const settlement = state.settlements[locationId]
+  if (!target) return fail('invalid', 'Такого берега нет.')
+
+  const draft = open(state)
+  const defended = settlement ? garrisonSize(settlement) > 0 && !isOwnedByPlayer(settlement) : false
+  const lost = landingLoss(men, defended)
+  const troop = worstTroop(draft.party)
+  const landedMen = Math.max(1, men - lost)
+  draft.party = withUnits(draft.party, troop, -men)
+  draft.bands = [
+    ...draft.bands,
+    {
+      id: `landing:${day}:${locationId}`,
+      lordId: PLAYER,
+      kingdomId: PLAYER,
+      units: { [troop]: landedMen },
+      morale: 65,
+      locationId,
+      travel: null,
+      goal: { type: 'defend', targetId: locationId },
+      siegeDays: 0,
+    },
+  ]
+  advance(draft, hours(12))
+  notice(
+    draft,
+    `Высадка в ${target.name}: на берегу ${landedMen} из ${men}${defended ? ', берег защищали' : ''}.`,
+    'war',
+  )
+  return close(draft)
+}
+
+/**
+ * Сойтись на воде (этап 87, Ф2).
+ *
+ * Чужой флот выводится из гаваней короны и её войн: хранить его незачем, а
+ * встретить можно у любой его гавани. Считается сила, ветер и ход: ходкое
+ * судно уходит от тяжёлого, тяжёлое ломает лёгкое. Бросок один — на то,
+ * насколько дело вышло за рамки расчёта.
+ */
+function seaSortie(state: GameState, locationId: string): CommandResult {
+  const day = dayOf(state.time)
+  const ours = afloat(state, day)
+  if (ours.length === 0) return fail('requirements', NAVY_WORDS.noFleet)
+  if (!isHarbour(state.world, locationId)) return fail('invalid', 'Это не гавань.')
+  const near = landingSites(state.world, state.locationId)
+  if (!near.includes(locationId) && locationId !== state.locationId) {
+    return fail('unavailableHere', 'Туда отсюда не дойти под парусом.')
+  }
+  const settlement = state.settlements[locationId]
+  const here = state.world.locations[locationId]
+  if (!settlement || !here) return fail('invalid', 'Такого места нет.')
+  const side = sideOfPlace(state, settlement)
+  if (!side || !atWar(state.politics, PLAYER, side)) {
+    return fail('requirements', 'С этой короной ты не воюешь.')
+  }
+  const theirs = crownFleet(state, state.world, side, day).filter(
+    (one) => one.portId === locationId,
+  )
+  if (theirs.length === 0) return fail('requirements', 'У этой гавани чужих судов нет.')
+
+  const draft = open(state)
+  const wind = windAt(day, locationId)
+  const [roll, afterRoll] = nextFloat(draft.rng)
+  draft.rng = afterRoll
+  const fight = seaFight(ours, theirs, wind, roll)
+  advance(draft, hours(10))
+  // Свои потери — настоящие: суда уходят из списка.
+  if (fight.lostShips > 0) {
+    const sunk = new Set(
+      [...ours]
+        .sort((a, b) => shipForce(a) - shipForce(b))
+        .slice(0, fight.lostShips)
+        .map((one) => one.id),
+    )
+    draft.navy = navyOf(draft).filter((one) => !sunk.has(one.id))
+  }
+  // Уцелевшим достаётся: море треплет и победителя.
+  draft.navy = navyOf(draft).map((one) =>
+    one.readyDay <= day ? { ...one, condition: Math.max(0.2, one.condition - 0.1) } : one,
+  )
+  if (fight.end === 'boarded') {
+    const prize = prizeAt(draft.base, locationId)
+    addMoney(draft, prize)
+    notice(draft, `${here.name}: ${fight.says} С палуб взято ${prize}.`, 'war')
+  } else {
+    notice(draft, `${here.name}: ${fight.says}`, 'war')
+  }
+  if (fight.end === 'sunk' || fight.end === 'boarded') draft.renown += 2
+  return close(draft)
+}
+
+/**
+ * Запереть чужую гавань (этап 87, Ф4).
+ *
+ * Блокада — война без боя: в гавань не входит подвоз, город беднеет и помнит
+ * это, а его хозяин теряет пошлину каждые сутки.
+ */
+function blockadePort(state: GameState, locationId: string): CommandResult {
+  const day = dayOf(state.time)
+  const ships = afloat(state, day)
+  if (ships.length === 0) return fail('requirements', NAVY_WORDS.noFleet)
+  if (!isHarbour(state.world, locationId)) return fail('invalid', 'Это не гавань.')
+  const settlement = state.settlements[locationId]
+  const here = state.world.locations[locationId]
+  if (!settlement || !here) return fail('invalid', 'Такого места нет.')
+  if (isOwnedByPlayer(settlement)) return fail('invalid', 'Свою гавань не запирают.')
+  // Блокада — дело войны: своей или той короны, которой служишь.
+  const side = sideOfPlace(state, settlement)
+  const war = hostileTo(state, settlement) || (side !== null && atWar(state.politics, PLAYER, side))
+  if (!war) {
+    return fail('requirements', 'Запирать чужую гавань без войны — это разбой, а не блокада.')
+  }
+  if (blockadesOf(state).some((one) => one.locationId === locationId)) {
+    return fail('invalid', 'Эта гавань уже заперта.')
+  }
+
+  const draft = open(state)
+  advance(draft, hours(8))
+  draft.blockades = [...blockadesOf(draft), { locationId, sinceDay: day, ships: ships.length }]
+  notice(draft, `${here.name} заперт: ${ships.length} судов держат запор.`, 'war')
+  return close(draft)
+}
+
+/** Снять блокаду. */
+function liftBlockade(state: GameState, locationId: string): CommandResult {
+  if (!blockadesOf(state).some((one) => one.locationId === locationId)) {
+    return fail('invalid', 'Эта гавань не заперта тобой.')
+  }
+  const draft = open(state)
+  advance(draft, hours(4))
+  draft.blockades = blockadesOf(draft).filter((one) => one.locationId !== locationId)
+  notice(draft, `${draft.base.world.locations[locationId]?.name}: запор снят.`, 'war')
+  return close(draft)
+}
+
+/**
+ * Охота на чужую торговлю (этап 87, Ф5).
+ *
+ * С грамотой это служба, без грамоты — разбой. Добыча одна и та же; разное
+ * только то, кем тебя после этого считают и насколько портятся отношения.
+ */
+function huntTrade(state: GameState, locationId: string): CommandResult {
+  const day = dayOf(state.time)
+  const ships = afloat(state, day)
+  if (ships.length === 0) return fail('requirements', NAVY_WORDS.noFleet)
+  if (!isHarbour(state.world, locationId)) return fail('invalid', 'Торговлю стерегут у гаваней.')
+  const near = landingSites(state.world, state.locationId)
+  if (!near.includes(locationId) && locationId !== state.locationId) {
+    return fail('unavailableHere', 'Эта гавань слишком далеко.')
+  }
+  const settlement = state.settlements[locationId]
+  const here = state.world.locations[locationId]
+  if (!settlement || !here) return fail('invalid', 'Такого места нет.')
+  if (isOwnedByPlayer(settlement)) return fail('invalid', 'Свою торговлю не грабят.')
+  const side = sideOfPlace(state, settlement)
+  const letter = state.letter ?? null
+  const lawful = letter !== null && letter.untilDay >= day && letter.against === side
+
+  const draft = open(state)
+  const prize = prizeAt(state, locationId)
+  addMoney(draft, prize)
+  advance(draft, hours(10))
+  // Хозяин помнит и то, и другое: грамота не делает добычу законной в его глазах.
+  if (side) {
+    draft.politics = withRelation(
+      draft.politics,
+      PLAYER,
+      side,
+      lawful ? NAVY.letterRelations : NAVY.piracyRelations,
+    )
+  }
+  draft.reputation = withPlaceRep(draft.reputation, locationId, -6)
+  if (!lawful) draft.renown = Math.max(0, draft.renown - 1)
+  notice(
+    draft,
+    `${here.name}: взято с купцов ${prize}. ${lawful ? 'Грамота при тебе: это служба.' : 'Грамоты нет: это разбой, и так это и запомнят.'}`,
+    'war',
+  )
+  return close(draft)
+}
+
+/** Просить у короны корсарскую грамоту (Ф5). */
+function askLetter(state: GameState, against: string): CommandResult {
+  const mine = state.service ?? state.realm?.name ?? null
+  const from = state.service
+  if (!from) return fail('requirements', 'Грамоту даёт корона, которой служишь.')
+  if (!atWar(state.politics, from, against)) {
+    return fail('requirements', 'Грамоту дают против тех, с кем корона воюет.')
+  }
+  if (!mine) return fail('requirements', 'Грамоту дают тому, кто за кого-то держится.')
+
+  const draft = open(state)
+  const day = dayOf(draft.time)
+  advance(draft, hours(6))
+  draft.letter = { fromKingdom: from, against, untilDay: day + NAVY.letterDays }
+  notice(
+    draft,
+    `${kingdomName(draft.base, from)} даёт грамоту против ${kingdomName(draft.base, against)} на ${NAVY.letterDays} сут.: чужая торговля теперь твоя добыча.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/** Чья это земля: корона места или корона его хозяина. */
+function sideOfPlace(state: GameState, settlement: Settlement): string | null {
+  const owner = settlement.owner
+  if (!owner) return null
+  if (owner.startsWith('crown:')) return owner.slice('crown:'.length)
+  return state.politics.lords.find((lord) => lord.id === owner)?.kingdomId ?? null
+}
+
+/**
+ * Сутки флота (этап 87).
+ *
+ * Суда сходят со стапеля, съедают содержание и держат запоры: блокада душит
+ * подвоз, портит память запертого места и каждые сутки отнимает у его хозяина
+ * пошлину.
+ */
+function tickNavy(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  const ships = afloat(draft, day)
+  if (ships.length > 0) {
+    const upkeep = fleetUpkeep(ships) * days
+    addMoney(draft, -Math.round(upkeep))
+  }
+  const launched = navyOf(draft).filter((one) => one.readyDay > day - days && one.readyDay <= day)
+  for (const ship of launched) {
+    notice(draft, `${warshipDef(ship.kind).label} «${ship.name}» сошёл на воду.`, 'world')
+  }
+  // Чужой запор считается всегда: он не зависит от того, запер ли ты кого-то.
+  shutOwnHarbours(draft, days)
+  if (blockadesOf(draft).length === 0) return
+  // Держать запор нечем — запор снимается сам.
+  if (ships.length === 0) {
+    draft.blockades = []
+    notice(draft, 'Запоры сняты: держать их больше нечем.', 'war')
+    return
+  }
+  let places = draft.settlements
+  for (const shut of blockadesOf(draft)) {
+    const bite = blockadeBite(draft.base, shut.locationId)
+    const place = places[shut.locationId]
+    if (!place) continue
+    places = {
+      ...places,
+      [shut.locationId]: {
+        ...place,
+        stock: {
+          ...place.stock,
+          grain: Math.max(0, place.stock.grain * (1 - bite.trade * 0.25 * days)),
+        },
+      },
+    }
+    // Память места считается целыми: запертая гавань замечает запор каждые
+    // сутки, даже если она мала.
+    draft.reputation = withPlaceRep(
+      draft.reputation,
+      shut.locationId,
+      Math.min(-days, Math.round(bite.mood * days)),
+    )
+  }
+  draft.settlements = places
+}
+
+/**
+ * Чужой запор на своей гавани (этап 87, Ф4).
+ *
+ * Блокада — не только твоё оружие. Корона, с которой ты воюешь, держит свой
+ * флот у своих гаваней (выводится, а не хранится), и если он сильнее твоего, а
+ * твоя гавань ему по пути — в неё тоже никто не входит. Цена та же: подвоз,
+ * память места и пошлина, которой ты не получишь.
+ */
+function shutOwnHarbours(draft: Draft, days: number): void {
+  const day = dayOf(draft.time)
+  const mine = holdingsOf(draft.settlements, PLAYER).filter((one) =>
+    isHarbour(draft.base.world, one.locationId),
+  )
+  if (mine.length === 0) return
+  const ours = fleetForce(afloat(draft, day))
+  let places = draft.settlements
+  let shut = 0
+  for (const port of mine) {
+    const foes = new Set<string>()
+    for (const war of draft.politics.wars) {
+      if (war.a === PLAYER) foes.add(war.b)
+      if (war.b === PLAYER) foes.add(war.a)
+    }
+    if (foes.size === 0) return
+    const reach = new Set(landingSites(draft.base.world, port.locationId))
+    let force = 0
+    for (const foe of foes) {
+      for (const ship of crownFleet(draft.base, draft.base.world, foe, day)) {
+        if (reach.has(ship.portId) || ship.portId === port.locationId) force += shipForce(ship)
+      }
+    }
+    if (force <= ours) continue
+    shut += 1
+    const bite = blockadeBite(draft.base, port.locationId)
+    addMoney(draft, -bite.toll * days)
+    const place = places[port.locationId]
+    if (place) {
+      places = {
+        ...places,
+        [port.locationId]: {
+          ...place,
+          stock: {
+            ...place.stock,
+            grain: Math.max(0, place.stock.grain * (1 - bite.trade * 0.25 * days)),
+          },
+        },
+      }
+    }
+    draft.reputation = withPlaceRep(
+      draft.reputation,
+      port.locationId,
+      Math.min(-days, Math.round(bite.mood * days)),
+    )
+  }
+  draft.settlements = places
+  if (shut > 0 && day % 10 === 0) {
+    notice(draft, `Чужие суда держат твои гавани: заперто ${shut}. Пошлина не идёт.`, 'war')
   }
 }
 

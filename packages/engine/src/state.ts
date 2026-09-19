@@ -34,6 +34,7 @@ import { startKnowledge } from './knowledge'
 import type { Artifact, Spellcraft, Weather } from './lore'
 import { EMPTY_PRICE_LOG, type PriceLog } from './market'
 import type { Dealing } from './merchant'
+import type { Blockade, Letter, Warship } from './navy'
 import type { Offices } from './office'
 import type { Interdict, Membership } from './order'
 import type { Party } from './party'
@@ -347,6 +348,12 @@ export interface GameState {
   readonly companies?: readonly Company[]
   /** Своя рота: сговор с короной, у которой ты в наёмниках. */
   readonly commission?: Commission | null
+  /** Военный флот (этап 87): суда на плаву и на стапеле. */
+  readonly navy?: readonly Warship[]
+  /** Запертые тобой гавани. */
+  readonly blockades?: readonly Blockade[]
+  /** Корсарская грамота: чей разбой на воде считается службой. */
+  readonly letter?: Letter | null
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -452,6 +459,9 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     garrisons: {},
     companies: startingCompanies(world),
     commission: null,
+    navy: [],
+    blockades: [],
+    letter: null,
     factions: {},
     spellcraft: {},
     weather: [],
