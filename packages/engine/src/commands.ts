@@ -28,6 +28,7 @@ import {
   receptionFor,
 } from './castle'
 import {
+  type Casus,
   casusDef,
   casusFor,
   casusWords,
@@ -526,6 +527,19 @@ import {
   seasonOf,
 } from './time'
 import {
+  CORONATION,
+  type Claim,
+  type Crowning,
+  claimAgainst,
+  claimable,
+  claimsOf,
+  coronationPlan,
+  hirePrice,
+  recognisedBy,
+  styleOf,
+  titleOf,
+} from './title'
+import {
   type Debt,
   EMPTY_PURSE,
   type LenderId,
@@ -776,6 +790,9 @@ export type Command =
   | { readonly type: 'swearOath'; readonly lordId: string; readonly locationId: string }
   /** Созвать вассалов по присяге (этап 74, В3). */
   | { readonly type: 'summonVassals' }
+  /** Титул (этап 78): венчаться на царство и заявить право на чужую землю. */
+  | { readonly type: 'crownSelf' }
+  | { readonly type: 'pressClaim'; readonly provinceId: string; readonly against: string }
   /** Казна державы (этап 77): занять, отдать, поставить людей, строить. */
   | { readonly type: 'borrow'; readonly lender: LenderId; readonly amount: number }
   | { readonly type: 'repay'; readonly lender: LenderId; readonly amount: number }
@@ -1190,6 +1207,10 @@ export function applyCommand(
       return swearOath(state, command.lordId, command.locationId)
     case 'summonVassals':
       return summonVassals(state)
+    case 'crownSelf':
+      return crownSelf(state)
+    case 'pressClaim':
+      return pressClaim(state, command.provinceId, command.against)
     case 'borrow':
       return borrow(state, command.lender, command.amount)
     case 'repay':
@@ -2282,11 +2303,14 @@ function hire(state: GameState, troop: TroopId, count: number): CommandResult {
   // Свой орден нанимает своим дешевле (этап 42). А на ярмарке стоит вербовщик
   // с бочонком (этап 67, Я3), и у него дешевле, чем в казарме.
   const recruiter = hasFairFolk(state.world, state.locationId, dayOf(state.time), 'recruiter')
+  // За кем имя, к тому идут дешевле (этап 78, Т6): слава государя работает на
+  // державу, а не только на приём в замке.
   const cost = Math.round(
     def.hireCost *
       count *
       (ownOrderHere(state)?.perks.hire ?? 1) *
-      (recruiter ? RECRUITER_PRICE : 1),
+      (recruiter ? RECRUITER_PRICE : 1) *
+      hirePrice(state),
   )
   if (state.character.money < cost) {
     return fail('noMoney', `Не хватает денег: нужно ${cost}, есть ${state.character.money}.`)
@@ -4232,7 +4256,10 @@ function declareWar(state: GameState, kingdomId: string): CommandResult {
   if (atWar(state.politics, PLAYER, kingdomId)) return fail('invalid', 'Вы и так воюете.')
 
   const draft = open(state)
-  const [casus, afterCasus] = casusFor(
+  // Заявленное право — готовый повод (этап 78, Т5): на него и ссылаются, а
+  // кубик остаётся тем, кому не на что сослаться.
+  const claim = claimAgainst(state, kingdomId)
+  const [found, afterCasus] = casusFor(
     draft.base.world,
     draft.politics,
     draft.settlements,
@@ -4241,6 +4268,7 @@ function declareWar(state: GameState, kingdomId: string): CommandResult {
     draft.rng,
   )
   draft.rng = afterCasus
+  const casus: Casus = claim ? { kind: claim.kind, provinceId: claim.provinceId } : found
   const day = dayOf(draft.time)
   draft.politics = {
     ...draft.politics,
@@ -5559,6 +5587,69 @@ function summonVassals(state: GameState): CommandResult {
   if (came === 0)
     notice(draft, 'Никто не пришёл. Это и есть цена присяги, которой не верят.', 'war')
   else notice(draft, `Собрано по присяге: ${came} человек.`, 'war')
+  return close(draft)
+}
+
+/**
+ * Венчаться на царство (этап 78, Т4).
+ *
+ * Обряд не делает королём — королём делает земля (`titleOf`). Смысл венчания в
+ * другом: кто приехал. Приехавшие признают тебя навсегда, а не приехавшие —
+ * тоже ответ, и его слышат все.
+ */
+function crownSelf(state: GameState): CommandResult {
+  if (!state.realm) return fail('requirements', 'Венчают державу, а не человека.')
+  const day = dayOf(state.time)
+  const plan = coronationPlan(state, day)
+  if (!plan.can) return fail('requirements', plan.why)
+
+  const draft = open(state)
+  addMoney(draft, -plan.cost)
+  draft.crowned = {
+    day,
+    titleId: titleOf(state),
+    guests: plan.guests,
+    absent: plan.absent,
+  }
+  // Те, кто приехал, теплеют: они видели обряд своими глазами.
+  for (const one of recognisedBy(state, day)) {
+    if (one.standing === 'pretender') continue
+    draft.politics = withRelation(draft.politics, PLAYER, one.kingdomId, 8)
+  }
+  draft.renown += 5
+  seeDeed(draft, 'takeFief')
+  advance(draft, hours(24 * CORONATION.days))
+  notice(
+    draft,
+    `Венчание: ${styleOf(state)}. Приехали — ${plan.guests.join(', ') || 'никто'}.` +
+      (plan.absent.length > 0 ? ` Не приехали: ${plan.absent.join(', ')}.` : ''),
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Заявить право на чужую землю (этап 78, Т5).
+ *
+ * Право берётся не из желания: это провинция, где ты и правда держишь землю
+ * рядом с чужой. Заявленное право живёт в состоянии и становится поводом к
+ * войне (этап 65) — тем самым, который признают и соседи.
+ */
+function pressClaim(state: GameState, provinceId: string, against: string): CommandResult {
+  if (!state.realm) return fail('requirements', 'Право заявляет держава, а не человек.')
+  const claim = claimable(state).find(
+    (one) => one.provinceId === provinceId && one.against === against,
+  )
+  if (!claim) return fail('invalid', 'На эту землю тебе не на что сослаться.')
+  const day = dayOf(state.time)
+  const draft = open(state)
+  draft.claims = [...claimsOf(draft), { ...claim, sinceDay: day }]
+  // Тот, на чью землю заявлено право, это слышит.
+  draft.politics = withRelation(draft.politics, PLAYER, against, -12)
+  advance(draft, hours(4))
+  const province = state.world.provinces[provinceId]?.name ?? 'земля'
+  const name = state.world.kingdoms[against]?.name ?? against
+  notice(draft, `Право на ${province} заявлено вслух. ${name} это услышал.`, 'world')
   return close(draft)
 }
 
@@ -8826,6 +8917,8 @@ interface Draft {
   charters: Charters
   debts: readonly Debt[]
   queue: readonly QueuedWork[]
+  crowned: Crowning | null
+  claims: readonly Claim[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -8903,6 +8996,8 @@ function open(state: GameState): Draft {
     charters: state.charters ?? {},
     debts: state.debts ?? [],
     queue: state.queue ?? [],
+    crowned: state.crowned ?? null,
+    claims: state.claims ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9280,6 +9375,8 @@ function close(draft: Draft): CommandResult {
     charters: draft.charters,
     debts: draft.debts,
     queue: draft.queue,
+    crowned: draft.crowned,
+    claims: draft.claims,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,

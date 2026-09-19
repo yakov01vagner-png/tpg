@@ -45,6 +45,7 @@ import type { Ship } from './ship'
 import type { Siege } from './siege'
 import type { GameTime } from './time'
 import { WORLD_START } from './time'
+import type { Claim, Crowning } from './title'
 import type { Debt, QueuedWork } from './treasury'
 import type { Oath } from './vassal'
 import type { Politics } from './war'
@@ -282,6 +283,13 @@ export interface GameState {
   readonly debts?: readonly Debt[]
   /** Очередь строек державы (этап 77, К5): что и где строится по порядку. */
   readonly queue?: readonly QueuedWork[]
+  /**
+   * Венчание на царство (этап 78, Т4): день, титул и то, кто приехал. Сам титул
+   * не хранится — он растёт от земли и людей и считается из мира.
+   */
+  readonly crowned?: Crowning | null
+  /** Свои претензии на чужую землю (этап 78, Т5). */
+  readonly claims?: readonly Claim[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -373,6 +381,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     charters: {},
     debts: [],
     queue: [],
+    crowned: null,
+    claims: [],
     factions: {},
     spellcraft: {},
     weather: [],
