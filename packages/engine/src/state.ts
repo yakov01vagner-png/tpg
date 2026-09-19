@@ -8,11 +8,14 @@ import type { Captive } from './captive'
 import type { ChainProgress } from './chain'
 import type { Character } from './character'
 import type { Companion } from './companion'
+import type { BuildingId } from './content/buildings'
+import { PLAIN_LAW } from './content/estate'
 import type { QuarterId } from './content/quarters'
 import type { CechMembership } from './craft'
 import type { Settlement } from './economy'
 import { createSettlements } from './economy'
 import type { Enterprise } from './enterprise'
+import type { Law } from './estate'
 import type { GameEvent, LogKind } from './events'
 import { describeEvent, kindOf } from './events'
 import type { Home } from './home'
@@ -211,6 +214,15 @@ export interface GameState {
   readonly weather?: readonly Weather[]
   /** Вещи с чарами: найденные и сделанные (этап 60, А6). */
   readonly artifacts?: readonly Artifact[]
+  /**
+   * Своя земля изнутри (этап 61). Закон, который ты поставил; просьбы, о
+   * которых помнят; постройки, которые встали; когда ты был в каждом своём
+   * месте. Всё необязательно — сейвы до 0.6 своей земли изнутри не знают.
+   */
+  readonly law?: Law
+  readonly pleas?: Readonly<Record<string, { readonly askId: string; readonly askedDay: number }>>
+  readonly works?: Readonly<Record<string, readonly BuildingId[]>>
+  readonly visits?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   readonly realm: { readonly name: string } | null
   /** Взятые поручения. */
@@ -269,6 +281,10 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     ship: null,
     guild: null,
     orderSway: startSway(),
+    law: PLAIN_LAW,
+    pleas: {},
+    works: {},
+    visits: {},
     spellcraft: {},
     weather: [],
     artifacts: [],

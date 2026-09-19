@@ -8,19 +8,30 @@ import {
   CONTENT,
   type Command,
   type GameState,
+  JUSTICE_DEFS,
+  JUSTICE_LEVELS,
+  LEVY_DEFS,
+  LEVY_LEVELS,
   LIFE,
   MAGIC_RANKS,
   PLAYER,
   SIEGE_MOVE_LABELS,
   SPOUSE_TEMPERS,
   type Settlement,
+  TAX_DEFS,
+  TAX_LEVELS,
+  TOLL_DEFS,
+  TOLL_LEVELS,
+  TOUR_HOURS,
   TROOPS,
   TROOP_IDS,
   VASSAL_SHARE,
   ageOf,
+  arrearsFactor,
   atHome,
   bentWords,
   bribePrice,
+  brokenList,
   canApply,
   canRetire,
   cechAt,
@@ -28,6 +39,7 @@ import {
   dailyTax,
   dailyTolls,
   dayOf,
+  daysAway,
   foodSecurity,
   freeSlots,
   garrisonLimit,
@@ -40,18 +52,24 @@ import {
   isSite,
   kinOf,
   kingdomOf,
+  lawOf,
   lordById,
   loyaltyWord,
   ownOrder,
+  pleaOf,
   rankLabel,
   rankOfShifts,
   sapLeft,
+  seneschalDef,
+  seneschalOf,
+  skimOf,
   spouseSays,
   spouseTemper,
   surrenderChance,
   upbringingOf,
   vassalsOf,
   warsOf,
+  worksRepairCost,
 } from '@tpg/engine'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import { Icon } from '../art/icons'
@@ -352,6 +370,8 @@ function Holding({ game, settlement }: { game: GameState; settlement: Settlement
           <Dim>{`Мест под стройку: ${freeSlots(game.world, settlement)}`}</Dim>
         )}
       </Panel>
+
+      <Estate game={game} settlement={settlement} />
 
       <Section title={`Твоя земля: ${province?.name ?? 'провинция'}`}>
         <Dim>
@@ -720,5 +740,119 @@ function Captives({ game }: { game: GameState }) {
         </View>
       ))}
     </Section>
+  )
+}
+
+/**
+ * Земля изнутри (этап 61).
+ *
+ * Управляющий с лицом, просьба жителей, закон и то, что встало. Всё на одном
+ * листе: хозяину нужно видеть не сводку, а двор.
+ */
+function Estate({ game, settlement }: { game: GameState; settlement: Settlement }) {
+  const day = dayOf(game.time)
+  const id = settlement.locationId
+  const seneschal = seneschalOf(id)
+  const temper = seneschalDef(seneschal.temper)
+  const away = daysAway(game, id, day)
+  const arrears = Math.round((1 - arrearsFactor(game, id, day)) * 100)
+  const skim = Math.round(skimOf(game, id, day) * 100)
+  const plea = pleaOf(game, settlement, day)
+  const broken = brokenList(game, id)
+  const law = lawOf(game)
+  const reasonFor = (command: Command): string | undefined => {
+    const check = canApply(game, command)
+    return check.ok ? undefined : check.message
+  }
+  return (
+    <>
+      <Panel tone={skim > 0 ? 'danger' : undefined}>
+        <Body>{`${seneschal.name}, ${temper.label}`}</Body>
+        <Dim>{temper.about}</Dim>
+        <Dim>
+          {away === 0
+            ? 'Ты здесь, и счёт при тебе сходится.'
+            : `Тебя не было ${away} сут.${arrears > 0 ? ` · недоимка ${arrears}%` : ''}${skim > 0 ? ` · уходит мимо казны ${skim}%` : ''}`}
+        </Dim>
+      </Panel>
+      <Card
+        title="Объехать двор"
+        description="Счёт, недоимка и то, что люди видели тебя своими глазами."
+        meta={`${TOUR_HOURS} ч`}
+        reason={reasonFor({ type: 'tourHolding' })}
+        onPress={() => dispatch({ type: 'tourHolding' })}
+      />
+      {skim > 0 ? (
+        <Card
+          title="Сменить управляющего"
+          description="Вора не исправишь. Но человека, которого здесь знают, помнят дольше, чем его счёт."
+          reason={reasonFor({ type: 'replaceSeneschal' })}
+          onPress={() => dispatch({ type: 'replaceSeneschal' })}
+          tone="danger"
+        />
+      ) : null}
+      {plea ? (
+        <Card
+          glyph={<Icon name="persuasion" size={20} color={palette.gold} />}
+          title={`Просят: ${plea.def.label.toLowerCase()}`}
+          description={plea.def.asks}
+          meta={`ждут до ${plea.untilDay} дня · +${plea.def.granted} / ${plea.def.refused}`}
+          reason={reasonFor({ type: 'answerPlea', locationId: id })}
+          onPress={() => dispatch({ type: 'answerPlea', locationId: id })}
+          tone="gold"
+        />
+      ) : null}
+      {broken.map((building) => (
+        <Card
+          key={building}
+          title={`Починить: ${BUILDINGS[building].label.toLowerCase()}`}
+          description="Пока стоит — её как будто нет: ни хлеба, ни подати, ни жалованья работникам."
+          meta={`−${worksRepairCost(building)}`}
+          reason={reasonFor({ type: 'repairBuilding', locationId: id, building })}
+          onPress={() => dispatch({ type: 'repairBuilding', locationId: id, building })}
+          tone="danger"
+        />
+      ))}
+      <Section title="Обычай твоей земли">
+        <Dim>{`${TAX_DEFS[law.tax].label}, ${TOLL_DEFS[law.toll].label}, ${LEVY_DEFS[law.levy].label}, ${JUSTICE_DEFS[law.justice].label}`}</Dim>
+        {TAX_LEVELS.filter((level) => level !== law.tax).map((level) => (
+          <Card
+            key={`tax:${level}`}
+            title={TAX_DEFS[level].label}
+            description={TAX_DEFS[level].about}
+            meta={`подать ×${TAX_DEFS[level].take}`}
+            reason={reasonFor({ type: 'setLaw', tax: level })}
+            onPress={() => dispatch({ type: 'setLaw', tax: level })}
+          />
+        ))}
+        {TOLL_LEVELS.filter((level) => level !== law.toll).map((level) => (
+          <Card
+            key={`toll:${level}`}
+            title={TOLL_DEFS[level].label}
+            description={TOLL_DEFS[level].about}
+            reason={reasonFor({ type: 'setLaw', toll: level })}
+            onPress={() => dispatch({ type: 'setLaw', toll: level })}
+          />
+        ))}
+        {LEVY_LEVELS.filter((level) => level !== law.levy).map((level) => (
+          <Card
+            key={`levy:${level}`}
+            title={LEVY_DEFS[level].label}
+            description={LEVY_DEFS[level].about}
+            reason={reasonFor({ type: 'setLaw', levy: level })}
+            onPress={() => dispatch({ type: 'setLaw', levy: level })}
+          />
+        ))}
+        {JUSTICE_LEVELS.filter((level) => level !== law.justice).map((level) => (
+          <Card
+            key={`justice:${level}`}
+            title={JUSTICE_DEFS[level].label}
+            description={JUSTICE_DEFS[level].about}
+            reason={reasonFor({ type: 'setLaw', justice: level })}
+            onPress={() => dispatch({ type: 'setLaw', justice: level })}
+          />
+        ))}
+      </Section>
+    </>
   )
 }

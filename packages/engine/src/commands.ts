@@ -75,6 +75,17 @@ import { COMPANIONS, DEED_LABELS, TEMPERS } from './content/companions'
 import { CRAFT_MASTERS } from './content/craft'
 import type { SlotId } from './content/equipment'
 import { ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
+import {
+  JUSTICE_DEFS,
+  type JusticeLevel,
+  LEVY_DEFS,
+  type LevyLevel,
+  TAX_DEFS,
+  TOLL_DEFS,
+  TOUR_HOURS,
+  type TaxLevel,
+  type TollLevel,
+} from './content/estate'
 import { FEAST_DOINGS, PILGRIM_DAYS, PILGRIM_PIETY, RITES_BY_ID } from './content/faith'
 import { EXCOMMUNICATED } from './content/faith'
 import { type CaptiveFate, SAP_DAYS, type SiegeMove } from './content/field'
@@ -138,11 +149,33 @@ import {
   maybeBirth,
 } from './dynasty'
 import type { Settlement } from './economy'
-import { quoteBuy, quoteSell, withStock } from './economy'
+import { quoteBuy, quoteSell, recruitPool, withStock } from './economy'
 import type { Enterprise } from './enterprise'
 import { CARAVAN_COST, SHIPPING_COST, WORKSHOP_COST, tickEnterprises } from './enterprise'
 import { gearBonus, horseCarry, repairCost, withItem } from './equipment'
 import { errandKindOf, errandsAt } from './errand'
+import {
+  type Law,
+  arrearsFactor,
+  brokenAt,
+  daysAway,
+  isBroken,
+  lawBanditry,
+  lawMood,
+  lawOf,
+  levyRate,
+  pleaOf,
+  seneschalDef,
+  seneschalOf,
+  sinceSeen,
+  skimOf,
+  taxTake,
+  tollTake,
+  workDef,
+  working,
+  worksRepairCost,
+  worksWages,
+} from './estate'
 import type { GameEvent, LogKind } from './events'
 import { FAIR_TRADE_BONUS, fairAt, feastAt } from './fair'
 import { groundFor, orderNeeds, veteranShare, woundedOf } from './field'
@@ -475,6 +508,17 @@ export type Command =
   | { readonly type: 'siegeBribe' }
   | { readonly type: 'captiveFate'; readonly captiveId: string; readonly fate: CaptiveFate }
   | { readonly type: 'inquire' }
+  | {
+      readonly type: 'setLaw'
+      readonly tax?: TaxLevel
+      readonly toll?: TollLevel
+      readonly levy?: LevyLevel
+      readonly justice?: JusticeLevel
+    }
+  | { readonly type: 'answerPlea'; readonly locationId: string }
+  | { readonly type: 'repairBuilding'; readonly locationId: string; readonly building: BuildingId }
+  | { readonly type: 'tourHolding' }
+  | { readonly type: 'replaceSeneschal' }
   | { readonly type: 'honeSpell'; readonly spellId: string }
   | { readonly type: 'makeArtifact'; readonly defId: string }
   | { readonly type: 'orderSend'; readonly locationId: string }
@@ -790,6 +834,16 @@ export function applyCommand(
       return captiveFate(state, command.captiveId, command.fate)
     case 'inquire':
       return inquire(state)
+    case 'setLaw':
+      return setLaw(state, command)
+    case 'answerPlea':
+      return answerPlea(state, command.locationId)
+    case 'repairBuilding':
+      return repairBuilding(state, command.locationId, command.building)
+    case 'tourHolding':
+      return tourHolding(state)
+    case 'replaceSeneschal':
+      return replaceSeneschal(state)
     case 'honeSpell':
       return honeSpell(state, command.spellId)
     case 'makeArtifact':
@@ -954,6 +1008,11 @@ export function foeName(state: GameState, foeId: string | null): string {
  */
 /** Пришёл — увидел: земля под ногами и то, куда отсюда ведут дороги (этап 46). */
 function see(draft: Draft, locationId: string): void {
+  // Приезд в своё владение записывается сам (этап 61, В5): недоимка и смелость
+  // управляющего считаются от того, когда хозяина видели последний раз.
+  if (draft.settlements[locationId]?.owner === PLAYER) {
+    draft.visits = { ...draft.visits, [locationId]: dayOf(draft.time) }
+  }
   if (!draft.knowledge) return
   draft.knowledge = reveal(draft.knowledge, seenFrom(draft.world, locationId))
 }
@@ -2905,6 +2964,217 @@ function foundBrotherhood(state: GameState, name: string, charterId: CharterId):
     draft,
     `${clean} основано в ${here.name}. Устав: ${charterById(charterId).label.toLowerCase()}.`,
     'world',
+  )
+  return close(draft)
+}
+
+// --- своя земля изнутри (этап 61) -------------------------------------------
+
+/**
+ * Закон (этап 61, В3).
+ *
+ * Четыре решения: подать, пошлина, набор, суд. Дешёвого выбора нет — за каждое
+ * что-то отдаёшь. Ставят закон на своей земле и сразу на всю: у владетеля один
+ * обычай, а не разный в каждой деревне.
+ */
+function setLaw(
+  state: GameState,
+  changes: {
+    readonly tax?: TaxLevel
+    readonly toll?: TollLevel
+    readonly levy?: LevyLevel
+    readonly justice?: JusticeLevel
+  },
+): CommandResult {
+  if (holdingsOf(state.settlements, PLAYER).length === 0) {
+    return fail('requirements', 'Закон ставят на своей земле, а её у тебя нет.')
+  }
+  const before = lawOf(state)
+  const law: Law = {
+    tax: changes.tax ?? before.tax,
+    toll: changes.toll ?? before.toll,
+    levy: changes.levy ?? before.levy,
+    justice: changes.justice ?? before.justice,
+  }
+  if (
+    law.tax === before.tax &&
+    law.toll === before.toll &&
+    law.levy === before.levy &&
+    law.justice === before.justice
+  ) {
+    return fail('invalid', 'Это и так твой обычай.')
+  }
+
+  const draft = open(state)
+  draft.law = law
+  advance(draft, hours(2))
+  const words: string[] = []
+  if (law.tax !== before.tax) words.push(TAX_DEFS[law.tax].label)
+  if (law.toll !== before.toll) words.push(TOLL_DEFS[law.toll].label)
+  if (law.levy !== before.levy) words.push(LEVY_DEFS[law.levy].label)
+  if (law.justice !== before.justice) words.push(JUSTICE_DEFS[law.justice].label)
+  notice(draft, `Объявлено по всей твоей земле: ${words.join(', ')}.`, 'world')
+  // Решение слышат сразу, а платят за него потом: настроение ложится в память
+  // мест по суткам (`estateLife`), а не одним ударом.
+  return close(draft)
+}
+
+/**
+ * Ответить на просьбу (этап 61, В2).
+ *
+ * Просят об одном — о том, что болит сильнее. Просьба о постройке — это работа
+ * и деньги; о суде — день у себя на дворе; о подати — снятый обычай. Отказ
+ * приходит сам, когда кончается терпение.
+ */
+function answerPlea(state: GameState, locationId: string): CommandResult {
+  const settlement = state.settlements[locationId]
+  if (!settlement || !isOwnedByPlayer(settlement)) return fail('invalid', 'Это не твоя земля.')
+  const day = dayOf(state.time)
+  const plea = pleaOf(state, settlement, day)
+  if (!plea) return fail('invalid', 'Здесь ни о чём не просят.')
+  if (state.locationId !== locationId) {
+    return fail('unavailableHere', 'Отвечают глядя в глаза: надо быть на месте.')
+  }
+
+  if (plea.def.building) {
+    const done = build(state, plea.def.building)
+    if (!done.ok) return done
+    const draft = open(done.state)
+    draft.pleas = withoutPlea(draft.pleas, locationId)
+    draft.reputation = withPlaceRep(draft.reputation, locationId, plea.def.granted)
+    notice(draft, `${plea.def.label}: об этом просили. Здесь это запомнят.`, 'people')
+    return close(draft)
+  }
+
+  if (plea.def.id === 'tax') {
+    if (lawOf(state).tax !== 'heavy') return fail('invalid', 'Подать и так не тяжела.')
+    const draft = open(state)
+    draft.law = { ...lawOf(state), tax: 'plain' }
+    draft.pleas = withoutPlea(draft.pleas, locationId)
+    draft.reputation = withPlaceRep(draft.reputation, locationId, plea.def.granted)
+    advance(draft, hours(2))
+    notice(draft, 'Тяжёлая подать снята. Об этом узнают раньше, чем ты уедешь.', 'world')
+    return close(draft)
+  }
+
+  // Суд: день на своём дворе. Разбирают ссоры, и это стоит времени, а не денег.
+  const draft = open(state)
+  advance(draft, hours(8))
+  addFatigue(draft, 14)
+  practice(draft, 'persuasion', 12)
+  draft.pleas = withoutPlea(draft.pleas, locationId)
+  draft.reputation = withPlaceRep(draft.reputation, locationId, plea.def.granted)
+  draft.settlements = {
+    ...draft.settlements,
+    [locationId]: {
+      ...settlement,
+      banditry: Math.max(0, settlement.banditry - 0.04),
+    },
+  }
+  notice(draft, 'Ты сидел с утра до темна и рассудил всех. Ссор стало меньше.', 'people')
+  return close(draft)
+}
+
+function withoutPlea(
+  pleas: Readonly<Record<string, { askId: string; askedDay: number }>>,
+  locationId: string,
+): Readonly<Record<string, { askId: string; askedDay: number }>> {
+  const next = { ...pleas }
+  delete next[locationId]
+  return next
+}
+
+/**
+ * Починить постройку (этап 61, В4).
+ *
+ * Мельница, которая встала, не мелет: пока её не починят, её как будто нет.
+ * Чинят за деньги и на месте — издалека не починишь.
+ */
+function repairBuilding(state: GameState, locationId: string, building: BuildingId): CommandResult {
+  const settlement = state.settlements[locationId]
+  if (!settlement || !isOwnedByPlayer(settlement)) return fail('invalid', 'Это не твоя земля.')
+  if (!isBroken(state, locationId, building)) return fail('invalid', 'Это и так работает.')
+  if (state.locationId !== locationId) return fail('unavailableHere', 'Чинят на месте.')
+  const price = worksRepairCost(building)
+  if (state.character.money < price) {
+    return fail('noMoney', `Починка стоит ${price}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -price)
+  advance(draft, hours(6))
+  draft.works = {
+    ...draft.works,
+    [locationId]: brokenAt(draft, locationId).filter((one) => one !== building),
+  }
+  if (!settlement.buildings.includes(building)) {
+    draft.settlements = {
+      ...draft.settlements,
+      [locationId]: { ...settlement, buildings: [...settlement.buildings, building] },
+    }
+  }
+  notice(draft, `${BUILDINGS[building].label} снова работает.`)
+  return close(draft)
+}
+
+/**
+ * Объезд (этап 61, В5).
+ *
+ * Хозяин не может быть везде, и там, где его давно не было, платят хуже, а
+ * управляющий смелеет. Объезд — это день на дворе: счёт, недоимка и то, что
+ * люди видели тебя своими глазами.
+ */
+function tourHolding(state: GameState): CommandResult {
+  const settlement = state.settlements[state.locationId]
+  if (!settlement || !isOwnedByPlayer(settlement)) return fail('invalid', 'Это не твоя земля.')
+  const day = dayOf(state.time)
+  // Недоимка считается от последнего счёта, а не от приезда: можно просидеть в
+  // своём доме год и ни разу не заглянуть в книги.
+  const away = sinceSeen(state, state.locationId, day)
+
+  const draft = open(state)
+  advance(draft, hours(TOUR_HOURS))
+  addFatigue(draft, 12)
+  draft.visits = { ...draft.visits, [state.locationId]: day }
+  // Недоимка, которую забыли занести: чем дольше не был, тем больше лежит.
+  const owed = Math.round(
+    dailyTax(settlement, foodSecurity(settlement)) * Math.min(30, away) * 0.35,
+  )
+  if (owed > 0) addMoney(draft, owed)
+  draft.reputation = withPlaceRep(draft.reputation, state.locationId, 4)
+  const seneschal = seneschalOf(state.locationId)
+  notice(
+    draft,
+    owed > 0
+      ? `${seneschal.name} показал счёт: недоимки ${owed}. ${seneschalDef(seneschal.temper).about}`
+      : `${seneschal.name} показал счёт. Всё сходится.`,
+  )
+  return close(draft)
+}
+
+/**
+ * Сменить управляющего (этап 61, В1).
+ *
+ * Вора не исправишь — его меняют. Но человек, которого здесь знают, уходит со
+ * своими людьми: место это чувствует, и новый будет не лучше по выбору, а по
+ * случаю.
+ */
+function replaceSeneschal(state: GameState): CommandResult {
+  const settlement = state.settlements[state.locationId]
+  if (!settlement || !isOwnedByPlayer(settlement)) return fail('invalid', 'Это не твоя земля.')
+  const day = dayOf(state.time)
+  const seneschal = seneschalOf(state.locationId)
+
+  const draft = open(state)
+  advance(draft, hours(4))
+  // Смена записывается как свежий приезд: новый человек первое время честен
+  // просто потому, что не освоился.
+  draft.visits = { ...draft.visits, [state.locationId]: day }
+  draft.reputation = withPlaceRep(draft.reputation, state.locationId, -6)
+  notice(
+    draft,
+    `${seneschal.name} отставлен. На дворе это обсуждают, и не в твою пользу.`,
+    'people',
   )
   return close(draft)
 }
@@ -6346,6 +6616,10 @@ interface Draft {
   siege: Siege | null
   captives: readonly Captive[]
   orderSway: OrderSway
+  law: Law
+  pleas: Readonly<Record<string, { askId: string; askedDay: number }>>
+  works: Readonly<Record<string, readonly BuildingId[]>>
+  visits: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
   artifacts: readonly Artifact[]
@@ -6402,6 +6676,10 @@ function open(state: GameState): Draft {
     siege: state.siege,
     captives: state.captives ?? [],
     orderSway: state.orderSway ?? startSway(),
+    law: lawOf(state),
+    pleas: state.pleas ?? {},
+    works: state.works ?? {},
+    visits: state.visits ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
     artifacts: state.artifacts ?? [],
@@ -6700,6 +6978,10 @@ function close(draft: Draft): CommandResult {
     siege: draft.siege,
     captives: draft.captives,
     orderSway: draft.orderSway,
+    law: draft.law,
+    pleas: draft.pleas,
+    works: draft.works,
+    visits: draft.visits,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
     artifacts: draft.artifacts,
@@ -6953,10 +7235,25 @@ function collectHoldings(draft: Draft, days: number): void {
   let income = 0
   let wages = 0
   const settlements = { ...draft.settlements }
+  let thieved = 0
+  let thievedAt: string | null = null
 
+  const day = dayOf(draft.time)
+  const law = lawOf(draft)
   for (const settlement of mine) {
-    income += dailyTax(settlement, foodSecurity(settlement)) * days
+    // Подать по закону, по недоимке и по честности управляющего (этап 61).
+    const base = dailyTax(settlement, foodSecurity(settlement)) * days
+    const skim = skimOf(draft.base, settlement.locationId, day)
+    const collected = base * taxTake(law) * arrearsFactor(draft.base, settlement.locationId, day)
+    const stolen = collected * skim
+    if (stolen >= 1) {
+      thieved += stolen
+      thievedAt = settlement.locationId
+    }
+    income += collected - stolen
     wages += garrisonWages(settlement) * days
+    // Работникам построек тоже платят: мельница без мельника — сарай.
+    wages += worksWages(settlement, brokenAt(draft, settlement.locationId)) * days
 
     // Гарнизон ест местный хлеб: он же его и защищает.
     const eaten = Math.min(
@@ -6971,8 +7268,9 @@ function collectHoldings(draft: Draft, days: number): void {
     }
   }
 
-  // Дорога — тоже хозяйство: застава в своей провинции берёт с проезжих.
-  const tolls = dailyTolls(draft.base.world, settlements, PLAYER) * days
+  // Дорога — тоже хозяйство: застава в своей провинции берёт с проезжих, и
+  // берёт по тому обычаю, который ты поставил (этап 61, В3).
+  const tolls = dailyTolls(draft.base.world, settlements, PLAYER) * days * tollTake(law)
 
   // Вассал платит с пожалованной земли долю (этап 43): лен даётся не даром.
   let tribute = 0
@@ -6990,6 +7288,120 @@ function collectHoldings(draft: Draft, days: number): void {
   else if (net > 0) {
     notice(draft, tolls > 0 ? `Подати и пошлины: ${net}.` : `Подати с владений: ${net}.`)
   }
+  // Вор виден по казне, а не по описанию (этап 61, В1): счёт не сходится, и
+  // сходиться он не начнёт, пока ты не приедешь или не сменишь человека.
+  if (thieved >= 1 && thievedAt) {
+    const seneschal = seneschalOf(thievedAt)
+    const where = draft.base.world.locations[thievedAt]?.name ?? 'владении'
+    notice(
+      draft,
+      `Счёт по ${where} не сходится на ${Math.round(thieved)}. ${seneschal.name} разводит руками.`,
+      'money',
+    )
+  }
+  estateLife(draft, mine, days, day, law)
+}
+
+/**
+ * Сутки своей земли (этап 61).
+ *
+ * Закон ложится в память мест, суд правит разбой, набор восполняет рекрутов,
+ * постройки ломаются, а просьбы, оставленные без ответа, превращаются в обиду.
+ * Всё это — по суткам и без игрока: земля живёт, пока хозяин в отъезде.
+ */
+function estateLife(
+  draft: Draft,
+  mine: readonly Settlement[],
+  days: number,
+  day: number,
+  law: Law,
+): void {
+  if (mine.length === 0) return
+  const mood = lawMood(law)
+  const drift = lawBanditry(law) * days
+  const settlements = { ...draft.settlements }
+  for (const settlement of mine) {
+    const id = settlement.locationId
+    // Обычай хозяина помнят: тяжёлая подать и полный набор — обида по суткам,
+    // малая подать и милостивый суд — доброе слово. Медленно: закон — не
+    // подарок, а погода.
+    if (mood !== 0) {
+      // Обычай ложится в память медленно и по одному: месяц тяжёлой подати —
+      // примерно десять обид. Порогом это не сделать (за сутки набегает треть
+      // обиды, и она бы всякий раз округлялась в ноль), поэтому бросок: сутки
+      // дают либо одну зарубку, либо ни одной.
+      const step = (mood / 30) * days
+      const [felt, afterRoll] = rollChance(draft.rng, Math.min(1, Math.abs(step)))
+      draft.rng = afterRoll
+      if (felt) {
+        draft.reputation = withPlaceRep(
+          draft.reputation,
+          id,
+          Math.sign(step) * Math.max(1, Math.floor(Math.abs(step))),
+        )
+      }
+    }
+    const current = settlements[id]
+    if (!current) continue
+    let next = current
+    if (drift !== 0) {
+      next = { ...next, banditry: Math.max(0, Math.min(1, next.banditry + drift)) }
+    }
+    // Набор восполняет рекрутов быстрее или не восполняет вовсе.
+    const rate = levyRate(law)
+    if (rate !== 1) {
+      const pool = recruitPool(next.population)
+      const back = (pool - next.recruits) * 0.02 * (rate - 1) * days
+      next = { ...next, recruits: Math.max(0, Math.min(pool, next.recruits + back)) }
+    }
+    if (next !== current) settlements[id] = next
+
+    // Постройки встают: у каждой своя вероятность и своя починка (В4).
+    for (const building of current.buildings) {
+      if (isBroken(draft, id, building)) continue
+      const [broke, afterRoll] = rollChance(draft.rng, workDef(building).breaks * days)
+      draft.rng = afterRoll
+      if (!broke) continue
+      draft.works = { ...draft.works, [id]: [...brokenAt(draft, id), building] }
+      // Встала — значит, её нет: мир перестаёт её считать (мельница не кормит,
+      // рынок не прибавляет подати), пока её не починят. Так «постройки с
+      // людьми» видны не описанием, а числом.
+      const standing = settlements[id]
+      if (standing) {
+        settlements[id] = {
+          ...standing,
+          buildings: standing.buildings.filter((one) => one !== building),
+        }
+      }
+      notice(
+        draft,
+        `${BUILDINGS[building].label} в ${draft.base.world.locations[id]?.name ?? 'владении'} встала. Пока не починишь — её как будто нет.`,
+        'world',
+      )
+    }
+
+    // Просьбы: о чём просят, с какого дня и что будет, если не ответить (В2).
+    const plea = pleaOf(draft.base, current, day)
+    if (!plea) continue
+    const asked = draft.pleas[id]
+    if (asked?.askId !== plea.def.id) {
+      draft.pleas = { ...draft.pleas, [id]: { askId: plea.def.id, askedDay: day } }
+      if (id === draft.locationId) {
+        notice(draft, `Просят: ${plea.def.asks}`, 'people')
+      }
+      continue
+    }
+    if (day - asked.askedDay < plea.def.patience) continue
+    // Терпение вышло. Отказом считается молчание — и его помнят.
+    draft.reputation = withPlaceRep(draft.reputation, id, plea.def.refused)
+    draft.pleas = { ...draft.pleas, [id]: { askId: plea.def.id, askedDay: day } }
+    notice(
+      draft,
+      `${draft.base.world.locations[id]?.name ?? 'Владение'}: просили о том же и не дождались. Тут это записали.`,
+      'people',
+    )
+  }
+  draft.settlements = settlements
 }
 
 /** Просроченное дело не прощают: сгорает само и портит имя. */
