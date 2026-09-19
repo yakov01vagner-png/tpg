@@ -91,6 +91,16 @@ import { EXCOMMUNICATED } from './content/faith'
 import { type CaptiveFate, SAP_DAYS, type SiegeMove } from './content/field'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
+import {
+  AILMENT_DEFS,
+  type Ailment,
+  FEVER_CHANCE,
+  FLUX_CHANCE,
+  HERB_GOOD,
+  POTIONS,
+  POTIONS_BY_ID,
+  SCURVY_DAYS,
+} from './content/heal'
 import { KIN_ASK, KIN_GIFT, UPBRINGING_MINUTES } from './content/home'
 import { TEMPER_LINES } from './content/lines'
 import {
@@ -200,6 +210,22 @@ import {
 import type { GameEvent, LogKind } from './events'
 import { FAIR_TRADE_BONUS, fairAt, feastAt } from './fair'
 import { groundFor, orderNeeds, veteranShare, woundedOf } from './field'
+import {
+  ailmentDef,
+  ailmentOf,
+  ailmentPace,
+  festerChance,
+  festered,
+  healerAt,
+  healerDef,
+  healerPrice,
+  healerSpeed,
+  maimChance,
+  potionCount,
+  potionDef,
+  woundKindDef,
+  woundKindOf,
+} from './heal'
 import {
   PLAYER,
   dailyTax,
@@ -539,6 +565,10 @@ export type Command =
   /** Встать лагерем там, где нет крыши. */
   | { readonly type: 'camp'; readonly manner?: CampManner }
   | { readonly type: 'hunt' }
+  | { readonly type: 'seeHealer' }
+  | { readonly type: 'brewPotion'; readonly potionId: string }
+  | { readonly type: 'drinkPotion'; readonly potionId: string }
+  | { readonly type: 'gatherHerbs' }
   | { readonly type: 'clearLair' }
   | { readonly type: 'lootCache' }
   | { readonly type: 'visitHermit' }
@@ -864,6 +894,14 @@ export function applyCommand(
       return camp(state, command.manner ?? 'sleep')
     case 'hunt':
       return hunt(state)
+    case 'seeHealer':
+      return seeHealer(state)
+    case 'brewPotion':
+      return brewPotion(state, command.potionId)
+    case 'drinkPotion':
+      return drinkPotion(state, command.potionId)
+    case 'gatherHerbs':
+      return gatherHerbs(state)
     case 'clearLair':
       return clearLair(state)
     case 'lootCache':
@@ -1196,7 +1234,7 @@ function travel(state: GameState, toLocationId: string): CommandResult {
   const walking = Math.round(
     legHoursFor(
       roadHoursNow,
-      paceOf(state.party, state.character.wound !== null),
+      paceOf(state.party, state.character.wound !== null) * ailmentPace(state),
       seasonOf(dayOf(state.time)),
     ) * (blind ? BLIND_SLOW : 1),
   )
@@ -3640,6 +3678,214 @@ function huntPirate(state: GameState, pirateId: string): CommandResult {
     'war',
   )
   return close(draft)
+}
+
+// --- мор, раны и лекари (этап 64) -------------------------------------------
+
+/**
+ * Пойти к лекарю (этап 64, Ж1).
+ *
+ * Лекарь — человек с именем, выучкой и ценой: учёный берёт как за учёность и
+ * чистит рану так, что она не гноится; цирюльник дёшев и шьёт тем, чем брил.
+ * Гноящуюся рану он чистит — это единственное, что её вообще лечит.
+ */
+function seeHealer(state: GameState): CommandResult {
+  const healer = healerAt(state.world, state.settlements, state.locationId)
+  if (!healer) return fail('unavailableHere', 'Здесь некому лечить.')
+  const wound = state.character.wound
+  const ailment = ailmentOf(state)
+  if (!wound && !ailment) return fail('invalid', 'Лечить нечего: ты цел.')
+  const price = wound ? healerPrice(healer, wound) : 20
+  if (state.character.money < price) {
+    return fail('noMoney', `${healer.name} просит ${price}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -price)
+  advance(draft, hours(4))
+  const def = healerDef(healer.kind)
+  notice(draft, `${healer.name}, ${def.label}: «${def.about}»`, 'people')
+  if (wound) {
+    // Чистка: гной убирают, и рана снова начинает заживать.
+    const cleaned = wound.festering
+      ? { ...wound, festering: false, severity: Math.max(0.1, wound.severity - 0.2) }
+      : wound
+    const faster = healWound(cleaned, 2, healerSpeed(healer))
+    patch(draft, { wound: faster })
+    notice(
+      draft,
+      wound.festering
+        ? 'Он вскрыл и промыл. Больно, зато теперь заживёт.'
+        : `${woundKindDef(woundKindOf(wound)).label} рана: перевязано как надо.`,
+    )
+  }
+  if (ailment) {
+    draft.ailment = null
+    notice(draft, `${ailmentDef(ailment).label} отпустила: ${ailmentDef(ailment).cure}.`, 'people')
+  }
+  return close(draft)
+}
+
+/**
+ * Сварить зелье (этап 64, Ж4).
+ *
+ * Травничество — ремесло: собрать, сварить, продать. Трав на зелье уходит
+ * больше, чем кажется, и берутся за него не с первой ступени.
+ */
+function brewPotion(state: GameState, potionId: string): CommandResult {
+  const def = potionDef(potionId)
+  if (!def) return fail('unknownAction', 'Такого не варят.')
+  const healing = skillLevel(state.character, 'healing')
+  if (healing < def.needsHealing) {
+    return fail(
+      'requirements',
+      `За такое берутся с лекарского ${def.needsHealing}, у тебя ${healing}.`,
+    )
+  }
+  const herbs = state.character.inventory[HERB_GOOD] ?? 0
+  if (herbs < def.herbs) {
+    return fail('noGoods', `Нужно трав ${def.herbs}, у тебя ${herbs}.`)
+  }
+
+  const draft = open(state)
+  addGoods(draft, HERB_GOOD, -def.herbs)
+  advance(draft, def.minutes)
+  addFatigue(draft, 10)
+  practice(draft, 'healing', 14)
+  draft.potions = { ...draft.potions, [def.id]: potionCount(draft, def.id) + 1 }
+  notice(draft, `${def.label} готово. ${def.about}`)
+  return close(draft)
+}
+
+/** Выпить своё зелье (этап 64, Ж4): то, ради чего его и варили. */
+function drinkPotion(state: GameState, potionId: string): CommandResult {
+  const def = potionDef(potionId)
+  if (!def) return fail('unknownAction', 'Такого не варят.')
+  if (potionCount(state, potionId) <= 0) return fail('noGoods', `${def.label} у тебя нет.`)
+
+  const draft = open(state)
+  draft.potions = { ...draft.potions, [def.id]: potionCount(draft, def.id) - 1 }
+  advance(draft, 15)
+  if (def.id === 'salve') {
+    const wound = draft.character.wound
+    if (wound) {
+      patch(draft, { wound: { ...wound, festering: false } })
+      notice(draft, 'Мазь жжёт, но гной уходит.')
+    } else notice(draft, 'Мазь пригодится потом.')
+  } else if (def.id === 'brew') {
+    const wound = draft.character.wound
+    if (wound) {
+      const left = wound.daysLeft - 6
+      patch(draft, { wound: left > 0 ? { ...wound, daysLeft: left } : null })
+    }
+    if (draft.ailment) {
+      notice(draft, `${ailmentDef(draft.ailment.kind).label} отступила.`, 'people')
+      draft.ailment = null
+    }
+    notice(draft, 'Отвар горек, и через час становится легче.')
+  } else if (def.id === 'tonic') {
+    addFatigue(draft, -35)
+    notice(draft, 'Как будто спал полночи. Только сердце частит.')
+  } else {
+    draft.ailment = null
+    notice(draft, 'Противоядие выпито. Если было чего — уже нет.')
+  }
+  return close(draft)
+}
+
+/**
+ * Собрать трав (этап 64, Ж4).
+ *
+ * Травы растут не в лавке: их собирают в лесу, на лугу и по склонам. Сколько
+ * соберёшь — по земле, времени года и умению.
+ */
+function gatherHerbs(state: GameState): CommandResult {
+  const here = state.world.locations[state.locationId]
+  if (!here) return fail('invalid', 'Непонятно, где находится герой.')
+  if (state.settlements[state.locationId] && !state.journey) {
+    return fail('unavailableHere', 'В селе трав не собирают: там всё вытоптано.')
+  }
+  const season = seasonOf(dayOf(state.time))
+  if (season === 'winter') return fail('unavailableHere', 'Зимой трав нет: всё под снегом.')
+  const blocked = checkFatigue(state.character, 12)
+  if (blocked) return blocked
+
+  const draft = open(state)
+  advance(draft, hours(3))
+  addFatigue(draft, 12)
+  practice(draft, 'healing', 10)
+  practice(draft, 'survival', 8)
+  const healing = skillLevel(state.character, 'healing')
+  const good = here.terrain === 'desert' || here.terrain === 'steppe' ? 0.6 : 1
+  const [roll, afterRoll] = nextFloat(draft.rng)
+  draft.rng = afterRoll
+  const found = Math.max(1, Math.round((2 + healing * 0.2) * good * (0.6 + roll * 0.8)))
+  addGoods(draft, HERB_GOOD, found)
+  notice(draft, `Собрано трав: ${found}. Не всякая из них лекарственная, но разберёшься.`, 'money')
+  return close(draft)
+}
+
+/**
+ * Болезни отряда (этап 64, Ж5).
+ *
+ * Болеют не от случая, а от места: цинга в море без зелени, лихорадка в топях,
+ * кровавый понос там, где тесно и вода дурная. Болезнь держится, пока держится
+ * причина, — и уходит сама, когда причина кончилась.
+ */
+function sicken(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const here = draft.base.world.locations[draft.locationId]
+  const atSea = draft.journey?.sea === true
+  const current = draft.ailment
+  if (current) {
+    const cured =
+      (current.kind === 'scurvy' && !atSea) ||
+      (current.kind === 'fever' && here?.terrain !== 'marsh') ||
+      (current.kind === 'flux' &&
+        draft.siege === null &&
+        !plagueAt(draft.plagues, draft.locationId))
+    if (cured) {
+      const [better, afterRoll] = rollChance(draft.rng, 0.12 * days)
+      draft.rng = afterRoll
+      if (better) {
+        notice(draft, `${ailmentDef(current.kind).label} отпустила сама.`, 'people')
+        draft.ailment = null
+        return
+      }
+    }
+    // Пока болеет — теряет дух: болезнь не урон, а условие.
+    const harm = ailmentDef(current.kind).morale * days
+    draft.party = { ...draft.party, morale: Math.max(0, draft.party.morale - harm) }
+    return
+  }
+  // Цинга: столько суток в море без свежей еды.
+  if (atSea) {
+    const fresh = (draft.character.inventory.herbs ?? 0) + (draft.character.inventory.wine ?? 0)
+    const [sick, afterRoll] = rollChance(draft.rng, fresh > 0 ? 0 : days / SCURVY_DAYS)
+    draft.rng = afterRoll
+    if (sick) {
+      draft.ailment = { kind: 'scurvy', since: dayOf(draft.time) }
+      notice(draft, `${AILMENT_DEFS.scurvy.about}`, 'war')
+      return
+    }
+  }
+  if (here?.terrain === 'marsh') {
+    const [sick, afterRoll] = rollChance(draft.rng, FEVER_CHANCE * days)
+    draft.rng = afterRoll
+    if (sick) {
+      draft.ailment = { kind: 'fever', since: dayOf(draft.time) }
+      notice(draft, `${AILMENT_DEFS.fever.about}`, 'war')
+      return
+    }
+  }
+  if (draft.siege !== null || plagueAt(draft.plagues, draft.locationId)) {
+    const [sick, afterRoll] = rollChance(draft.rng, FLUX_CHANCE * days)
+    draft.rng = afterRoll
+    if (sick) {
+      draft.ailment = { kind: 'flux', since: dayOf(draft.time) }
+      notice(draft, `${AILMENT_DEFS.flux.about}`, 'war')
+    }
+  }
 }
 
 function siegeLift(state: GameState): CommandResult {
@@ -7341,6 +7587,9 @@ interface Draft {
   works: Readonly<Record<string, readonly BuildingId[]>>
   visits: Readonly<Record<string, number>>
   wilds: Readonly<Record<string, WildMemory>>
+  potions: Readonly<Record<string, number>>
+  ailment: { kind: Ailment; since: number } | null
+  maims: readonly string[]
   spellcraft: Spellcraft
   weather: readonly Weather[]
   artifacts: readonly Artifact[]
@@ -7402,6 +7651,9 @@ function open(state: GameState): Draft {
     works: state.works ?? {},
     visits: state.visits ?? {},
     wilds: state.wilds ?? {},
+    potions: state.potions ?? {},
+    ailment: state.ailment ?? null,
+    maims: state.maims ?? [],
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
     artifacts: state.artifacts ?? [],
@@ -7705,6 +7957,9 @@ function close(draft: Draft): CommandResult {
     works: draft.works,
     visits: draft.visits,
     wilds: draft.wilds,
+    potions: draft.potions,
+    ailment: draft.ailment,
+    maims: draft.maims,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
     artifacts: draft.artifacts,
@@ -7863,6 +8118,19 @@ function warNews(
       continue
     }
 
+    // Лорд умер (этап 64, Ж6): земля перешла наследнику, и он уже другой человек.
+    if (event.type === 'lordDied') {
+      const heir = lordById(state.politics, event.heirId)
+      news.push({
+        type: 'notice',
+        kind: 'people',
+        text: heir
+          ? `${event.name} умер. Землю принял ${heir.title} ${heir.name}.`
+          : `${event.name} умер, и его земля осталась без хозяина.`,
+      })
+      continue
+    }
+
     if (event.type === 'tribute') {
       const { from, to, perDay } = event.tribute
       news.push({
@@ -7898,6 +8166,8 @@ function warNews(
 function payUpkeep(draft: Draft, days: number): void {
   collectHoldings(draft, days)
   paySailors(draft, days)
+  // Отряд болеет от того, где он есть (этап 64, Ж5).
+  sicken(draft, days)
   payDues(draft)
   payCech(draft)
   advanceWishes(draft, 1)
@@ -8217,13 +8487,52 @@ function patch(draft: Draft, changes: Partial<Character>): void {
 function healAndFree(draft: Draft, daysPassed: number): void {
   const wound = draft.character.wound
   if (wound) {
-    const healer =
-      bestSkill(draft.companions, 'healing').level >= 3 ||
-      ownOrderHere(draft.base)?.perks.healing === true
-    const healed = healWound(wound, daysPassed, healer)
+    // Кто за тобой смотрит: спутник-лекарь, дом ордена — и лекарь того места,
+    // где ты лежишь (этап 64, Ж1). Уход решает не только скорость, но и то,
+    // загноится ли рана.
+    const healer = healerAt(draft.base.world, draft.settlements, draft.locationId)
+    const companion = bestSkill(draft.companions, 'healing').level
+    const orderCare = ownOrderHere(draft.base)?.perks.healing === true
+    const care = Math.max(
+      companion >= 3 ? 0.5 : companion * 0.1,
+      orderCare ? 0.6 : 0,
+      healer ? healerDef(healer.kind).clean : 0,
+      potionCount(draft, 'salve') > 0 ? 0.7 : 0,
+    )
+    const speed = Math.max(
+      1,
+      companion >= 3 || orderCare ? 2 : 1,
+      healer ? healerSpeed(healer) * 0.6 : 1,
+    )
+    // Гноение: без ухода рана идёт своим чередом, и чаще всего дурным.
+    if (!wound.festering) {
+      const [gone, afterRoll] = rollChance(draft.rng, festerChance(wound, care) * daysPassed)
+      draft.rng = afterRoll
+      if (gone) {
+        const spoiled = festered(wound)
+        patch(draft, { wound: spoiled })
+        notice(
+          draft,
+          `Рана загноилась: ${woundKindDef(woundKindOf(wound)).label}, и теперь она не заживёт сама.`,
+          'war',
+        )
+        return
+      }
+    }
+    const healed = healWound(draft.character.wound ?? wound, daysPassed, speed)
     patch(draft, { wound: healed })
-    if (!healed) notice(draft, 'Рана зажила. Можно вставать.', 'people')
-    else if (bedridden(wound) && !bedridden(healed)) {
+    if (!healed) {
+      // Зажило — но не всегда без следа (этап 64, Ж2).
+      const [maimed, afterMaim] = rollChance(draft.rng, maimChance(wound))
+      draft.rng = afterMaim
+      if (maimed) {
+        const scar = woundKindDef(woundKindOf(wound)).scar
+        draft.maims = [...draft.maims, scar]
+        notice(draft, `Рана закрылась, но след остался: ${scar}.`, 'people')
+      } else {
+        notice(draft, 'Рана зажила. Можно вставать.', 'people')
+      }
+    } else if (bedridden(wound) && !bedridden(healed)) {
       notice(draft, 'Рана затягивается: с постели уже можно подняться.', 'people')
     }
   }

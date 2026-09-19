@@ -14,6 +14,7 @@ import {
   HUNT_HOURS,
   INTERDICT_DAYS,
   PLACE_LABELS,
+  POTIONS,
   PRIEST_TEMPERS,
   type Passage,
   type PlaceKind,
@@ -33,6 +34,8 @@ import {
   TRACK_SKILL,
   WEATHER_LABELS,
   addressOf,
+  ailmentDef,
+  ailmentOf,
   artifactDef,
   artifactsOf,
   bountyFor,
@@ -64,6 +67,10 @@ import {
   fordShut,
   formatDuration,
   gameHere,
+  healerAt,
+  healerDef,
+  healerPrice,
+  healerSpeed,
   hermitGiftDef,
   hermitOf,
   hours,
@@ -101,6 +108,7 @@ import {
   pietyWord,
   pirateLords,
   plagueAt,
+  potionDef,
   priestAt,
   quarterFor,
   quartersOf,
@@ -124,6 +132,8 @@ import {
   waitHours,
   walkMinutes,
   weatherAt,
+  woundKindDef,
+  woundKindOf,
 } from '@tpg/engine'
 import type { Activity, QuarterId } from '@tpg/engine'
 import { useState } from 'react'
@@ -1227,6 +1237,8 @@ function SeaSection({
         })}
       </Section>
 
+      <Sickbed game={game} dispatch={dispatch} />
+
       <Quay game={game} dispatch={dispatch} />
 
       <Section title="Пристань">
@@ -1685,5 +1697,98 @@ function Wilds({ game }: { game: GameState }) {
         onPress={() => dispatch({ type: 'readTracks' })}
       />
     </>
+  )
+}
+
+/**
+ * Лечение (этап 64).
+ *
+ * Лекарь этого места с именем и ценой, своя рана с её историей, болезнь отряда и
+ * то, что сварено из трав. Всё на одном листе: раненому незачем искать.
+ */
+function Sickbed({
+  game,
+  dispatch,
+}: {
+  game: GameState
+  dispatch: (command: Command) => void
+}) {
+  const healer = healerAt(game.world, game.settlements, game.locationId)
+  const wound = game.character.wound
+  const ailment = ailmentOf(game)
+  const potions = Object.entries(game.potions ?? {}).filter(([, count]) => count > 0)
+  const brewable = POTIONS.filter(
+    (one) => skillLevel(game.character, 'healing') >= one.needsHealing,
+  )
+  const herbs = game.character.inventory.herbs ?? 0
+  if (!healer && !wound && !ailment && potions.length === 0 && brewable.length === 0) return null
+  return (
+    <Section title="Лечение">
+      {wound ? (
+        <Panel tone={wound.festering ? 'danger' : undefined}>
+          <Body>{`Рана: ${woundKindDef(woundKindOf(wound)).label}`}</Body>
+          <Dim>{woundKindDef(woundKindOf(wound)).about}</Dim>
+          <Dim>
+            {wound.festering
+              ? 'Загноилась: сама не заживёт — нужен лекарь или мазь.'
+              : `Заживёт через ${Math.ceil(wound.daysLeft)} сут.`}
+          </Dim>
+        </Panel>
+      ) : null}
+      {ailment ? (
+        <Panel tone="danger">
+          <Body>{ailmentDef(ailment).label}</Body>
+          <Dim>{`${ailmentDef(ailment).about} Лечится: ${ailmentDef(ailment).cure}.`}</Dim>
+        </Panel>
+      ) : null}
+      {(game.maims ?? []).length > 0 ? (
+        <Panel>
+          <Dim>{`Что осталось от старых ран: ${(game.maims ?? []).join(', ')}.`}</Dim>
+        </Panel>
+      ) : null}
+      {healer ? (
+        <Card
+          glyph={<Icon name="healing" size={20} color={palette.good} />}
+          title={`${healer.name}, ${healerDef(healer.kind).label}`}
+          description={healerDef(healer.kind).about}
+          meta={`умение ${healer.skill} · лечит ×${healerSpeed(healer).toFixed(1)}${wound ? ` · ${healerPrice(healer, wound)}` : ''}`}
+          reason={reasonOf(canApply(game, { type: 'seeHealer' }))}
+          onPress={() => dispatch({ type: 'seeHealer' })}
+          tone="good"
+        />
+      ) : null}
+      <Card
+        title="Собрать трав"
+        description="Травы растут не в лавке. Сколько соберёшь — по земле, времени года и умению."
+        meta={`3 ч · есть ${herbs}`}
+        reason={reasonOf(canApply(game, { type: 'gatherHerbs' }))}
+        onPress={() => dispatch({ type: 'gatherHerbs' })}
+      />
+      {brewable.map((one) => (
+        <Card
+          key={one.id}
+          title={`Сварить: ${one.label.toLowerCase()}`}
+          description={one.about}
+          meta={`трав ${one.herbs} · ${formatDuration(one.minutes)}`}
+          reason={reasonOf(canApply(game, { type: 'brewPotion', potionId: one.id }))}
+          onPress={() => dispatch({ type: 'brewPotion', potionId: one.id })}
+        />
+      ))}
+      {potions.map(([id, count]) => {
+        const def = potionDef(id)
+        if (!def) return null
+        return (
+          <Card
+            key={`drink:${id}`}
+            title={`Выпить: ${def.label.toLowerCase()}`}
+            description={def.about}
+            meta={`есть ${count}`}
+            reason={reasonOf(canApply(game, { type: 'drinkPotion', potionId: id }))}
+            onPress={() => dispatch({ type: 'drinkPotion', potionId: id })}
+            tone="good"
+          />
+        )
+      })}
+    </Section>
   )
 }

@@ -1,4 +1,5 @@
 import type { BattleSide } from './battle'
+import { LORD_DEATH_AGE, LORD_START_AGE } from './content/heal'
 import { ARCHMAGE_DEED_LABELS, ARCHMAGE_NAMES, type ArchmageDeed, DEED_DAYS } from './content/lore'
 import type { TroopId } from './content/troops'
 import { LORD_NAMES, LORD_TITLES } from './content/world'
@@ -7,6 +8,7 @@ import { PLAYER } from './holding'
 import { foodSecurity } from './life'
 import type { Rng } from './rng'
 import { nextFloat, nextInt, rollChance } from './rng'
+import { DAYS_PER_YEAR } from './time'
 import { kingdomOf } from './world/queries'
 import type { World } from './world/types'
 
@@ -42,6 +44,14 @@ export interface Lord {
   readonly loyalty: number
   /** Сила дружины — условное число, из него собирается отряд в бою. */
   readonly strength: number
+  /**
+   * Сколько ему лет (этап 64, Ж6).
+   *
+   * Лорды не вечны: они старятся и умирают, а на их место садятся наследники —
+   * с именами, своей силой и своей верностью. Необязательно: сейвы до 0.6
+   * возраста лордов не знают, и такой считается сорокалетним.
+   */
+  readonly age?: number
 }
 
 /**
@@ -234,6 +244,10 @@ export function createPolitics(
           people += settlement.population
         }
 
+        // Возраст даётся сразу (этап 64, Ж6): мир начинается не с одного
+        // поколения, а с живых людей разных лет.
+        const [age, afterAge] = nextInt(generator, LORD_START_AGE[0], LORD_START_AGE[1])
+        generator = afterAge
         lords.push({
           id,
           name,
@@ -241,6 +255,7 @@ export function createPolitics(
           kingdomId: kingdom.id,
           loyalty,
           strength: Math.max(8, Math.round(people / 60)),
+          age,
         })
       }
     }
@@ -272,6 +287,13 @@ export type WarEvent =
   | { readonly type: 'rebellion'; readonly lordId: string }
   | { readonly type: 'archmage'; readonly kingdomId: string; readonly state: Archmage['state'] }
   | { readonly type: 'archmageDeed'; readonly kingdomId: string; readonly deed: ArchmageDeed }
+  /** Лорд умер, и земля перешла наследнику (этап 64, Ж6). */
+  | {
+      readonly type: 'lordDied'
+      readonly lordId: string
+      readonly heirId: string
+      readonly name: string
+    }
   | { readonly type: 'tribute'; readonly tribute: Tribute }
 
 export interface PoliticsResult {
@@ -464,6 +486,53 @@ function tickLords(
     }
   }
 
+  // Лорды старятся и умирают (этап 64, Ж6). На место умершего садится
+  // наследник — человек с именем, своей силой и своей верностью, а не строка:
+  // земля переходит к нему, и корона это отмечает.
+  const aged: Lord[] = []
+  const inherited: Record<string, string> = {}
+  for (const lord of politics.lords) {
+    const age = (lord.age ?? 40) + days / DAYS_PER_YEAR
+    const [dies, afterDeath] = rollChance(generator, lordDeathChance(age) * days)
+    generator = afterDeath
+    if (!dies) {
+      aged.push({ ...lord, age })
+      continue
+    }
+    const [heirName, afterName] = nextInt(generator, 0, LORD_NAMES.length - 1)
+    generator = afterName
+    const [heirAge, afterHeirAge] = nextInt(generator, 18, 40)
+    generator = afterHeirAge
+    // Сын не наследует отцовой ссоры (этап 64, Ж6): наследник мятежника
+    // возвращается к той короне, из которой род вышел, — с малой верностью, но
+    // не с войной. Иначе мятеж становился наследственным званием и мятежники
+    // копились бы без конца.
+    const wasRebel = lord.kingdomId === null
+    const homeland = wasRebel ? (lord.id.split(':')[1] ?? null) : lord.kingdomId
+    const heir: Lord = {
+      id: `${lord.id}:heir${Math.round(politics.lastDay + days)}`,
+      name: LORD_NAMES[heirName] ?? 'Безымянный',
+      title: lord.title,
+      kingdomId: homeland,
+      // Наследник не отец: верность своя, и её ещё надо заслужить.
+      loyalty: wasRebel ? 40 : Math.max(20, Math.min(90, Math.round(lord.loyalty * 0.7 + 15))),
+      strength: Math.max(6, Math.round(lord.strength * 0.85)),
+      age: heirAge,
+    }
+    aged.push(heir)
+    inherited[lord.id] = heir.id
+    if (wasRebel) wars = wars.filter((war) => war.a !== lord.id && war.b !== lord.id)
+    events.push({ type: 'lordDied', lordId: lord.id, heirId: heir.id, name: lord.name })
+  }
+  if (Object.keys(inherited).length > 0) {
+    const passed: Record<string, Settlement> = { ...places }
+    for (const [id, settlement] of Object.entries(passed)) {
+      const heirId = settlement.owner ? inherited[settlement.owner] : undefined
+      if (heirId) passed[id] = { ...settlement, owner: heirId }
+    }
+    places = passed
+  }
+
   // Кто чем владеет — один проход по миру на такт, а не по проходу на лорда.
   const ownedBy = new Map<string, string[]>()
   for (const [id, settlement] of Object.entries(places)) {
@@ -486,9 +555,13 @@ function tickLords(
   }
 
   const lords: Lord[] = []
-  for (const lord of politics.lords) {
+  // Идём по постаревшему списку (этап 64, Ж6): в нём вместо умерших уже сидят
+  // их наследники, и земля переписана на них выше.
+  for (const lord of aged) {
     if (lord.kingdomId === null) {
-      lords.push(lord)
+      // Мятежник без земли — не владетель, а беглец: его никто не считает
+      // лордом, и в списке его держать незачем.
+      if (holdsAnything(places, lord.id)) lords.push(lord)
       continue
     }
 
@@ -631,6 +704,7 @@ function tickLords(
       kingdomId,
       loyalty: 65,
       strength: Math.max(8, Math.round(settlement.population / 60)),
+      age: 30,
     })
   }
 
@@ -699,4 +773,27 @@ export function peaceTerms(
     perDay,
     untilDay: day + (beggared ? Math.round(TRIBUTE_DAYS / 2) : TRIBUTE_DAYS),
   }
+}
+
+/**
+ * Насколько вероятно, что лорд умрёт в эти сутки (этап 64, Ж6).
+ *
+ * До пятидесяти пяти — почти никогда: лорды гибнут на войне, а не в постели. А
+ * дальше — тем вероятнее, чем дальше, и к восьмидесяти доживают единицы.
+ */
+export function lordDeathChance(age: number): number {
+  if (age < LORD_DEATH_AGE) return 0.00002
+  // Не обрыв, а склон: после пятидесяти пяти смерть подступает по квадрату лет.
+  // На линейном счёте за шестьдесят пятый год не переваливал почти никто, и
+  // знать сменялась вдвое чаще, чем следует, — старики в мире нужны.
+  const over = (age - LORD_DEATH_AGE) / 100
+  return Math.min(0.01, 0.00002 + over * over * 0.01)
+}
+
+/** Есть ли у этого держателя хоть одно место — пусть и разорённое. */
+function holdsAnything(settlements: Readonly<Record<string, Settlement>>, lordId: string): boolean {
+  for (const settlement of Object.values(settlements)) {
+    if (settlement.owner === lordId) return true
+  }
+  return false
 }

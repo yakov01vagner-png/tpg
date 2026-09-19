@@ -1,5 +1,6 @@
 import type { Attributes } from './attributes'
 import { clampAttribute } from './attributes'
+import type { WoundKind } from './content/heal'
 import { type Rng, nextInt, rollChance } from './rng'
 
 /**
@@ -16,6 +17,14 @@ export interface Wound {
   readonly daysLeft: number
   /** Тяжесть 0..1: на сколько ослабляет тело, пока не зажило. */
   readonly severity: number
+  /**
+   * Род раны (этап 64, Ж2): резаная, ломаная, жжёная, горячка. От него зависит,
+   * чем её лечат, как долго она лежит и что оставляет после себя.
+   * Необязательно — сейвы до 0.6 родов раны не знают, и такая считается резаной.
+   */
+  readonly kind?: WoundKind
+  /** Загноилась: тяжелее, дольше и с большей вероятностью оставит след. */
+  readonly festering?: boolean
 }
 
 export interface Captivity {
@@ -88,8 +97,19 @@ export function woundedAttributes(attributes: Attributes, wound: Wound | null): 
 }
 
 /** Сутки заживления. Лекарь рядом — вдвое быстрее. */
-export function healWound(wound: Wound, days: number, healer: boolean): Wound | null {
-  const daysLeft = wound.daysLeft - days * (healer ? 2 : 1)
+/**
+ * Сутки заживления.
+ *
+ * `speed` — во сколько раз быстрее идёт дело: единица без ухода, два при
+ * спутнике-лекаре, больше — у настоящего лекаря (этап 64, Ж1). Гноящаяся рана
+ * не заживает вовсе, пока её не почистят: время само её не лечит.
+ */
+export function healWound(wound: Wound, days: number, speed: number): Wound | null {
+  if (wound.festering) {
+    // Загноившаяся не заживает, а тянется: без ухода она только хуже.
+    return { ...wound, daysLeft: wound.daysLeft + days * 0.2 }
+  }
+  const daysLeft = wound.daysLeft - days * Math.max(0.2, speed)
   if (daysLeft <= 0) return null
   return { ...wound, daysLeft, severity: Math.min(wound.severity, daysLeft / 30) }
 }

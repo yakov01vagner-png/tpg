@@ -10,6 +10,7 @@ import type { Character } from './character'
 import type { Companion } from './companion'
 import type { BuildingId } from './content/buildings'
 import { PLAIN_LAW } from './content/estate'
+import type { Ailment } from './content/heal'
 import type { QuarterId } from './content/quarters'
 import type { CechMembership } from './craft'
 import type { Settlement } from './economy'
@@ -230,6 +231,14 @@ export interface GameState {
    * лежит только память. Необязательно: сейвы до 0.6 её не знают.
    */
   readonly wilds?: Readonly<Record<string, WildMemory>>
+  /**
+   * Мор, раны и лекари (этап 64). Сваренные зелья, болезнь отряда и запертые
+   * места. Всё необязательно — сейвы до 0.6 этого не знают.
+   */
+  readonly potions?: Readonly<Record<string, number>>
+  readonly ailment?: { readonly kind: Ailment; readonly since: number } | null
+  /** Увечья: что осталось от плохо заживших ран. */
+  readonly maims?: readonly string[]
   /** Своё владение, если провозглашено. */
   readonly realm: { readonly name: string } | null
   /** Взятые поручения. */
@@ -293,6 +302,9 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     works: {},
     visits: {},
     wilds: {},
+    potions: {},
+    ailment: null,
+    maims: [],
     spellcraft: {},
     weather: [],
     artifacts: [],

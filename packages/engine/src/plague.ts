@@ -28,6 +28,13 @@ export type PlagueEvent =
   | { readonly type: 'plagueSpread'; readonly from: string; readonly to: string }
   | { readonly type: 'plagueDeaths'; readonly locationId: string; readonly deaths: number }
   | { readonly type: 'plagueEnded'; readonly locationId: string }
+  /** От мора бегут (этап 64, Ж3): столько людей ушло туда, где его ещё нет. */
+  | {
+      readonly type: 'plagueFlight'
+      readonly from: string
+      readonly to: string
+      readonly people: number
+    }
 
 export interface PlagueResult {
   readonly plagues: readonly Plague[]
@@ -52,6 +59,15 @@ const DURATION = [25, 70] as const
 const SPREAD_CHANCE = 0.02
 /** Какую долю жителей мор уносит за сутки при полной силе. */
 const DEATHS_PER_DAY = 0.003
+/**
+ * Насколько вероятно за сутки, что из заражённого места побегут (этап 64, Ж3).
+ *
+ * Бегут не все и не сразу: сперва запираются по домам, потом уходят те, кому
+ * есть куда. Из запертого места не бегут вовсе — в этом и смысл ворот.
+ */
+const FLIGHT_CHANCE = 0.04
+/** Какая доля жителей уходит за один раз. */
+const FLIGHT_SHARE = 0.06
 
 export function tickPlague(
   world: World,
@@ -97,6 +113,37 @@ export function tickPlague(
         },
       }
       events.push({ type: 'plagueDeaths', locationId: plague.locationId, deaths })
+    }
+
+    // 1а. От мора бегут (этап 64, Ж3). Из запертого места не бегут — в этом
+    // и смысл запертых ворот: карантин держит не только мор, но и людей.
+    if (!place.quarantined && place.population > 0) {
+      const [runs, afterRun] = rollChance(generator, FLIGHT_CHANCE * plague.severity)
+      generator = afterRun
+      if (runs) {
+        const away = Object.values(neighbourSettlements(world, plague.locationId)).filter(
+          (near) => !infected.has(near.id) && (places[near.id]?.population ?? 0) > 0,
+        )
+        const to = away[0]
+        const from = places[plague.locationId]
+        if (to && from) {
+          const fled = Math.min(from.population * FLIGHT_SHARE, from.population * 0.2)
+          const receiver = places[to.id]
+          if (receiver && fled >= 1) {
+            places = {
+              ...places,
+              [plague.locationId]: { ...from, population: from.population - fled },
+              [to.id]: { ...receiver, population: receiver.population + fled },
+            }
+            events.push({
+              type: 'plagueFlight',
+              from: plague.locationId,
+              to: to.id,
+              people: Math.round(fled),
+            })
+          }
+        }
+      }
     }
 
     // 2. Перекидывается по дорогам: чем больше ездят, тем дальше уходит.
@@ -159,6 +206,22 @@ export function tickPlague(
 }
 
 /** Идёт ли мор в этом месте: нужно и экрану, и решению «ехать ли туда». */
+/**
+ * Мор по соседству (этап 64, Ж3).
+ *
+ * Мор видно заранее: слухи приходят раньше самого мора, и в этом вся разница
+ * между «умерли внезапно» и «мы знали и заперлись». Возвращает те из соседних
+ * мест, где он уже идёт.
+ */
+export function plagueNearby(
+  world: World,
+  plagues: readonly Plague[],
+  locationId: string,
+): readonly Plague[] {
+  const near = new Set(neighbourSettlements(world, locationId).map((one) => one.id))
+  return plagues.filter((one) => near.has(one.locationId))
+}
+
 export function plagueAt(plagues: readonly Plague[], locationId: string): Plague | null {
   return plagues.find((one) => one.locationId === locationId) ?? null
 }

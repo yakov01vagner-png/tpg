@@ -27,9 +27,11 @@ describe('раны и плен', () => {
     const weak = woundedAttributes(hero.attributes, wound)
     expect(weak.strength).toBeLessThan(hero.attributes.strength)
     expect(weak.mind).toBe(hero.attributes.mind)
-    expect(healWound(wound, 10, false)?.daysLeft).toBe(20)
-    expect(healWound(wound, 10, true)?.daysLeft).toBe(10)
-    expect(healWound(wound, 30, false)).toBeNull()
+    // Скорость — число, а не «да/нет» (этап 64): без ухода единица, при лекаре
+    // вдвое, у настоящего лекаря больше.
+    expect(healWound(wound, 10, 1)?.daysLeft).toBe(20)
+    expect(healWound(wound, 10, 2)?.daysLeft).toBe(10)
+    expect(healWound(wound, 30, 1)).toBeNull()
   })
 
   it('стойкий встаёт раньше', () => {

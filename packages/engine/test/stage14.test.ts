@@ -81,13 +81,21 @@ describe('постройки: двенадцать, и каждая меняет
         { locationId: source.locationId, daysLeft: 40, severity: 1 },
       ]
       let rng = createRng(3)
+      // Считаем умерших, а не убыль людей: с этапа 64 от мора ещё и бегут, и
+      // ушедшие живы. «Мор уносит меньше» — про смерти, а не про отъезды.
+      let deaths = 0
       for (let day = 1; day <= 40; day += 1) {
         const result = tickPlague(world, places, plagues, rng)
         plagues = result.plagues
         places = result.settlements
         rng = result.rng
+        for (const event of result.events) {
+          if (event.type === 'plagueDeaths' && event.locationId === source.locationId) {
+            deaths += event.deaths
+          }
+        }
       }
-      return settlement.population - (places[source.locationId]?.population ?? 0)
+      return deaths
     }
     const dirty = toll(source)
     const clean = toll(built(built(source, 'well'), 'bathhouse'))

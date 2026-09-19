@@ -1140,12 +1140,19 @@ function submit(
     }
   }
 
+  // Присягнувший без земли перестаёт быть владетелем: он возвращается к короне
+  // человеком при дворе, а не держателем. Иначе в списке лордов оставались бы
+  // те, у кого нечего отнять и некого вести, — а «у каждого лорда есть земля»
+  // должно держаться всегда, а не почти всегда (этап 64).
+  const landless = !seatOf(settlements, lordId)
   return {
-    lords: lords.map((candidate) =>
-      // Присягнувший заново получает не ноль, а передышку: с верностью 15 он
-      // уходил в мятеж снова через сезон, и мятеж опять становился нормой.
-      candidate.id === lordId ? { ...candidate, kingdomId: crown, loyalty: 45 } : candidate,
-    ),
+    lords: landless
+      ? lords.filter((candidate) => candidate.id !== lordId)
+      : lords.map((candidate) =>
+          // Присягнувший заново получает не ноль, а передышку: с верностью 15 он
+          // уходил в мятеж снова через сезон, и мятеж опять становился нормой.
+          candidate.id === lordId ? { ...candidate, kingdomId: crown, loyalty: 45 } : candidate,
+        ),
     wars: remaining,
     settlements,
     rng: afterRoll,
