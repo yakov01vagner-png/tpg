@@ -71,6 +71,18 @@ import {
   skillLevel,
 } from './character'
 import { type Generation, type Marks, closeGeneration, withMark } from './chronicle'
+import type { Censure } from './church'
+import {
+  CHURCH,
+  censureDue,
+  churchAsk,
+  churchLedger,
+  churchOf,
+  crusadersAgainst,
+  defianceCost,
+  interdictBite,
+  wantDef,
+} from './church'
 import type { Pact } from './city'
 import {
   CITY,
@@ -147,6 +159,7 @@ import { BUILDINGS } from './content/buildings'
 import { TOURNEY_FEE, TOURNEY_PURSE } from './content/castle'
 import { ENVOY_FAVOUR } from './content/casus'
 import type { ChainDef } from './content/chains'
+import { CENSURE_DEFS } from './content/church'
 import type { CityAsk } from './content/city'
 import { COMPANY_WORDS, TEMPER_DEFS } from './content/companies'
 import type { CompanionDef, DeedId } from './content/companions'
@@ -1058,6 +1071,8 @@ export type Command =
   | { readonly type: 'openTalks'; readonly against: string; readonly mediator?: MediatorKind }
   | { readonly type: 'tableTerms'; readonly terms: readonly PeaceTerm[] }
   | { readonly type: 'endTalks' }
+  /** Церковь (этап 96): исполнить просьбу или отказать. */
+  | { readonly type: 'answerChurch'; readonly yield: boolean }
   /** Города (этап 95): ответить городу, дать вольность по договору. */
   | { readonly type: 'answerCity'; readonly locationId: string; readonly ask: CityAsk }
   | {
@@ -1562,6 +1577,8 @@ export function applyCommand(
       return appeasePlot(state, command.concession)
     case 'crushPlot':
       return crushPlot(state)
+    case 'answerChurch':
+      return answerChurch(state, command.yield)
     case 'answerCity':
       return answerCity(state, command.locationId, command.ask)
     case 'grantPact':
@@ -9462,6 +9479,8 @@ interface Draft {
   pledges: readonly Pledge[]
   heirLaw: LawId
   pacts: readonly Pact[]
+  churchAnger: number
+  censure: Censure | null
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9563,6 +9582,8 @@ function open(state: GameState): Draft {
     pledges: state.pledges ?? [],
     heirLaw: state.heirLaw ?? 'eldest',
     pacts: state.pacts ?? [],
+    churchAnger: state.churchAnger ?? 0,
+    censure: state.censure ?? null,
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9881,6 +9902,8 @@ function close(draft: Draft): CommandResult {
     // Свои люди возвращаются из поездок (этап 75, Д5): с серебром, с людьми,
     // с чужим словом или с тем, что на дорогах стало тише.
     returnOfficers(draft)
+    // Церковь ведёт свой счёт и отвечает по нему (этап 96).
+    tickChurch(draft, daysPassed)
     // Города считают свой хлеб и свои пошлины (этап 95).
     tickCities(draft, daysPassed)
     // Твоя знать говорит между собой, и разговоры зреют (этап 94).
@@ -9994,6 +10017,8 @@ function close(draft: Draft): CommandResult {
     pledges: draft.pledges,
     heirLaw: draft.heirLaw,
     pacts: draft.pacts,
+    churchAnger: draft.churchAnger,
+    censure: draft.censure,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -11860,6 +11885,135 @@ function tickPeace(draft: Draft, days: number): void {
 const OVERTURE_BEAT = 15
 const COMPANY_BEAT = 10
 const NAVY_BEAT = 5
+
+/**
+ * Ответить церкви (этап 96, Ц1 и Ц5).
+ *
+ * Уступка стоит того, чем просят: десятины, земли, части своего суда, войны или
+ * имени перед знатью. Отказ стоит счёта: церковь помнит и отвечает не сразу, но
+ * отвечает — словом, интердиктом, а потом и походом.
+ */
+function answerChurch(state: GameState, yields: boolean): CommandResult {
+  const day = dayOf(state.time)
+  const want = churchAsk(state, state.world, day)
+  const def = wantDef(want)
+
+  const draft = open(state)
+  advance(draft, hours(6))
+  if (!yields) {
+    const cost = defianceCost(want)
+    draft.churchAnger = Math.max(0, (draft.churchAnger ?? 0) + cost.anger)
+    draft.piety = (draft.piety ?? 0) + cost.piety
+    notice(draft, `«${def.says}» — ты отказал. ${cost.says}`, 'world')
+    return close(draft)
+  }
+  // Уступка платится тем, чем просят.
+  if (want === 'tithe') {
+    const tithe = Math.round(churchOf(draft.base, draft.base.world, day).tithe)
+    if (draft.character.money < tithe) {
+      return fail('noMoney', `Десятина — ${tithe}, у тебя ${draft.character.money}.`)
+    }
+    addMoney(draft, -tithe)
+  }
+  if (want === 'land') {
+    const mine = [...holdingsOf(draft.settlements, PLAYER)].sort(
+      (a, b) => a.population - b.population,
+    )[0]
+    if (!mine) return fail('requirements', 'Земли, которую можно отдать обители, нет.')
+    draft.settlements = {
+      ...draft.settlements,
+      [mine.locationId]: { ...mine, owner: null },
+    }
+  }
+  if (want === 'peace') {
+    draft.politics = {
+      ...draft.politics,
+      wars: draft.politics.wars.filter((war) => war.a !== PLAYER && war.b !== PLAYER),
+    }
+  }
+  if (want === 'penance') draft.renown = Math.max(0, draft.renown - 2)
+  draft.churchAnger = Math.max(0, (draft.churchAnger ?? 0) + CHURCH.obedience)
+  draft.piety = (draft.piety ?? 0) + def.piety
+  notice(
+    draft,
+    `«${def.says}» — ты уступил. Платишь ${def.costs}; благочестия прибавилось на ${def.piety}, счёт церкви упал на ${Math.abs(CHURCH.obedience)}.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Сутки церкви (этап 96, Ц2 и Ц3).
+ *
+ * Счёт растёт от отказов и сам не падает: церковь помнит. Дойдя до черты, она
+ * отвечает — словом, интердиктом на всю державу, а потом называет твоё имя, и
+ * по призыву идут другие короны. Считается раз в декаду.
+ */
+function tickChurch(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % CHURCH_BEAT !== 0) return
+  const anger = draft.churchAnger ?? 0
+  const standing = draft.censure ?? null
+
+  // Идущая кара делает своё дело каждую декаду.
+  if (standing && standing.untilDay >= day) {
+    if (standing.kind === 'interdict') {
+      const bite = interdictBite(draft.base)
+      for (const one of holdingsOf(draft.settlements, PLAYER)) {
+        draft.reputation = withPlaceRep(draft.reputation, one.locationId, bite.mood)
+      }
+    }
+    return
+  }
+  if (standing && standing.untilDay < day) {
+    draft.censure = null
+    notice(draft, 'Кара снята: храмы открыты, и люди это заметили раньше тебя.', 'world')
+    return
+  }
+
+  const due = censureDue(anger)
+  if (!due) return
+  const want = churchAsk(draft.base, draft.base.world, day)
+  if (due === 'warning') {
+    notice(
+      draft,
+      `С амвона о тебе говорят вслух: церковь помнит отказы. Счёт ${anger}, до интердикта ${CENSURE_LINES.interdict.from - anger}.`,
+      'world',
+    )
+    return
+  }
+  if (due === 'interdict') {
+    draft.censure = {
+      kind: 'interdict',
+      sinceDay: day,
+      untilDay: day + CHURCH.interdictDays,
+      why: want,
+    }
+    notice(draft, interdictBite(draft.base).says, 'world')
+    return
+  }
+  // Поход по призыву: церковь не воюет сама — она называет имя.
+  const crusaders = crusadersAgainst(draft.base, draft.base.world, PLAYER, day)
+  draft.censure = { kind: 'crusade', sinceDay: day, untilDay: day + 720, why: want }
+  let wars = draft.politics.wars
+  for (const kingdomId of crusaders) {
+    if (atWar(draft.politics, PLAYER, kingdomId)) continue
+    wars = [...wars, { a: kingdomId, b: PLAYER, since: day, reason: 'поход по призыву церкви' }]
+  }
+  draft.politics = { ...draft.politics, wars }
+  notice(
+    draft,
+    `Против тебя объявлен поход: имя названо с амвона, и по призыву пошли ${crusaders.length} корон.`,
+    'war',
+  )
+}
+
+/** Как часто считают церковь. */
+const CHURCH_BEAT = 10
+
+/** Черты кар лежат в содержимом: числа читаются в одном месте. */
+const CENSURE_LINES = CENSURE_DEFS
 
 /**
  * Ответить городу (этап 95, На2 и На4).
