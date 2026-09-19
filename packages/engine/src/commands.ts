@@ -12,6 +12,17 @@ import {
   unformUp,
   unitsSize,
 } from './battle'
+import type { IntrigueKind } from './castle'
+import {
+  FAVOUR_AUDIENCE,
+  courtOf,
+  denounceTargets,
+  favourOf,
+  intriguesFor,
+  judgeOf,
+  lordHere,
+  receptionFor,
+} from './castle'
 import type { ChainProgress } from './chain'
 import { chainDef, chainsOfferedAt, stepDone } from './chain'
 import type { Character } from './character'
@@ -31,6 +42,7 @@ import type { Availability, Content, Requirements } from './content'
 import { CONTENT } from './content'
 import type { BuildingId } from './content/buildings'
 import { BUILDINGS } from './content/buildings'
+import { TOURNEY_FEE, TOURNEY_PURSE } from './content/castle'
 import type { ChainDef } from './content/chains'
 import type { CompanionDef, DeedId } from './content/companions'
 import { COMPANIONS, DEED_LABELS, TEMPERS } from './content/companions'
@@ -283,6 +295,16 @@ export type Command =
   | { readonly type: 'donate'; readonly amount: number }
   | { readonly type: 'joinFeast'; readonly doingId: string }
   | { readonly type: 'pilgrimage' }
+  /** Двор чужого лорда (этап 52): приём, дела двора, турнир, суд. */
+  | { readonly type: 'seekAudience'; readonly lordId: string; readonly gift: number }
+  | {
+      readonly type: 'courtIntrigue'
+      readonly lordId: string
+      readonly kind: IntrigueKind
+      readonly targetId?: string
+    }
+  | { readonly type: 'tourney'; readonly lordId: string }
+  | { readonly type: 'petition'; readonly lordId: string }
   /** Уйти морем: своим судном, нанятым или попутным (этап 35). */
   | { readonly type: 'sail'; readonly toLocationId: string; readonly manner: Passage }
   /** Купить судно в порту, починить своё, продать своё. */
@@ -522,6 +544,14 @@ export function applyCommand(
       return joinFeast(state, command.doingId)
     case 'pilgrimage':
       return pilgrimage(state)
+    case 'seekAudience':
+      return seekAudience(state, command.lordId, command.gift)
+    case 'courtIntrigue':
+      return courtIntrigue(state, command.lordId, command.kind, command.targetId)
+    case 'tourney':
+      return tourney(state, command.lordId)
+    case 'petition':
+      return petition(state, command.lordId)
     case 'travel':
       return travel(state, command.toLocationId)
     case 'sail':
@@ -3740,6 +3770,187 @@ export function tradeSkillAt(state: GameState): number {
  * Торгуются раз в день: приставать к человеку каждый час — не торг.
  */
 /**
+ * Приём у лорда (этап 52, З1).
+ *
+ * В замок входят по чину: свой вассал и слуга короны — сразу, чужой — по славе
+ * и милости, незнакомец — с подарком или никак. Ждать в сенях приходится тем
+ * дольше, чем выше сидит хозяин.
+ */
+function seekAudience(state: GameState, lordId: string, gift: number): CommandResult {
+  const lord = lordById(state.politics, lordId)
+  if (!lord) return fail('unknownAction', 'Такого лорда нет.')
+  if (!lordHere(state, state.locationId) || lordHere(state)?.id !== lordId) {
+    return fail('unavailableHere', 'Этот лорд сидит не здесь.')
+  }
+  if (!Number.isInteger(gift) || gift < 0) return fail('invalid', 'Сколько именно?')
+  if (state.character.money < gift) return fail('noMoney', 'Такого подарка у тебя нет.')
+  const reception = receptionFor(state, lord, gift)
+  const draft = open(state)
+  if (gift > 0) addMoney(draft, -gift)
+  advance(draft, hours(Math.max(1, reception.waitHours)))
+  if (!reception.admits) {
+    // Подарок, за который не пустили, не возвращают: его уже взяли у ворот.
+    notice(draft, `${lord.title} ${lord.name}: «${reception.says}»`)
+    if (reception.gift > 0) {
+      notice(draft, `Говорят, с даром в ${reception.gift} тебя бы и выслушали.`)
+    }
+    return close(draft)
+  }
+  const gained = 4 + Math.round(gift / 25)
+  draft.reputation = withLordRep(draft.reputation, lordId, Math.min(20, gained))
+  notice(draft, `${lord.title} ${lord.name} принял тебя: «${reception.says}»`)
+  return close(draft)
+}
+
+/**
+ * Дела двора (этап 52, З4).
+ *
+ * Услуга за услугу, донос, покровительство. Каждое что-то даёт и чем-то
+ * платит: донос слышат обе стороны, покровительство стоит денег и связывает.
+ */
+function courtIntrigue(
+  state: GameState,
+  lordId: string,
+  kind: IntrigueKind,
+  targetId?: string,
+): CommandResult {
+  const lord = lordById(state.politics, lordId)
+  if (!lord) return fail('unknownAction', 'Такого лорда нет.')
+  if (lordHere(state)?.id !== lordId) return fail('unavailableHere', 'Этот лорд сидит не здесь.')
+  const def = intriguesFor(state, lord).find((one) => one.id === kind)
+  if (!def) return fail('requirements', 'До такого разговора ты у него ещё не дорос.')
+  if (state.character.money < def.cost) return fail('noMoney', `Нужно ${def.cost}.`)
+
+  const draft = open(state)
+  if (def.cost > 0) addMoney(draft, -def.cost)
+  advance(draft, def.minutes)
+
+  if (kind === 'service') {
+    // Услуга — это взятое поручение двора: его дают, а не выдумывают.
+    const offers = offersAt(state)
+    const errand = offers[0]
+    if (!errand) return fail('unavailableHere', 'Сейчас у двора нет дела для тебя.')
+    if (state.quests.some((one) => one.id === errand.id)) {
+      return fail('invalid', 'Это дело у тебя уже есть.')
+    }
+    draft.quests = [...draft.quests, { ...errand, reward: Math.round(errand.reward * 1.3) }]
+    draft.reputation = withLordRep(draft.reputation, lordId, 5)
+    notice(draft, `${lord.title} ${lord.name} принял твою услугу: ${describeQuest(state, errand)}.`)
+    return close(draft)
+  }
+
+  if (kind === 'denounce') {
+    const target = targetId ? lordById(state.politics, targetId) : null
+    if (!target) return fail('invalid', 'На кого доносить?')
+    if (!denounceTargets(state, lord).some((one) => one.id === target.id)) {
+      return fail('invalid', 'Про этого человека лорду слушать неинтересно.')
+    }
+    draft.reputation = withLordRep(draft.reputation, lordId, 10)
+    draft.reputation = withLordRep(draft.reputation, target.id, -25)
+    // Донос — грех, и церковь это считает (этап 51).
+    draft.piety = Math.max(-100, Math.min(100, draft.piety - 5))
+    notice(
+      draft,
+      `Ты рассказал ${lord.title === '' ? '' : `${lord.title} `}${lord.name} о ${target.name}. Тот узнает, от кого.`,
+    )
+    return close(draft)
+  }
+
+  // Покровительство: он говорит за тебя, ты отвечаешь за него.
+  draft.reputation = withLordRep(draft.reputation, lordId, 15)
+  draft.renown += 1
+  notice(draft, `${lord.title} ${lord.name} взял тебя под руку. Теперь ты его человек при дворе.`)
+  return close(draft)
+}
+
+/**
+ * Турнир при дворе (этап 52, З5).
+ *
+ * Слава и раны: взнос, бой на копьях и кошель победителю. Судит не кубик, а
+ * то, чем ты дерёшься и на чём сидишь.
+ */
+function tourney(state: GameState, lordId: string): CommandResult {
+  const lord = lordById(state.politics, lordId)
+  if (!lord) return fail('unknownAction', 'Такого лорда нет.')
+  if (lordHere(state)?.id !== lordId) return fail('unavailableHere', 'Этот лорд сидит не здесь.')
+  // На турнир зовут тех, кого уже принимали: с улицы на ристалище не выходят.
+  if (favourOf(state, lordId) < TOURNEY_FAVOUR) {
+    return fail('shunned', 'На турнир зовут тех, кого принимают. Тебя пока нет.')
+  }
+  if (state.character.money < TOURNEY_FEE) return fail('noMoney', `Взнос ${TOURNEY_FEE}.`)
+  const blocked = checkFatigue(state.character, 30)
+  if (blocked) return blocked
+
+  const draft = open(state)
+  addMoney(draft, -TOURNEY_FEE)
+  advance(draft, hours(6))
+  addFatigue(draft, 30)
+  const [roll, next] = nextFloat(draft.rng)
+  draft.rng = next
+  const gear = gearBonus(state.character)
+  const skill =
+    skillLevel(state.character, 'riding') * 0.5 + skillLevel(state.character, 'heavyWeapons') * 0.5
+  const chance = Math.min(0.85, 0.15 + skill * 0.012 + gear.attack * 0.01)
+  practice(draft, 'riding', 30)
+  practice(draft, 'heavyWeapons', 25)
+  if (roll < chance) {
+    addMoney(draft, TOURNEY_PURSE)
+    draft.renown += 2
+    draft.reputation = withLordRep(draft.reputation, lordId, 12)
+    notice(draft, `Турнир у ${lord.name}: кошель твой — ${TOURNEY_PURSE}. О тебе говорят.`)
+    return close(draft)
+  }
+  // Проигравший падает: турнирное копьё тупое, но земля твёрдая.
+  if (roll > 0.85) {
+    // Турнирное копьё тупое, но земля твёрдая: пара суток в постели.
+    if (!draft.character.wound) {
+      draft.character = { ...draft.character, wound: { daysLeft: 3, severity: 0.25 } }
+      notice(draft, 'Сбит с седла: рёбра целы, но дышать больно.')
+    }
+  }
+  draft.reputation = withLordRep(draft.reputation, lordId, 3)
+  notice(draft, `Турнир у ${lord.name}: тебя выбили из седла. Взнос остался у распорядителя.`)
+  return close(draft)
+}
+
+/**
+ * Суд лорда (этап 52, З6).
+ *
+ * Пожаловаться на то, что тебя обидели на его земле: шайка, пошлина, чужой
+ * произвол. Решает он по нраву и по тому, в какой ты милости.
+ */
+function petition(state: GameState, lordId: string): CommandResult {
+  const lord = lordById(state.politics, lordId)
+  if (!lord) return fail('unknownAction', 'Такого лорда нет.')
+  if (lordHere(state)?.id !== lordId) return fail('unavailableHere', 'Этот лорд сидит не здесь.')
+  // Жалобу слушают у того, кто тебя знает: незнакомца отправят к сенешалю.
+  const favour = favourOf(state, lordId)
+  if (favour <= 0) return fail('shunned', 'Твою жалобу здесь не станут слушать: тебя не знают.')
+
+  const draft = open(state)
+  advance(draft, hours(2))
+  const [roll, next] = nextFloat(draft.rng)
+  draft.rng = next
+  const verdict = judgeOf(lord, favour, roll)
+  if (verdict === 'granted') {
+    const paid = 60 + Math.round(favour * 2)
+    addMoney(draft, paid)
+    draft.reputation = withPlaceRep(draft.reputation, state.locationId, 5)
+    notice(draft, `${lord.title} ${lord.name} рассудил в твою пользу: ${paid} в возмещение.`)
+    return close(draft)
+  }
+  if (verdict === 'fined') {
+    const fine = Math.min(state.character.money, 50)
+    addMoney(draft, -fine)
+    draft.reputation = withLordRep(draft.reputation, lordId, -5)
+    notice(draft, `${lord.title} ${lord.name} счёл жалобу вздорной и взял с тебя ${fine}.`)
+    return close(draft)
+  }
+  notice(draft, `${lord.title} ${lord.name} выслушал и не сделал ничего. Так тоже судят.`)
+  return close(draft)
+}
+
+/**
  * Обряд (этап 51, Х1).
  *
  * В храме есть кто-то и есть что сделать: молебен, исповедь, отпевание,
@@ -3910,6 +4121,9 @@ function haggleWith(state: GameState, merchantId: string, push: HagglePush): Com
   notice(draft, `${merchant.name}: «${result.says}»`)
   return close(draft)
 }
+
+/** С какой милости лорда зовут на турнир. */
+const TOURNEY_FAVOUR = 10
 
 /** Сколько времени уходит на торг. */
 const HAGGLE_MINUTES = 20

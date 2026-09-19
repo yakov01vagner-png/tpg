@@ -1,28 +1,39 @@
 import {
   COMPANION_RANSOM,
+  COURT_ROLES,
   type Command,
   type Companion,
   type GameState,
+  LORD_TEMPERS,
   PLAYER,
   TEMPERS,
+  TOURNEY_FEE,
   TROOPS,
   TROOP_IDS,
   type TroopId,
   canApply,
   companionsAt,
+  courtOf,
   dailyFood,
   dailyWages,
   dayOf,
+  denounceTargets,
+  favourOf,
+  favourWord,
+  intriguesFor,
   isSettlement,
   lordById,
+  lordHere,
   lordSays,
+  lordTemper,
   matchesAt,
   partyCapacity,
   partySize,
   partyStrength,
+  receptionFor,
   troopCount,
 } from '@tpg/engine'
-import { ScrollView, StyleSheet } from 'react-native'
+import { ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Icon } from '../art/icons'
 import { COMPANION_FACES, Portrait } from '../art/portrait'
 import { dispatch } from '../game/store'
@@ -128,6 +139,8 @@ export function PeopleScreen({ game }: { game: GameState }) {
           })}
         </Section>
       ) : null}
+
+      <CastleCourt game={game} />
 
       <Section title="Спутники">
         {game.companions.length === 0 ? (
@@ -285,5 +298,98 @@ export function moraleWord(morale: number): string {
 }
 
 const styles = StyleSheet.create({
+  faces: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.sm },
+  faceCell: { width: 72, alignItems: 'center', gap: 2 },
+  faceName: { color: palette.text, fontSize: 12 },
+  faceRole: { color: palette.faint, fontSize: 10 },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
 })
+
+/**
+ * Двор лорда (этап 52): кто при нём, как он принимает и что при дворе можно
+ * затеять.
+ */
+function CastleCourt({ game }: { game: GameState }) {
+  const lord = lordHere(game)
+  if (!lord) return null
+  const court = courtOf(game, lord)
+  const favour = favourOf(game, lord.id)
+  const reception = receptionFor(game, lord, 0)
+  const temper = LORD_TEMPERS[lordTemper(lord)]
+  return (
+    <Section title={`${lord.title} ${lord.name}`} aside={favourWord(favour)}>
+      <Dim>{`${temper.label} · ${reception.admits ? `примут, ждать ${reception.waitHours} ч` : `не примут: нужен дар ${reception.gift}`}`}</Dim>
+      <View style={styles.faces}>
+        {court.map((one) => (
+          <View key={one.id} style={styles.faceCell}>
+            <Portrait seed={one.id} size={44} age={one.role === 'heir' ? 20 : 45} />
+            <Text numberOfLines={1} style={styles.faceName}>
+              {one.name}
+            </Text>
+            <Text style={styles.faceRole}>{COURT_ROLES[one.role].label}</Text>
+          </View>
+        ))}
+      </View>
+      <Card
+        title={reception.admits ? 'Просить приёма' : `Просить приёма с даром ${reception.gift}`}
+        description={`«${reception.says}»`}
+        reason={reasonOf(game, {
+          type: 'seekAudience',
+          lordId: lord.id,
+          gift: reception.admits ? 0 : reception.gift,
+        })}
+        onPress={() =>
+          dispatch({
+            type: 'seekAudience',
+            lordId: lord.id,
+            gift: reception.admits ? 0 : reception.gift,
+          })
+        }
+      />
+      {intriguesFor(game, lord).map((one) => (
+        <Card
+          key={one.id}
+          title={one.label}
+          description={one.description}
+          meta={one.cost > 0 ? `${one.cost}` : undefined}
+          reason={reasonOf(game, {
+            type: 'courtIntrigue',
+            lordId: lord.id,
+            kind: one.id,
+            ...(one.id === 'denounce'
+              ? { targetId: denounceTargets(game, lord)[0]?.id ?? '' }
+              : {}),
+          })}
+          onPress={() =>
+            dispatch({
+              type: 'courtIntrigue',
+              lordId: lord.id,
+              kind: one.id,
+              ...(one.id === 'denounce'
+                ? { targetId: denounceTargets(game, lord)[0]?.id ?? '' }
+                : {}),
+            })
+          }
+        />
+      ))}
+      <Card
+        title="Выйти на турнир"
+        description="Взнос, копьё и кошель победителю. Проигравшего поднимают с земли."
+        meta={`${TOURNEY_FEE}`}
+        reason={reasonOf(game, { type: 'tourney', lordId: lord.id })}
+        onPress={() => dispatch({ type: 'tourney', lordId: lord.id })}
+      />
+      <Card
+        title="Просить суда"
+        description="Пожаловаться на обиду, нанесённую на его земле. Решает он."
+        reason={reasonOf(game, { type: 'petition', lordId: lord.id })}
+        onPress={() => dispatch({ type: 'petition', lordId: lord.id })}
+      />
+    </Section>
+  )
+}
+
+function reasonOf(game: GameState, command: Command): string | undefined {
+  const check = canApply(game, command)
+  return check.ok ? undefined : check.message
+}

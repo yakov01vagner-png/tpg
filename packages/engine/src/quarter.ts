@@ -114,6 +114,11 @@ export function activityOf(command: Command): Activity | null {
     case 'hire':
     case 'recruitCompanion':
       return 'hire'
+    // Двор лорда (этап 52): приём, дела двора, турнир и суд — в замке.
+    case 'seekAudience':
+    case 'courtIntrigue':
+    case 'tourney':
+    case 'petition':
     case 'askForFief':
     case 'inviteLord':
     case 'judge':
