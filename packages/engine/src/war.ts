@@ -9,6 +9,7 @@ import type { Settlement } from './economy'
 import { PLAYER } from './holding'
 import { foodSecurity } from './life'
 import { crownWarlust, temperDeeds } from './lordlife'
+import { crownFoe, opensSecondWar } from './plans'
 import type { Rng } from './rng'
 import { nextFloat, nextInt, rollChance } from './rng'
 import { DAYS_PER_YEAR } from './time'
@@ -349,13 +350,22 @@ export function tickPolitics(
     const [second, afterSecond] = nextInt(afterFirst, 0, kingdomIds.length - 1)
     generator = afterSecond
     const a = kingdomIds[first]
-    const b = kingdomIds[second]
     const [declares, afterDeclare] = rollChance(
       generator,
       DECLARE_CHANCE * (a ? crownWarlust(a) : 1),
     )
     generator = afterDeclare
-    if (declares && kingdomIds.length > 1) {
+    // Врага выбирает не кубик, а корона (этап 72, Ч2): замысел смотрит на
+    // отношения, на дань и на того, кто забрал слишком много. Кубик решает
+    // только, дойдёт ли до объявления. Второй жребий остаётся тем, чем был, —
+    // им корона пользуется, когда выбирать не из чего.
+    const chosen =
+      declares && a ? crownFoe(world, { ...politics, wars, tributes }, current, a) : null
+    const b = chosen ?? kingdomIds[second]
+    // Воюющая корона не открывает второй войны, если не воинственна настолько,
+    // что ей всё равно: до этого этого правила не было, и мелкая корона могла
+    // получить три войны за месяц.
+    if (declares && kingdomIds.length > 1 && a && opensSecondWar({ ...politics, wars }, a)) {
       // На добитого не идут. Пока это было можно, малое королевство доедали
       // вчетвером: Дор-Хазад оставался с одним местом из тринадцати в двух
       // мирах из трёх. Огрызок никому не стоит войны — и соседи не хотят, чтобы

@@ -7,6 +7,7 @@ import { takeLand } from './holding'
 import { ARMY_PACE, legHoursFor } from './journey'
 import { temperDeeds } from './lordlife'
 import type { Party } from './party'
+import { lordPlan, marchesOut, rankTargets, siegeTaste } from './plans'
 import { type Rng, nextFloat, nextInt, rollChance } from './rng'
 import type { Season } from './time'
 import { seasonOf } from './time'
@@ -447,12 +448,23 @@ function chooseGoal(
     .slice(0, 5)
   if (enemies.length === 0) return [{ type: 'muster' }, rng]
 
-  const [index, afterIndex] = nextInt(rng, 0, enemies.length - 1)
-  const target = enemies[index] ?? enemies[0]
-  if (!target) return [{ type: 'muster' }, afterIndex]
-
-  // Большая дружина берёт место осадой, малая — грабит и уходит.
-  const [wantsSiege, afterRoll] = rollChance(afterIndex, bandSize(band) > 24 ? 0.45 : 0.12)
+  // Замысел хозяина (этап 72, Ч1): он решает и то, стоит ли вообще выходить со
+  // двора, и то, какая цель ему по вкусу. Броски остаются те же — кубик выбирает
+  // между двумя лучшими целями и решает, осада или набег, — но вкус к цели
+  // теперь не случайный: воюющий идёт за крупным, идущий за добычей — за плохо
+  // охраняемым, а тот, у кого недород или недостроены стены, не идёт никуда.
+  const plan = lord ? lordPlan(world, politics, settlements, lord) : null
+  const want = plan?.want ?? 'war'
+  const best = rankTargets(settlements, enemies, want).slice(0, 2)
+  const [index, afterIndex] = nextInt(rng, 0, Math.max(0, best.length - 1))
+  const target = best[index] ?? best[0] ?? enemies[0]
+  // Бросок тратится всегда: без этого случайность мира сдвинулась бы от одного
+  // сытого года на чужой земле.
+  const [wantsSiege, afterRoll] = rollChance(
+    afterIndex,
+    (bandSize(band) > 24 ? 0.45 : 0.12) * siegeTaste(want),
+  )
+  if (!target || (plan && !marchesOut(want))) return [{ type: 'muster' }, afterRoll]
   return [{ type: wantsSiege ? 'siege' : 'raid', targetId: target }, afterRoll]
 }
 
@@ -1033,6 +1045,40 @@ export function tickBands(
     })
   }
 
+  // 5. Голова есть и у мятежника (этап 72, Ч1).
+  //
+  // Мятеж кончался только разгромом в поле или отнятой землёй: тот, до кого
+  // не дошли, сидел в мятеже вечно, и к двадцатому году мятежников набиралось
+  // шесть десятков из сотни. Но у мятежника тоже есть свои соображения: когда
+  // на его земле недород и войску нечего есть, он присылает гонца сам. Раз в
+  // сезон и одним броском на всех — лишний бросок на каждого мятежника каждые
+  // сутки сдвинул бы всю случайность мира.
+  const today = day ?? politics.lastDay
+  if (today % GIVE_UP_DAYS === 0) {
+    const hopeless = lords.filter(
+      (lord) =>
+        isRebel(lord) &&
+        lordPlan(world, { ...politics, lords, wars }, places, lord).want === 'hoard',
+    )
+    if (hopeless.length > 0) {
+      const [gives, afterGives] = rollChance(generator, 1 - (1 - GIVE_UP_CHANCE) ** hopeless.length)
+      generator = afterGives
+      if (gives) {
+        const [index, afterIndex] = nextInt(generator, 0, hopeless.length - 1)
+        generator = afterIndex
+        const giver = hopeless[index] ?? hopeless[0]
+        if (giver) {
+          const outcome = submit(lords, wars, places, giver.id, generator)
+          lords = outcome.lords
+          wars = outcome.wars
+          places = outcome.settlements
+          generator = outcome.rng
+          events.push(...outcome.events)
+        }
+      }
+    }
+  }
+
   return {
     bands: finished,
     settlements: places,
@@ -1041,6 +1087,12 @@ export function tickBands(
     events,
   }
 }
+
+/** Раз в сезон отчаявшийся мятежник решает, стоит ли его мятеж голода. */
+const GIVE_UP_DAYS = 30
+
+/** И с какой охотой такой возвращается под руку короны. */
+const GIVE_UP_CHANCE = 0.08
 
 function goalTarget(goal: BandGoal): string | null {
   return goal.type === 'muster' ? null : goal.targetId

@@ -59,7 +59,7 @@ export function TradeScreen({ game }: { game: GameState }) {
   // (этап 39), и здесь она обязана сойтись так же, как в ядре.
   const tradeSkill = tradeSkillAt(game)
   const fair = fairAt(game.world, game.locationId, dayOf(game.time))
-  const merchants = merchantsAt(game.world, game.settlements, game.locationId)
+  const merchants = merchantsAt(game.world, game.settlements, game.locationId, game)
   const weight = carriedWeight(game.character)
   const capacity = partyCapacity(game.character, game.party)
 

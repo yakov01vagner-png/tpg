@@ -88,7 +88,14 @@ describe('густой мир живёт', () => {
     )
     expect(twenty.people).toBeGreaterThan(300_000)
     expect(twenty.famine).toBeGreaterThan(0)
-    expect(twenty.raids).toBeGreaterThan(100)
+    // Считаем дошедшие походы, а не одни набеги. С этапа 72 у войска есть
+    // замысел хозяина, и поход всё чаще кончается взятым местом, а не
+    // разорённым полем: за двадцать лет 292 взятых места против полусотни
+    // набегов. Само число набегов вдобавок вышло хаотичным — от сдвига
+    // случайности на один бросок оно ходит от двух десятков до полутора сотен,
+    // — а число дошедших походов держится.
+    expect(twenty.raids + twenty.taken).toBeGreaterThan(150)
+    expect(twenty.raids).toBeGreaterThan(10)
     expect(twenty.taken).toBeGreaterThan(20)
   })
 

@@ -98,7 +98,7 @@ const COMPANION_TONES: Record<string, TalkTone> = {
  */
 export function speakersAt(state: GameState, locationId: string = state.locationId): Speaker[] {
   const out: Speaker[] = []
-  for (const merchant of merchantsAt(state.world, state.settlements, locationId)) {
+  for (const merchant of merchantsAt(state.world, state.settlements, locationId, state)) {
     out.push({
       id: merchant.id,
       name: merchant.name,
@@ -343,7 +343,7 @@ function factsFor(state: GameState, speaker: Speaker, topic: TopicDef): Facts | 
       }
     }
     case 'trade': {
-      const merchants = merchantsAt(world, state.settlements, state.locationId)
+      const merchants = merchantsAt(world, state.settlements, state.locationId, state)
       return {
         text:
           merchants.length > 0

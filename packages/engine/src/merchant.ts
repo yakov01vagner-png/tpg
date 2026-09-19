@@ -9,6 +9,7 @@ import {
   ORDER_LINES,
   ROWS,
 } from './content/merchants'
+import { MERCHANT_LEAVES } from './content/plans'
 import type { Settlement } from './economy'
 import { buyPrice, priceOf, sellPrice } from './economy'
 import type { GameState } from './state'
@@ -105,6 +106,7 @@ export function merchantsAt(
   world: World,
   settlements: Readonly<Record<string, Settlement>>,
   locationId: string,
+  memory?: Pick<GameState, 'dealings'>,
 ): readonly Merchant[] {
   const rows = rowsAt(world, settlements, locationId)
   if (rows.length === 0) return []
@@ -138,7 +140,21 @@ export function merchantsAt(
         Math.round((MERCHANT_TEMPERS[temper].markup + (((hash >>> 17) % 9) - 4) / 100) * 100) / 100,
     })
   }
-  return out
+  // Обобранный купец не стоит за прилавком с каменным лицом (этап 72, Ч5): он
+  // сворачивает дело и уходит туда, где не обманывают. Без памяти о нём — тот
+  // же ряд, что и был: скелет места купцов не теряет.
+  return memory ? out.filter((one) => !merchantGone(memory, one.id)) : out
+}
+
+/**
+ * Уехал ли он из города.
+ *
+ * Отказ (`−60` в торге) — ещё разговор: он не хочет с тобой дела, но стоит на
+ * своём месте. Уехал — конец разговора: прилавок пуст, и в ряду остаются
+ * другие. Порог нарочно ниже отказа: уехать должно быть трудно.
+ */
+export function merchantGone(memory: Pick<GameState, 'dealings'>, merchantId: string): boolean {
+  return dealingWith(memory, merchantId).standing <= MERCHANT_LEAVES
 }
 
 export function merchantById(
@@ -146,8 +162,11 @@ export function merchantById(
   settlements: Readonly<Record<string, Settlement>>,
   locationId: string,
   merchantId: string,
+  memory?: Pick<GameState, 'dealings'>,
 ): Merchant | null {
-  return merchantsAt(world, settlements, locationId).find((one) => one.id === merchantId) ?? null
+  return (
+    merchantsAt(world, settlements, locationId, memory).find((one) => one.id === merchantId) ?? null
+  )
 }
 
 /** Кто здесь торгует этим товаром. */

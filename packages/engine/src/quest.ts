@@ -2,6 +2,7 @@ import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import { daysToFair, fairOf } from './fair'
 import { foodSecurity } from './life'
+import { lordCall } from './plans'
 import type { GameState } from './state'
 import { lanesFrom } from './world/lanes'
 import { regionOf } from './world/queries'
@@ -28,6 +29,12 @@ export type QuestType =
   | 'orderHeresy'
   | 'orderMarket'
   | 'orderFoe'
+  /**
+   * Зов лорда (этап 72, Ч5): спасённый лорд, собравшийся в поход, звал бы с
+   * собой того, кому обязан. Это не выдумка задания, а его замысел плюс его
+   * память о тебе.
+   */
+  | 'lordCall'
 
 export interface Quest {
   readonly id: string
@@ -166,6 +173,30 @@ export function offersAt(
     }
   }
 
+  // Зов лорда (этап 72, Ч5): у хозяина этого места есть замысел и есть память.
+  // Если он в долгу перед тобой и собрался в поход — он позовёт, и не куда
+  // попало, а туда, куда идёт сам.
+  const owner = state.settlements[locationId]?.owner
+  if (owner && !owner.startsWith('crown:')) {
+    const lord = state.politics.lords.find((one) => one.id === owner)
+    const call = lord ? lordCall(state.world, state.politics, state.settlements, state, lord) : null
+    const id = lord ? `call:${lord.id}` : ''
+    if (lord && call && !taken.has(id)) {
+      offers.push({
+        id,
+        type: 'lordCall',
+        issuerLocationId: locationId,
+        targetLocationId: call.targetId,
+        amount: 0,
+        // Платит он из своего: чем он сильнее, тем больше у него и на что
+        // позвать, и чем заплатить.
+        reward: Math.round(120 + lord.strength * 5),
+        deadlineDay: day + 60,
+        progress: 0,
+      })
+    }
+  }
+
   return offers
 }
 
@@ -186,6 +217,15 @@ export function isComplete(state: GameState, quest: Quest): boolean {
   if (quest.type === 'freight') {
     return state.locationId === quest.targetLocationId && state.ship !== null
   }
+  // Зов лорда исполнен, когда взято то, ради чего он звал: чья земля — видно
+  // по хозяину места, а не по числу боёв.
+  if (quest.type === 'lordCall') {
+    const owner = state.settlements[quest.issuerLocationId]?.owner
+    const lord = owner ? state.politics.lords.find((one) => one.id === owner) : null
+    const now = state.settlements[quest.targetLocationId]?.owner
+    if (!lord || !now) return false
+    return now === lord.id || (lord.kingdomId !== null && now === `crown:${lord.kingdomId}`)
+  }
   return quest.progress >= quest.amount
 }
 
@@ -198,6 +238,7 @@ export function describeQuest(state: GameState, quest: Quest): string {
     return `Открыть рынок в ${target}: ${good}, ${quest.amount} мер`
   }
   if (quest.type === 'orderFoe') return `Убрать чужих у ${target}`
+  if (quest.type === 'lordCall') return `Идти с лордом на ${target}`
   if (quest.type === 'merchantOrder') {
     const good = quest.good ? GOODS[quest.good].label.toLowerCase() : 'товар'
     return `Заказ купца в ${target}: ${good}, ${quest.amount} мер`

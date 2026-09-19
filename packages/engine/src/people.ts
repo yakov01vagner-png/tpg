@@ -11,10 +11,11 @@ import { masterOf } from './craft'
 import { seneschalDef, seneschalOf } from './estate'
 import { healerAt, healerDef } from './heal'
 import { isOwnedByPlayer } from './holding'
-import { lordRecalls, lordSaidOf } from './lordlife'
+import { lordRecalls } from './lordlife'
 import { dealingWith, merchantsAt } from './merchant'
 import { ordersAt } from './order'
 import { jobsAt } from './place'
+import { lordCall, lordPlan, lordWantLabel } from './plans'
 import { attitudeWord, lordRep, placeRep } from './reputation'
 import { caravanMaster, caravanTemperDef, shipsAt, skipperDef, skipperOf } from './road'
 import type { GameState } from './state'
@@ -72,13 +73,17 @@ export function peopleAt(state: GameState, locationId: string = state.locationId
   const lord = lordHere(state, locationId)
   if (lord) {
     const temper = LORD_TEMPERS[lordTemper(lord)]
+    // Чем он занят — это его замысел, а не «лорд»: видно, чего он хочет и
+    // почему (этап 72, Ч1 и Ч6). Зовёт ли он тебя — там же, в его словах (Ч5).
+    const plan = lordPlan(state.world, state.politics, state.settlements, lord)
+    const call = lordCall(state.world, state.politics, state.settlements, state, lord)
     out.push({
       id: lord.id,
       name: `${lord.title} ${lord.name}`,
       kind: 'lord',
-      about: `${temper.label}. ${lordSaidOf(lord)}`,
+      about: `${temper.label}, хочет ${lordWantLabel(plan.want)}. ${plan.why}`,
       attitude: attitudeWord(lordRep(state.reputation, lord.id)),
-      says: lordRecalls(state, lord.id) ?? temper.greets[0] ?? '',
+      says: call?.why ?? lordRecalls(state, lord.id) ?? temper.greets[0] ?? '',
       quarter: 'castle',
     })
     for (const courtier of courtOf(state, lord)) {
@@ -108,7 +113,7 @@ export function peopleAt(state: GameState, locationId: string = state.locationId
     })
   }
 
-  for (const merchant of merchantsAt(state.world, state.settlements, locationId)) {
+  for (const merchant of merchantsAt(state.world, state.settlements, locationId, state)) {
     out.push({
       id: merchant.id,
       name: merchant.name,

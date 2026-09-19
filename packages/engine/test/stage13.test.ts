@@ -19,6 +19,7 @@ import type { GameState } from '../src/state'
 import { SCHEMA_VERSION, createGame } from '../src/state'
 import { generateWorld } from '../src/world/generate'
 import { roadsFrom } from '../src/world/queries'
+import { healWound } from '../src/wounds'
 
 const world = generateWorld(1)
 const capital = world.kingdoms.reEstiz?.capitalId ?? ''
@@ -125,14 +126,24 @@ describe('рана', () => {
   })
 
   it('заживает со временем, с лекарем — вдвое быстрее', () => {
+    // Само правило: за десять суток рана в двадцать дней уходит наполовину, а
+    // с лекарем — вся. Проверяется на самой мере, а не на прогоне: с этапа 64
+    // рана ещё и гноится по броску, и от него зависит, какая именно рана
+    // достанется этому сейву, а не то, как быстро она заживает.
+    expect(healWound({ daysLeft: 20, severity: 0.8 }, 10, 1)?.daysLeft).toBe(10)
+    expect(healWound({ daysLeft: 20, severity: 0.8 }, 10, 2)).toBeNull()
+
     const state = wounded(20, 0.8)
     const alone = wait(state, 10)
-    expect(alone.character.wound?.daysLeft).toBe(10)
+    expect(alone.character.wound).not.toBeNull()
     const healerDef = Object.values(COMPANIONS).find((def) => (def.skills.healing ?? 0) >= 3)
     if (!healerDef) throw new Error('лекаря нет среди спутников')
     const withHealer: GameState = { ...state, companions: [hireCompanion(healerDef)] }
     const healed = wait(withHealer, 10)
-    expect(healed.character.wound).toBeNull()
+    // С лекарем рана и заживает быстрее, и гноится реже: в сумме — меньше дней
+    // в постели, чем без него.
+    const left = (one: GameState) => one.character.wound?.daysLeft ?? 0
+    expect(left(healed)).toBeLessThan(left(alone))
   })
 })
 

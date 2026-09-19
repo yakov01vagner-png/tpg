@@ -368,6 +368,7 @@ import {
 import { isAvailableAt } from './place'
 import type { Plague, PlagueEvent } from './plague'
 import { plagueAt, tickPlague } from './plague'
+import { aimEra, orderAim, orderAimLabel, tickTrade } from './plans'
 import { PROGRESSION, applyCharacterXp, applySkillXp } from './progression'
 import {
   activityOf,
@@ -7299,7 +7300,7 @@ function pilgrimage(state: GameState): CommandResult {
 function haggleWith(state: GameState, merchantId: string, push: HagglePush): CommandResult {
   const settlement = state.settlements[state.locationId]
   const merchant = settlement
-    ? merchantById(state.world, state.settlements, state.locationId, merchantId)
+    ? merchantById(state.world, state.settlements, state.locationId, merchantId, state)
     : null
   if (!merchant || !settlement) return fail('unavailableHere', 'Здесь такого купца нет.')
   const day = dayOf(state.time)
@@ -7339,7 +7340,7 @@ function buyFrom(
   if (problem) return problem
   const settlement = state.settlements[state.locationId]
   if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
-  const merchant = merchantById(state.world, state.settlements, state.locationId, merchantId)
+  const merchant = merchantById(state.world, state.settlements, state.locationId, merchantId, state)
   if (!merchant) return fail('unavailableHere', 'Здесь такого купца нет.')
   if (!merchant.goods.includes(good)) {
     return fail('noGoods', `${merchant.name} этим не торгует: он в ${rowWhere(merchant.rowId)}.`)
@@ -7396,7 +7397,7 @@ function sellTo(state: GameState, merchantId: string, good: GoodId, amount: numb
   if (problem) return problem
   const settlement = state.settlements[state.locationId]
   if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
-  const merchant = merchantById(state.world, state.settlements, state.locationId, merchantId)
+  const merchant = merchantById(state.world, state.settlements, state.locationId, merchantId, state)
   if (!merchant) return fail('unavailableHere', 'Здесь такого купца нет.')
   if (!merchant.goods.includes(good)) {
     return fail('noGoods', `${merchant.name} этим не торгует: он в ${rowWhere(merchant.rowId)}.`)
@@ -7507,7 +7508,7 @@ function rememberDeal(
 function failedOrder(draft: Draft, merchantId: string): void {
   rememberDeal(draft, merchantId, { standing: -35 })
   const locationId = merchantId.split(':')[1] ?? ''
-  for (const other of merchantsAt(draft.world, draft.settlements, locationId)) {
+  for (const other of merchantsAt(draft.world, draft.settlements, locationId, draft)) {
     if (other.id === merchantId) continue
     rememberDeal(draft, other.id, { standing: -12 })
   }
@@ -7523,7 +7524,7 @@ function failedOrder(draft: Draft, merchantId: string): void {
 function takeOrder(state: GameState, merchantId: string): CommandResult {
   const settlement = state.settlements[state.locationId]
   if (!settlement) return fail('invalid', 'Непонятно, где находится герой.')
-  const merchant = merchantById(state.world, state.settlements, state.locationId, merchantId)
+  const merchant = merchantById(state.world, state.settlements, state.locationId, merchantId, state)
   if (!merchant) return fail('unavailableHere', 'Здесь такого купца нет.')
   const day = dayOf(state.time)
   const order = orderFrom(state.world, settlement, merchant, day)
@@ -7570,7 +7571,7 @@ function takeOrder(state: GameState, merchantId: string): CommandResult {
  * только заполненная устами, а не ногами.
  */
 function askPrices(state: GameState, merchantId: string): CommandResult {
-  const merchant = merchantById(state.world, state.settlements, state.locationId, merchantId)
+  const merchant = merchantById(state.world, state.settlements, state.locationId, merchantId, state)
   if (!merchant) return fail('unavailableHere', 'Здесь такого купца нет.')
   const dealing = dealingWith(state, merchantId)
   if (dealing.standing < 0) {
@@ -8427,6 +8428,37 @@ function close(draft: Draft): CommandResult {
       // Позванная погода и ветер архимага правят год там, где их звали (этап
       // 60, А1 и А3). Считается на жатве, вместе со всем прочим.
       blessedHarvest(draft)
+    }
+
+    // Обозы купцов (этап 72, Ч3): товар в мире возят люди, и цены сходятся
+    // оттого, что купец повёз, а не оттого, что так написано в таблице.
+    const carts = tickTrade(
+      draft.base.world,
+      draft.settlements,
+      dayOf(draft.base.time),
+      dayOf(draft.time),
+    )
+    draft.settlements = carts.settlements
+    for (const move of carts.moves) {
+      if (move.fromId !== draft.locationId && move.toId !== draft.locationId) continue
+      const where = draft.base.world.locations[move.toId]?.name ?? 'соседний торг'
+      notice(
+        draft,
+        move.fromId === draft.locationId
+          ? `Обоз ${move.name} ушёл в ${where}: ${move.load} мер.`
+          : `Обоз ${move.name} пришёл с товаром: ${move.load} мер.`,
+        'trade',
+      )
+    }
+
+    // Замыслы орденов держатся пять лет (этап 72, Ч4): смена — событие мира, и
+    // о нём слышно там, где у ордена дом.
+    const era = aimEra(dayOf(draft.time))
+    if (era !== aimEra(dayOf(draft.base.time))) {
+      for (const order of ordersAt(draft.base.world, draft.locationId)) {
+        const aim = orderAim(draft.base.world, order, dayOf(draft.time))
+        notice(draft, `${order.name}: ${orderAimLabel(aim.want)}. ${aim.why}`, 'world')
+      }
     }
 
     // Договоры корон: отношение, союзы, дань — и общий страх перед тем, кто

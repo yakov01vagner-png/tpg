@@ -1,4 +1,5 @@
 import type { Settlement } from './economy'
+import { crownPlan } from './plans'
 import { type Rng, nextInt, rollChance } from './rng'
 import type { Alliance, Politics, War } from './war'
 import { allied, atWar, pairOf } from './war'
@@ -118,14 +119,23 @@ export function tickDiplomacy(
     const [second, afterSecond] = nextInt(afterFirst, 0, kingdoms.length - 1)
     generator = afterSecond
     const a = kingdoms[first] as string
-    const b = kingdoms[second] as string
+    // С кем именно — решает замысел короны (этап 72, Ч2): она ищет союза против
+    // того, кто забрал слишком много, и говорит о наследниках с тем, с кем давно
+    // в ладу. Жребий остаётся на случай, когда замысел союза не ищет.
+    const plan = settlements
+      ? crownPlan(world, { ...politics, relations }, settlements, a, giant)
+      : null
+    const wanted = plan && (plan.want === 'ally' || plan.want === 'marry') ? plan.targetId : null
+    const b = wanted ?? (kingdoms[second] as string)
     if (
       a !== b &&
       !allied(politics, a, b) &&
       !atWar(politics, a, b) &&
       (relations[pairOf(a, b)] ?? 0) > ALLIANCE_FLOOR_TO_MAKE
     ) {
-      const alliance: Alliance = { a, b, since: day, byMarriage: false }
+      // Брак — это союз, который переживает охлаждение: так корона и смотрит
+      // дальше одного года.
+      const alliance: Alliance = { a, b, since: day, byMarriage: plan?.want === 'marry' }
       alliances = [...alliances, alliance]
       events.push({ type: 'allianceMade', alliance })
     }

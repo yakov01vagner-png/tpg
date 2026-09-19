@@ -10,6 +10,7 @@ import {
   lordById,
   rankLabel,
   warsOf,
+  worldAims,
 } from '@tpg/engine'
 import { useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
@@ -26,6 +27,9 @@ import { Empty, Section } from '../ui/parts'
 export function WorldScreen({ game }: { game: GameState }) {
   const [openKingdom, setOpenKingdom] = useState<string | null>(null)
   const mine = holdingsOf(game.settlements, PLAYER)
+  // Замыслы мира (этап 72, Ч6): сводка показывала, что случилось; здесь видно,
+  // чего хотят те, кто рядом, и чем они это объясняют.
+  const aims = worldAims(game)
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -35,6 +39,18 @@ export function WorldScreen({ game }: { game: GameState }) {
           <Text style={styles.dim}>Твоё имя на карте. Слава: {game.renown}</Text>
         </View>
       ) : null}
+
+      <Section title="Чего они хотят">
+        {aims.length === 0 ? <Empty text="Отсюда чужих замыслов не видно." /> : null}
+        {aims.map((aim) => (
+          <View key={aim.id} style={styles.row}>
+            <Text style={styles.rowTitle}>
+              {aim.who} — {aim.wants}
+            </Text>
+            <Text style={styles.dim}>{aim.why}</Text>
+          </View>
+        ))}
+      </Section>
 
       <Section title="Войны">
         {game.politics.wars.length === 0 ? <Empty text="Мир. Пока что." /> : null}
