@@ -2,6 +2,8 @@ import {
   ARTIFACTS,
   BUILDINGS,
   CAMP_HOURS,
+  CAMP_MANNERS,
+  CAMP_MANNER_DEFS,
   CLIMATE_LABELS,
   CLOTH_LABELS,
   type Command,
@@ -9,6 +11,7 @@ import {
   GOODS,
   type GameState,
   HONE_HOURS,
+  HUNT_HOURS,
   INTERDICT_DAYS,
   PLACE_LABELS,
   PRIEST_TEMPERS,
@@ -26,6 +29,8 @@ import {
   type Season,
   type SpellWhere,
   TERRAIN_LABELS,
+  TRACK_HOURS,
+  TRACK_SKILL,
   WEATHER_LABELS,
   addressOf,
   artifactDef,
@@ -44,6 +49,8 @@ import {
   crewOf,
   dayOf,
   daysToFair,
+  denizenDef,
+  denizenOf,
   describeQuest,
   errandsAt,
   examsAt,
@@ -56,7 +63,12 @@ import {
   foodSecurity,
   fordShut,
   formatDuration,
+  gameHere,
+  hermitGiftDef,
+  hermitOf,
   hours,
+  huntChance,
+  huntDef,
   iceBound,
   interdictedAt,
   isHolySite,
@@ -66,6 +78,7 @@ import {
   journeyLeft,
   kingdomOf,
   knownShare,
+  lairStrength,
   landHolderOf,
   lanesFrom,
   lordById,
@@ -410,14 +423,18 @@ export function HomeScreen({ game }: { game: GameState }) {
 
       {settlement ? null : (
         <Section title="Что здесь делают">
-          <Card
-            glyph={<Icon name="rest" size={20} color={palette.info} />}
-            title="Встать лагерем"
-            description="Костёр, котелок и очередь караулить. Под небом отдыхаешь хуже, чем под крышей, и не знаешь, кто выйдет на огонь."
-            meta={`${CAMP_HOURS} ч`}
-            reason={reasonFor({ type: 'camp' })}
-            onPress={() => dispatch({ type: 'camp' })}
-          />
+          {CAMP_MANNERS.map((manner) => (
+            <Card
+              key={manner}
+              glyph={<Icon name="rest" size={20} color={palette.info} />}
+              title={`Ночёвка: ${CAMP_MANNER_DEFS[manner].label}`}
+              description={CAMP_MANNER_DEFS[manner].about}
+              meta={`${CAMP_HOURS} ч`}
+              reason={reasonFor({ type: 'camp', manner })}
+              onPress={() => dispatch({ type: 'camp', manner })}
+            />
+          ))}
+          <Wilds game={game} />
           {site && SITES[site].find ? (
             <Card
               glyph={<Icon name="journal" size={20} color={palette.gold} />}
@@ -1588,6 +1605,85 @@ function Quay({
           })}
         </Section>
       ) : null}
+    </>
+  )
+}
+
+/**
+ * Глушь изнутри (этап 63).
+ *
+ * Место без жителей не пусто: в нём кто-то живёт — логово, схрон, отшельник, — и
+ * через год всё иначе. Плюс охота и следы на дороге: что в этой земле есть и кто
+ * по ней прошёл.
+ */
+function Wilds({ game }: { game: GameState }) {
+  const day = dayOf(game.time)
+  const who = denizenOf(game.world, game, game.locationId, day)
+  const game_ = gameHere(game.world, game.locationId, day)
+  const survival = skillLevel(game.character, 'survival')
+  const terrain = game.world.locations[game.locationId]?.terrain
+  const hunting = terrain ? huntDef(terrain) : null
+  const reasonFor = (command: Command): string | undefined => {
+    const check = canApply(game, command)
+    return check.ok ? undefined : check.message
+  }
+  return (
+    <>
+      {who !== 'none' ? (
+        <Panel tone={who === 'lair' ? 'danger' : 'gold'}>
+          <Body>{denizenDef(who).label}</Body>
+          <Dim>{denizenDef(who).about}</Dim>
+        </Panel>
+      ) : null}
+      {who === 'lair' ? (
+        <Card
+          title="Выкурить логово"
+          description="Кто-то живёт здесь и считает эту землю своей. Полтора года после этого будет тихо."
+          meta={`сила ${lairStrength(game.world, game.locationId)}`}
+          reason={reasonFor({ type: 'clearLair' })}
+          onPress={() => dispatch({ type: 'clearLair' })}
+          tone="danger"
+        />
+      ) : null}
+      {who === 'cache' ? (
+        <Card
+          title="Вскрыть схрон"
+          description="Разбойничья доля. Хозяева хватятся, но не сразу."
+          meta="2 ч"
+          reason={reasonFor({ type: 'lootCache' })}
+          onPress={() => dispatch({ type: 'lootCache' })}
+          tone="gold"
+        />
+      ) : null}
+      {who === 'hermit' ? (
+        <Card
+          title={`Дойти до ${hermitOf(game.locationId, day).name}а`}
+          description="Он живёт один и потому знает эту землю лучше всех. Второй раз его здесь не найти."
+          meta={hermitGiftDef(hermitOf(game.locationId, day).gift).label}
+          reason={reasonFor({ type: 'visitHermit' })}
+          onPress={() => dispatch({ type: 'visitHermit' })}
+          tone="gold"
+        />
+      ) : null}
+      {hunting ? (
+        <Card
+          glyph={<Icon name="archery" size={20} color={palette.good} />}
+          title="Охота"
+          description={hunting.about}
+          meta={`${HUNT_HOURS} ч · удача ${Math.round(huntChance(game_, survival) * 100)}%`}
+          reason={reasonFor({ type: 'hunt' })}
+          onPress={() => dispatch({ type: 'hunt' })}
+          tone="good"
+        />
+      ) : null}
+      <Card
+        glyph={<Icon name="survival" size={20} color={palette.dim} />}
+        title="Читать следы"
+        description="По дороге видно, кто прошёл: войско, обоз, беглецы. Читает следы выживание."
+        meta={`${TRACK_HOURS} ч · нужно ${TRACK_SKILL}`}
+        reason={reasonFor({ type: 'readTracks' })}
+        onPress={() => dispatch({ type: 'readTracks' })}
+      />
     </>
   )
 }

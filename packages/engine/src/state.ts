@@ -41,6 +41,7 @@ import type { GameTime } from './time'
 import { WORLD_START } from './time'
 import type { Politics } from './war'
 import { createPolitics } from './war'
+import type { WildMemory } from './wild'
 import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
@@ -223,6 +224,12 @@ export interface GameState {
   readonly pleas?: Readonly<Record<string, { readonly askId: string; readonly askedDay: number }>>
   readonly works?: Readonly<Record<string, readonly BuildingId[]>>
   readonly visits?: Readonly<Record<string, number>>
+  /**
+   * Что ты сделал с глушью (этап 63): какое логово вывел, какой схрон обобрал,
+   * с каким отшельником говорил. Сама глушь выводится из места и времени — тут
+   * лежит только память. Необязательно: сейвы до 0.6 её не знают.
+   */
+  readonly wilds?: Readonly<Record<string, WildMemory>>
   /** Своё владение, если провозглашено. */
   readonly realm: { readonly name: string } | null
   /** Взятые поручения. */
@@ -285,6 +292,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     pleas: {},
     works: {},
     visits: {},
+    wilds: {},
     spellcraft: {},
     weather: [],
     artifacts: [],

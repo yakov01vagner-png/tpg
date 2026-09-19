@@ -126,6 +126,19 @@ import { SPELLS_BY_ID } from './content/spells'
 import { TONES, TOPICS_BY_ID } from './content/talk'
 import type { TroopId } from './content/troops'
 import { TROOPS, TROOP_FOOD_PER_DAY } from './content/troops'
+import {
+  CACHE_GOODS,
+  CACHE_MONEY,
+  CAMP_MANNER_DEFS,
+  type CampManner,
+  FIRE_BOND,
+  FIRE_MORALE,
+  HUNT_FATIGUE,
+  HUNT_HOURS,
+  TRACK_DEFS,
+  TRACK_HOURS,
+  TRACK_SKILL,
+} from './content/wild'
 import type { CourtChoice } from './court'
 import { courtCase, vassalsOf } from './court'
 import type { CechMembership } from './craft'
@@ -415,6 +428,20 @@ import { allied, pairOf } from './war'
 import type { Politics } from './war'
 import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
+import type { WildMemory } from './wild'
+import {
+  denizenOf,
+  gameHere,
+  hermitGiftDef,
+  hermitOf,
+  huntChance,
+  huntHurtChance,
+  huntSpoils,
+  huntYield,
+  lairStrength,
+  tracksAt,
+  wildAt,
+} from './wild'
 import { iceBound, isHarbour, lanesFrom } from './world/lanes'
 import { kingdomOf, regionOf, roadsFrom } from './world/queries'
 import { fordShut } from './world/rivers'
@@ -510,7 +537,12 @@ export type Command =
   | { readonly type: 'recruitCompanion'; readonly companionId: string }
   | { readonly type: 'dismissCompanion'; readonly companionId: string }
   /** Встать лагерем там, где нет крыши. */
-  | { readonly type: 'camp' }
+  | { readonly type: 'camp'; readonly manner?: CampManner }
+  | { readonly type: 'hunt' }
+  | { readonly type: 'clearLair' }
+  | { readonly type: 'lootCache' }
+  | { readonly type: 'visitHermit' }
+  | { readonly type: 'readTracks' }
   /** Осмотреться в глуши: что здесь лежит, кроме земли. */
   | { readonly type: 'search' }
   /** Взяться за поручение с лицом. */
@@ -829,7 +861,17 @@ export function applyCommand(
     case 'recruitCompanion':
       return recruitCompanion(state, command.companionId)
     case 'camp':
-      return camp(state)
+      return camp(state, command.manner ?? 'sleep')
+    case 'hunt':
+      return hunt(state)
+    case 'clearLair':
+      return clearLair(state)
+    case 'lootCache':
+      return lootCache(state)
+    case 'visitHermit':
+      return visitHermit(state)
+    case 'readTracks':
+      return readTracks(state)
     case 'search':
       return search(state)
     case 'startChain':
@@ -4826,7 +4868,7 @@ export const CAMP_HOURS = 8
  * крыша, поэтому дорога длиннее одного дня не существовала. Лагерь — это
  * ночёвка на земле: отдыхаешь хуже, чем в доме, и не знаешь, кто выйдет к огню.
  */
-function camp(state: GameState): CommandResult {
+function camp(state: GameState, manner: CampManner = 'sleep'): CommandResult {
   const here = state.world.locations[state.locationId]
   if (!here) return fail('invalid', 'Непонятно, где находится герой.')
   // В пути крыши нет по определению: заночевать можно прямо на дороге, и это
@@ -4844,23 +4886,280 @@ function camp(state: GameState): CommandResult {
   // отдыхают, а пережидают. Выживание здесь не украшение: оно решает, встанешь
   // ты утром отдохнувшим или отмороженным.
   const winter = seasonOf(dayOf(state.time)) === 'winter'
+  // Ночь в поле не одинакова (этап 63, Ш3): можно свалиться и спать, можно
+  // выставить дозор, можно сидеть у огня и говорить. У каждого своя цена.
+  const how = CAMP_MANNER_DEFS[manner]
   notice(
     draft,
     winter
-      ? 'Ночёвка в мороз: костёр, лапник и очередь не дать огню погаснуть.'
+      ? `Ночёвка в мороз: костёр, лапник и ${how.label}.`
       : state.journey
-        ? 'Ночёвка у дороги: костёр и очередь караулить.'
-        : 'Костёр, котелок и очередь караулить.',
+        ? `Ночёвка у дороги: ${how.label}.`
+        : `Костёр, котелок и ${how.label}.`,
   )
   advance(draft, hours(CAMP_HOURS))
   // Под небом отдыхают хуже, чем под крышей: три четверти от сна в доме. В
   // мороз — вдвое хуже того.
-  addFatigue(draft, -Math.round(SLEEP_RECOVERY_PER_HOUR * CAMP_HOURS * (winter ? 0.4 : 0.75)))
+  addFatigue(
+    draft,
+    -Math.round(SLEEP_RECOVERY_PER_HOUR * CAMP_HOURS * (winter ? 0.4 : 0.75) * how.rest),
+  )
   practice(draft, 'survival', winter ? 30 : 18)
   if (winter) frostbite(draft)
+  if (manner === 'talk') {
+    // Разговоры у огня: те, каких днём не бывает. Отряд идёт дружнее, спутники
+    // говорят о своём.
+    draft.party = { ...draft.party, morale: Math.min(100, draft.party.morale + FIRE_MORALE) }
+    draft.companions = draft.companions.map((one) =>
+      one.captive ? one : { ...one, mood: Math.min(100, one.mood + FIRE_BOND) },
+    )
+    notice(draft, how.about, 'people')
+    campfireTalk(draft)
+  }
   // Ночь в глуши — это ещё и ночь в глуши. В пути опасность берётся у той
-  // земли, к которой идёшь: она и лежит вокруг костра.
-  ambush(draft, state.journey ? state.journey.toId : state.locationId)
+  // земли, к которой идёшь: она и лежит вокруг костра. Дозор эту опасность
+  // вчетверо уменьшает — за то и не спят.
+  if (how.risk >= 1) {
+    ambush(draft, state.journey ? state.journey.toId : state.locationId)
+  } else {
+    const [unlucky, afterRoll] = rollChance(draft.rng, how.risk)
+    draft.rng = afterRoll
+    if (unlucky) ambush(draft, state.journey ? state.journey.toId : state.locationId)
+    else if (manner === 'watch') notice(draft, 'Ночь прошла тихо: к огню никто не подошёл.')
+  }
+  return close(draft)
+}
+
+/** Кто-то говорит у костра: тот из спутников, кому есть что сказать. */
+function campfireTalk(draft: Draft): void {
+  const present = following(draft.companions)
+  if (present.length === 0) return
+  const [pick, afterPick] = nextInt(draft.rng, 0, present.length - 1)
+  draft.rng = afterPick
+  const who = present[pick]
+  if (!who) return
+  // У костра говорят то же, что в дороге: свои слова на каждый нрав уже есть
+  // (этап 54), и ночь у огня — самое их место.
+  const lines = TEMPER_LINES[who.temper].onRoad
+  const line = pickLine(draft, lines)
+  if (line) notice(draft, `${who.name}: «${line}»`, 'people')
+}
+
+/**
+ * Охота (этап 63, Ш2).
+ *
+ * Лес, степь и горы кормят по-разному, и зима кормит хуже лета. Дело со
+ * временем, добычей и риском: зверь, который кормит, бывает и тем, кто калечит.
+ */
+function hunt(state: GameState): CommandResult {
+  const here = state.world.locations[state.locationId]
+  if (!here) return fail('invalid', 'Непонятно, где находится герой.')
+  if (state.settlements[state.locationId] && !state.journey) {
+    return fail('unavailableHere', 'В селе не охотятся: тут всё уже съедено.')
+  }
+  const day = dayOf(state.time)
+  const game = gameHere(state.world, state.locationId, day)
+  if (game <= 0) return fail('unavailableHere', 'Здесь не на кого охотиться.')
+  const blocked = checkFatigue(state.character, HUNT_FATIGUE)
+  if (blocked) return blocked
+
+  const draft = open(state)
+  const survival = skillLevel(state.character, 'survival')
+  advance(draft, hours(HUNT_HOURS))
+  addFatigue(draft, HUNT_FATIGUE)
+  practice(draft, 'survival', 16)
+  practice(draft, 'archery', 8)
+  const [lucky, afterRoll] = rollChance(draft.rng, huntChance(game, survival))
+  draft.rng = afterRoll
+  if (!lucky) {
+    notice(draft, 'Полдня по следу — и ничего. Так бывает чаще, чем в песнях.')
+    return close(draft)
+  }
+  const spoils = huntSpoils(draft.base.world, state.locationId)
+  const [pick, afterPick] = nextInt(draft.rng, 0, Math.max(0, spoils.length - 1))
+  draft.rng = afterPick
+  const good = spoils[pick] ?? 'fish'
+  const amount = huntYield(game, survival)
+  addGoods(draft, good, amount)
+  notice(draft, `Добыто: ${GOODS[good].label.toLowerCase()} — ${amount}.`, 'money')
+  // Зверь бывает и тем, кто отвечает.
+  const [hurt, afterHurt] = rollChance(draft.rng, huntHurtChance(survival))
+  draft.rng = afterHurt
+  if (hurt) {
+    patch(draft, { wound: { daysLeft: 3, severity: 0.2 } })
+    notice(draft, 'Зверь достал раньше, чем ты его. Три дня будешь помнить.', 'war')
+  }
+  return close(draft)
+}
+
+/**
+ * Вывести логово (этап 63, Ш1 и Ш4).
+ *
+ * В глуши кто-то живёт и считает эту землю своей. Выведенное логово стоит
+ * пустым полтора года — а потом там снова кто-то есть.
+ */
+function clearLair(state: GameState): CommandResult {
+  const day = dayOf(state.time)
+  if (denizenOf(state.world, state, state.locationId, day) !== 'lair') {
+    return fail('unavailableHere', 'Логова здесь нет.')
+  }
+  if (partySize(state.party) < 2 && skillLevel(state.character, 'heavyWeapons') < 8) {
+    return fail('requirements', 'В логово в одиночку не лезут.')
+  }
+
+  const draft = open(state)
+  advance(draft, hours(3))
+  addFatigue(draft, 14)
+  const strength = lairStrength(draft.base.world, state.locationId)
+  const [band, afterBand] = banditBand(1, strength * 30, draft.rng)
+  draft.rng = afterBand
+  draft.battle = startBattle(
+    draft.party,
+    { ...band, name: 'Логово' },
+    draft.base.world.locations[state.locationId]?.terrain ?? 'forest',
+    {
+      foeId: 'bandits',
+      ground: groundFor(draft.base.world.locations[state.locationId]?.terrain ?? 'forest', 'road'),
+      veterans: veteransOf(draft.party),
+    },
+  )
+  draft.wilds = {
+    ...draft.wilds,
+    [state.locationId]: { ...wildAt(draft, state.locationId), clearedDay: day },
+  }
+  notice(draft, 'Из темноты вышли те, кто здесь живёт.', 'war')
+  return close(draft)
+}
+
+/**
+ * Обобрать схрон (этап 63, Ш1 и Ш4).
+ *
+ * Разбойничья доля, спрятанная не по-крестьянски. Взятый схрон пуст почти год —
+ * а потом его наполняют заново: те, кто прятал, никуда не делись.
+ */
+function lootCache(state: GameState): CommandResult {
+  const day = dayOf(state.time)
+  if (denizenOf(state.world, state, state.locationId, day) !== 'cache') {
+    return fail('unavailableHere', 'Схрона здесь нет.')
+  }
+  const blocked = checkFatigue(state.character, 10)
+  if (blocked) return blocked
+
+  const draft = open(state)
+  advance(draft, hours(2))
+  addFatigue(draft, 10)
+  practice(draft, 'sleight', 12)
+  const [money, afterMoney] = nextInt(draft.rng, CACHE_MONEY[0], CACHE_MONEY[1])
+  draft.rng = afterMoney
+  addMoney(draft, money)
+  const [pick, afterPick] = nextInt(draft.rng, 0, CACHE_GOODS.length - 1)
+  draft.rng = afterPick
+  const good = CACHE_GOODS[pick] ?? 'cloth'
+  const [amount, afterAmount] = nextInt(draft.rng, 2, 8)
+  draft.rng = afterAmount
+  addGoods(draft, good, amount)
+  draft.wilds = {
+    ...draft.wilds,
+    [state.locationId]: { ...wildAt(draft, state.locationId), lootedDay: day },
+  }
+  notice(
+    draft,
+    `В схроне: ${money} монет и ${GOODS[good].label.toLowerCase()} — ${amount}. Хозяева хватятся.`,
+    'money',
+  )
+  return close(draft)
+}
+
+/**
+ * Дойти до отшельника (этап 63, Ш1).
+ *
+ * Дым без деревни значит, что кто-то живёт один — и знает эту землю лучше всех.
+ * Он даёт то, что у него есть: травы, знание, тропу или слово. Второй раз его
+ * здесь не найти: он уходит дальше в глушь.
+ */
+function visitHermit(state: GameState): CommandResult {
+  const day = dayOf(state.time)
+  if (denizenOf(state.world, state, state.locationId, day) !== 'hermit') {
+    return fail('unavailableHere', 'Здесь никто не живёт.')
+  }
+
+  const draft = open(state)
+  const hermit = hermitOf(state.locationId, day)
+  const gift = hermitGiftDef(hermit.gift)
+  advance(draft, hours(3))
+  notice(draft, `${hermit.name}: «${gift.says}»`, 'people')
+  if (hermit.gift === 'healing') {
+    const wound = draft.character.wound
+    if (wound) {
+      const left = wound.daysLeft - 4
+      patch(draft, { wound: left > 0 ? { ...wound, daysLeft: left } : null })
+      notice(draft, 'Он перевязал по-своему, и стало легче.')
+    }
+    addGoods(draft, 'herbs', 4)
+    notice(draft, 'На дорогу дал трав.')
+  } else if (hermit.gift === 'lore') {
+    practice(draft, 'scholarship', 40)
+    practice(draft, 'survival', 25)
+    notice(draft, 'Он говорил до темноты. Половину ты понял.')
+  } else if (hermit.gift === 'road') {
+    // Тропа: он показывает округу — то, чего не видно с дороги.
+    see(draft, state.locationId)
+    if (draft.knowledge) {
+      const province = draft.base.world.locations[state.locationId]?.provinceId
+      if (province) draft.knowledge = reveal(draft.knowledge, [province])
+    }
+    notice(draft, 'Он начертил на земле то, чего нет на картах.', 'world')
+  } else {
+    draft.party = { ...draft.party, morale: Math.min(100, draft.party.morale + 10) }
+    draft.piety = Math.max(-100, Math.min(100, draft.piety + 4))
+    notice(draft, 'Слово его простое, а идти после него легче.')
+  }
+  draft.wilds = {
+    ...draft.wilds,
+    [state.locationId]: { ...wildAt(draft, state.locationId), metDay: day },
+  }
+  return close(draft)
+}
+
+/**
+ * Читать следы (этап 63, Ш5).
+ *
+ * По дороге видно, кто прошёл. Следы не выдумываются: их оставляют те, кто и
+ * правда ходил рядом, — потому по ним и можно судить, куда не ходить.
+ */
+function readTracks(state: GameState): CommandResult {
+  const survival = skillLevel(state.character, 'survival')
+  if (survival < TRACK_SKILL) {
+    return fail('requirements', `Следы читают с выживания ${TRACK_SKILL}, у тебя ${survival}.`)
+  }
+  const where = state.journey ? state.journey.toId : state.locationId
+  if (state.settlements[where] && !state.journey) {
+    return fail('unavailableHere', 'На улице следов не читают: тут ходят все.')
+  }
+
+  const draft = open(state)
+  advance(draft, hours(TRACK_HOURS))
+  addFatigue(draft, 6)
+  practice(draft, 'survival', 14)
+  const kind = tracksAt(draft.base.world, draft.bands, draft.base, where, dayOf(state.time))
+  const def = TRACK_DEFS[kind]
+  notice(draft, `Следы: ${def.label}. ${def.about}`, 'world')
+  if (kind === 'host') {
+    // Кто прошёл — видно и на карте: дружина рядом больше не сюрприз.
+    for (const band of draft.bands) {
+      const at = draft.base.world.locations[band.locationId]
+      const here = draft.base.world.locations[where]
+      if (!at || !here) continue
+      if (Math.hypot(at.x - here.x, at.y - here.y) > 90) continue
+      const lord = lordById(draft.politics, band.lordId)
+      notice(
+        draft,
+        `Прошли: ${lord ? `${lord.title} ${lord.name}` : 'чья-то дружина'}, ${bandSize(band)} человек.`,
+        'war',
+      )
+      break
+    }
+  }
   return close(draft)
 }
 
@@ -7041,6 +7340,7 @@ interface Draft {
   pleas: Readonly<Record<string, { askId: string; askedDay: number }>>
   works: Readonly<Record<string, readonly BuildingId[]>>
   visits: Readonly<Record<string, number>>
+  wilds: Readonly<Record<string, WildMemory>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
   artifacts: readonly Artifact[]
@@ -7101,6 +7401,7 @@ function open(state: GameState): Draft {
     pleas: state.pleas ?? {},
     works: state.works ?? {},
     visits: state.visits ?? {},
+    wilds: state.wilds ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
     artifacts: state.artifacts ?? [],
@@ -7403,6 +7704,7 @@ function close(draft: Draft): CommandResult {
     pleas: draft.pleas,
     works: draft.works,
     visits: draft.visits,
+    wilds: draft.wilds,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
     artifacts: draft.artifacts,
