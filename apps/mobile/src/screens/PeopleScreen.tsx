@@ -7,6 +7,7 @@ import {
   LORD_TEMPERS,
   PLAYER,
   TEMPERS,
+  TONES,
   TOURNEY_FEE,
   TROOPS,
   TROOP_IDS,
@@ -31,14 +32,30 @@ import {
   partySize,
   partyStrength,
   receptionFor,
+  speakersAt,
+  talkedTo,
+  topicsFor,
   troopCount,
 } from '@tpg/engine'
+import { useState } from 'react'
 import { ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Icon } from '../art/icons'
 import { COMPANION_FACES, Portrait } from '../art/portrait'
 import { dispatch } from '../game/store'
 import { palette, spacing } from '../theme'
-import { Badge, Button, Card, Dim, Empty, Panel, Row, Section, Stat, Stats } from '../ui/parts'
+import {
+  Badge,
+  Button,
+  Card,
+  Chip,
+  Dim,
+  Empty,
+  Panel,
+  Row,
+  Section,
+  Stat,
+  Stats,
+} from '../ui/parts'
 
 /**
  * Люди: кого ведёшь и кто идёт с тобой.
@@ -139,6 +156,8 @@ export function PeopleScreen({ game }: { game: GameState }) {
           })}
         </Section>
       ) : null}
+
+      <Talk game={game} />
 
       <CastleCourt game={game} />
 
@@ -298,6 +317,7 @@ export function moraleWord(morale: number): string {
 }
 
 const styles = StyleSheet.create({
+  topics: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginBottom: spacing.sm },
   faces: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.sm },
   faceCell: { width: 72, alignItems: 'center', gap: 2 },
   faceName: { color: palette.text, fontSize: 12 },
@@ -392,4 +412,47 @@ function CastleCourt({ game }: { game: GameState }) {
 function reasonOf(game: GameState, command: Command): string | undefined {
   const check = canApply(game, command)
   return check.ok ? undefined : check.message
+}
+
+/**
+ * Разговор (этап 53): с кем здесь можно говорить и о чём. Тема — это вопрос,
+ * а не реплика; ответ приходит в летопись словами собеседника.
+ */
+function Talk({ game }: { game: GameState }) {
+  const [open, setOpen] = useState<string | null>(null)
+  const speakers = speakersAt(game)
+  if (speakers.length === 0) return null
+  return (
+    <Section title="Поговорить" aside={`${speakers.length}`}>
+      {speakers.map((speaker) => {
+        const topics = topicsFor(game, speaker)
+        const patience = TONES[speaker.tone].patience - talkedTo(game, speaker.id)
+        return (
+          <View key={speaker.id}>
+            <Card
+              glyph={<Portrait seed={speaker.id} size={36} age={40} />}
+              title={speaker.name}
+              description={`${speaker.about} · говорит ${TONES[speaker.tone].label}`}
+              meta={patience > 0 ? `${topics.length} тем` : 'наговорился'}
+              onPress={() => setOpen(open === speaker.id ? null : speaker.id)}
+            />
+            {open === speaker.id ? (
+              <View style={styles.topics}>
+                {topics.map((topic) => (
+                  <Chip
+                    key={topic.id}
+                    label={topic.label}
+                    active={false}
+                    onPress={() =>
+                      dispatch({ type: 'talk', speakerId: speaker.id, topicId: topic.id })
+                    }
+                  />
+                ))}
+              </View>
+            ) : null}
+          </View>
+        )
+      })}
+    </Section>
+  )
 }

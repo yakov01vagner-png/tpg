@@ -61,6 +61,7 @@ import { SHIPS, SHIP_NAMES } from './content/ships'
 import { SITES } from './content/sites'
 import type { SpellDef, SpellWhere } from './content/spells'
 import { SPELLS_BY_ID } from './content/spells'
+import { TONES, TOPICS_BY_ID } from './content/talk'
 import type { TroopId } from './content/troops'
 import { TROOPS, TROOP_FOOD_PER_DAY } from './content/troops'
 import type { CourtChoice } from './court'
@@ -219,6 +220,7 @@ import { SKILLS } from './skills'
 import { battlePower, bestSpell, castChance } from './spell'
 import type { GameState } from './state'
 import { appendLog } from './state'
+import { answerOf, speakerById, stillTalks } from './talk'
 import {
   canPilgrimage,
   feastDoingsAt,
@@ -305,6 +307,8 @@ export type Command =
     }
   | { readonly type: 'tourney'; readonly lordId: string }
   | { readonly type: 'petition'; readonly lordId: string }
+  /** Разговор (этап 53): спросить человека о том, что он знает. */
+  | { readonly type: 'talk'; readonly speakerId: string; readonly topicId: string }
   /** Уйти морем: своим судном, нанятым или попутным (этап 35). */
   | { readonly type: 'sail'; readonly toLocationId: string; readonly manner: Passage }
   /** Купить судно в порту, починить своё, продать своё. */
@@ -552,6 +556,8 @@ export function applyCommand(
       return tourney(state, command.lordId)
     case 'petition':
       return petition(state, command.lordId)
+    case 'talk':
+      return talk(state, command.speakerId, command.topicId)
     case 'travel':
       return travel(state, command.toLocationId)
     case 'sail':
@@ -3770,6 +3776,62 @@ export function tradeSkillAt(state: GameState): number {
  * Торгуются раз в день: приставать к человеку каждый час — не торг.
  */
 /**
+ * Разговор (этап 53).
+ *
+ * Спрашивают о теме, а не нажимают на реплику: отвечает человек тем, что знает
+ * о мире, своим голосом и со своей правдой. Разговор стоит времени и терпения:
+ * у всякого нрава оно своё, и надоевшему отвечают коротко.
+ */
+function talk(state: GameState, speakerId: string, topicId: string): CommandResult {
+  const speaker = speakerById(state, speakerId)
+  if (!speaker) return fail('unavailableHere', 'Этого человека здесь нет.')
+  const topic = TOPICS_BY_ID[topicId]
+  if (!topic) return fail('unknownAction', 'О таком не говорят.')
+  if (!topic.kinds.includes(speaker.kind)) {
+    return fail('requirements', `${speaker.name} об этом говорить не станет: не его дело.`)
+  }
+  if (!stillTalks(state, speaker)) {
+    return fail('closed', `${speaker.name}: «${TONES[speaker.tone].tires[0]}»`)
+  }
+
+  const draft = open(state)
+  const [roll, next] = nextFloat(draft.rng)
+  draft.rng = next
+  advance(draft, topic.minutes)
+  const answer = answerOf(state, speaker, topicId, roll)
+  notice(draft, `${speaker.name}: «${answer.text}»`)
+  draft.talked = {
+    ...draft.talked,
+    [speakerId]: (draft.talked[speakerId] ?? 0) + topic.patience,
+  }
+  // Узнанное ложится туда же, куда легло бы, если б ты дошёл ногами: земля —
+  // в знание мира (этап 46), цены — в записную книжку купца.
+  if (answer.reveals?.provinceIds && draft.knowledge) {
+    draft.knowledge = reveal(draft.knowledge, answer.reveals.provinceIds)
+  }
+  if (answer.reveals?.prices) {
+    const day = dayOf(draft.time)
+    let log = draft.priceLog
+    for (const one of answer.reveals.prices) {
+      const known = log[one.locationId] ?? {}
+      const good = one.good as GoodId
+      log = {
+        ...log,
+        [one.locationId]: {
+          ...known,
+          [good]: [...(known[good] ?? []), { day, price: one.price }],
+        },
+      }
+    }
+    draft.priceLog = log
+  }
+  // Разговор сближает: к тому, с кем говорили, относятся чуть теплее.
+  if (speaker.kind === 'merchant') rememberDeal(draft, speakerId, { standing: 1 })
+  practice(draft, 'persuasion', 6)
+  return close(draft)
+}
+
+/**
  * Приём у лорда (этап 52, З1).
  *
  * В замок входят по чину: свой вассал и слуга короны — сразу, чужой — по славе
@@ -4896,6 +4958,7 @@ interface Draft {
   cech: CechMembership | null
   piety: number
   pilgrimDay: number | undefined
+  talked: Readonly<Record<string, number>>
   battle: Battle | null
   politics: Politics
   /** Мир пополняется: места основывают, и скелет перестал быть вечным. */
@@ -4940,6 +5003,7 @@ function open(state: GameState): Draft {
     cech: state.cech ?? null,
     piety: state.piety ?? 0,
     pilgrimDay: state.pilgrimDay,
+    talked: state.talked ?? {},
     battle: state.battle,
     politics: state.politics,
     world: state.world,
@@ -5151,6 +5215,7 @@ function close(draft: Draft): CommandResult {
     craft: draft.craft,
     cech: draft.cech,
     piety: draft.piety,
+    talked: draft.talked,
     ...(draft.pilgrimDay !== undefined ? { pilgrimDay: draft.pilgrimDay } : {}),
     battle: draft.battle,
     politics: draft.politics,
@@ -5338,6 +5403,8 @@ function payUpkeep(draft: Draft, days: number): void {
   paySailors(draft, days)
   payDues(draft)
   payCech(draft)
+  // Новый день — новое терпение: вчерашние разговоры не в счёт (этап 53).
+  draft.talked = {}
   if (partySize(draft.party) === 0) return
 
   let unpaid = 0

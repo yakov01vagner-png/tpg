@@ -127,6 +127,11 @@ export interface GameState {
   /** Когда в последний раз ходил к святому месту: паломничество не еженедельно. */
   readonly pilgrimDay?: number
   /**
+   * С кем сколько говорили нынче (этап 53): у всякого нрава своё терпение.
+   * Обнуляется с новым днём — разговор помнится, но не копится.
+   */
+  readonly talked?: Readonly<Record<string, number>>
+  /**
    * Отведённый мор (этап 41): где и до какого дня чары держат смерть вполовину.
    * Необязательно — сейвы до 0.5 чар не знают.
    */
@@ -196,6 +201,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     craft: {},
     cech: null,
     piety: 0,
+    talked: {},
     party: EMPTY_PARTY,
     ship: null,
     guild: null,
