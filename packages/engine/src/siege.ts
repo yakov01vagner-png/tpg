@@ -1,5 +1,6 @@
 import { lordTemper } from './castle'
 import { BREACH_RELIEF, BRIBE_PER_HEAD, SAP_DAYS, type SiegeMove } from './content/field'
+import type { EngineId } from './content/siege'
 import type { Settlement } from './economy'
 import { garrisonSize } from './holding'
 import { foodSecurity } from './life'
@@ -24,6 +25,15 @@ export interface Siege {
   readonly sapDays?: number
   /** Села ли кладка. */
   readonly breached?: boolean
+  /** Какие машины уже стоят под стенами (этап 85, О2). */
+  readonly engines?: readonly EngineId[]
+  /** Что строят сейчас и сколько суток осталось. */
+  readonly works?: { readonly id: EngineId; readonly daysLeft: number }
+}
+
+/** Машины, уже стоящие под стенами. */
+export function enginesOf(siege: Siege): readonly EngineId[] {
+  return siege.engines ?? []
 }
 
 /** Во сколько раз стены помогают обороне: пролом снимает большую часть помощи. */

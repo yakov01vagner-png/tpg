@@ -1,6 +1,6 @@
 import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
-import type { Band, BandEvent } from './band'
+import type { Band, BandEvent, GarrisonOrder } from './band'
 import { bandSize, bandsOnLeg, clash, nextHop, roadHours, tickBands } from './band'
 import type { Battle, BattleSide, GroupId, OrderId } from './battle'
 import {
@@ -283,6 +283,20 @@ import {
   withDeed,
 } from './fame'
 import { groundFor, orderNeeds, veteranShare, woundedOf } from './field'
+import {
+  type EngineId,
+  SIEGE,
+  type TermId,
+  engineDays,
+  engineDef,
+  enginePrice,
+  enginesLeft,
+  fortOf,
+  holdOut,
+  mouthsOf,
+  offersFor,
+  stormCost,
+} from './fort'
 import { goalDef, goalOf, goalStepDone, milestoneKey } from './goal'
 import {
   type SickWhere,
@@ -530,6 +544,7 @@ import type { Siege } from './siege'
 import {
   bribeChance,
   bribePrice,
+  enginesOf,
   sallyChance,
   sapLeft,
   surrenderChance,
@@ -900,6 +915,15 @@ export type Command =
       readonly targetId?: string
     }
   | { readonly type: 'recallHost'; readonly hostId: string }
+  /** Осадное дело (этап 85): машины, условия сдачи, своя крепость. */
+  | { readonly type: 'buildEngine'; readonly engine: EngineId }
+  | { readonly type: 'siegeTerms'; readonly term: TermId }
+  | { readonly type: 'stockFort'; readonly locationId: string; readonly days: number }
+  | {
+      readonly type: 'garrisonOrder'
+      readonly locationId: string
+      readonly order: GarrisonOrder
+    }
   /** Съезд корон (этап 83): созвать, купить голос. */
   | {
       readonly type: 'callCongress'
@@ -1346,6 +1370,14 @@ export function applyCommand(
       return orderHost(state, command.hostId, command.order, command.targetId)
     case 'recallHost':
       return recallHost(state, command.hostId)
+    case 'buildEngine':
+      return buildEngine(state, command.engine)
+    case 'siegeTerms':
+      return siegeTerms(state, command.term)
+    case 'stockFort':
+      return stockFort(state, command.locationId, command.days)
+    case 'garrisonOrder':
+      return garrisonOrder(state, command.locationId, command.order)
     case 'callCongress':
       return callCongress(state, command.question, command.about)
     case 'buyVote':
@@ -3093,6 +3125,8 @@ function siegeWait(state: GameState, days: number): CommandResult {
   // Блокада: в город не везут ничего, запасы тают быстрее обычного.
   blockade(draft, siege.locationId, days)
   draft.siege = { ...siege, days: siege.days + days }
+  // Плотники не ждут приказа: работы идут, пока войско стоит (этап 85, О2).
+  advanceWorks(draft, days)
   // Гарнизон не сидит сложа руки (этап 58, Б2).
   sally(draft, siege.locationId)
   return close(draft)
@@ -3117,7 +3151,10 @@ function siegeAssault(state: GameState): CommandResult {
     morale: Math.round(45 + starving * 35 - siege.days * 2),
     fatigue: 0,
   }
-  const walls = wallsFor(settlement)
+  // Крепость считается целиком (этап 85, О1 и О4): стены, башни и машины.
+  const fort = fortOf(state, state.world, siege.locationId)
+  const cost = fort ? stormCost(fort, enginesOf(siege), siege.breached === true) : null
+  const walls = cost ? cost.walls : wallsUnderSiege(wallsFor(settlement), siege)
   // Союзное войско под теми же стенами идёт на приступ первым.
   const softened = allyStrikesFirst(draft, defenders, siege.locationId, walls, 1)
   if (!softened) {
@@ -3126,9 +3163,17 @@ function siegeAssault(state: GameState): CommandResult {
     advance(draft, hours(2))
     return close(draft)
   }
+  // Цена подхода: с башен бьют, пока идёшь. Машины эту цену сбивают.
+  if (cost && cost.losses > 0) {
+    const fallen = Math.round(partySize(draft.party) * cost.losses)
+    if (fallen > 0) {
+      draft.party = withUnits(draft.party, worstTroop(draft.party), -fallen)
+      notice(draft, `${cost.says} Не дошло ${fallen}.`, 'war')
+    }
+  }
   draft.battle = startBattle(draft.party, softened, here.terrain, {
     stake: { type: 'siege', locationId: siege.locationId },
-    wallBonus: wallsUnderSiege(walls, siege),
+    wallBonus: walls,
     foeId: settlement.owner,
     ground: 'walls',
     veterans: veteransOf(draft.party),
@@ -3165,6 +3210,7 @@ function siegeSap(state: GameState, days: number): CommandResult {
   const sapDays = (siege.sapDays ?? 0) + dug
   const breached = sapDays >= SAP_DAYS
   draft.siege = { ...siege, days: siege.days + days, sapDays, breached }
+  advanceWorks(draft, days)
   // Земля не любит, когда её копают: чем глубже, тем чаще садится свод.
   const [collapsed, afterCollapse] = rollChance(draft.rng, 0.08 * days)
   draft.rng = afterCollapse
@@ -3244,6 +3290,26 @@ function siegeBribe(state: GameState): CommandResult {
   notice(draft, 'Ночью калитку отворили изнутри.', 'war')
   seizePlace(draft, siege.locationId, 'terms')
   return close(draft)
+}
+
+/**
+ * Работы под стенами (этап 85, О2).
+ *
+ * Машину строят сутками, пока войско стоит: осада тем и отличается от штурма,
+ * что время в ней работает на того, кто умеет его тратить.
+ */
+function advanceWorks(draft: Draft, days: number): void {
+  const siege = draft.siege
+  if (!siege?.works) return
+  const daysLeft = siege.works.daysLeft - days
+  if (daysLeft > 0) {
+    draft.siege = { ...siege, works: { ...siege.works, daysLeft } }
+    return
+  }
+  const def = engineDef(siege.works.id)
+  const { works: _done, ...rest } = siege
+  draft.siege = { ...rest, engines: [...enginesOf(siege), siege.works.id] }
+  notice(draft, `${def.label} готов: ${def.about}`, 'war')
 }
 
 /**
@@ -9183,6 +9249,7 @@ interface Draft {
   congresses: readonly CongressRecord[]
   campaign: Campaign | null
   dispatches: readonly Dispatch[]
+  garrisons: Readonly<Record<string, GarrisonOrder>>
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9271,6 +9338,7 @@ function open(state: GameState): Draft {
     congresses: state.congresses ?? [],
     campaign: state.campaign ?? null,
     dispatches: state.dispatches ?? [],
+    garrisons: state.garrisons ?? {},
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9404,6 +9472,7 @@ function close(draft: Draft): CommandResult {
         draft.bands,
         draft.rng,
         dayOf(draft.time),
+        draft.garrisons,
       )
       draft.bands = march.bands
       draft.settlements = march.settlements
@@ -9674,6 +9743,7 @@ function close(draft: Draft): CommandResult {
     congresses: draft.congresses,
     campaign: draft.campaign,
     dispatches: draft.dispatches,
+    garrisons: draft.garrisons,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -10490,6 +10560,152 @@ function recallHost(state: GameState, hostId: string): CommandResult {
   draft.bands = draft.bands.filter((one) => one.id !== hostId)
   advance(draft, hours(3))
   notice(draft, 'Часть сведена в отряд.', 'war')
+  return close(draft)
+}
+
+/**
+ * Строить осадную машину (этап 85, О2).
+ *
+ * Подкоп был единственной работой под стенами: шесть суток — и кладка села.
+ * Машины дают выбор другой цены: таран дешёв и бьёт по воротам, башня дорога,
+ * но укрывает идущих, порок сбивает стрелков с башен. Срок считается по рукам
+ * и по инженерии того, кто ведёт работы.
+ */
+function buildEngine(state: GameState, engine: EngineId): CommandResult {
+  const siege = state.siege
+  if (!siege) return fail('invalid', 'Ты никого не осаждаешь.')
+  if (siege.works)
+    return fail('invalid', `Под стенами уже строят: ${engineDef(siege.works.id).label}.`)
+  const fort = fortOf(state, state.world, siege.locationId)
+  if (!fort) return fail('invalid', 'Осаждать нечего.')
+  const built = enginesOf(siege)
+  if (!enginesLeft(built, fort).includes(engine)) {
+    return fail('invalid', 'Такую машину здесь не поставить.')
+  }
+  const def = engineDef(engine)
+  const men = partySize(state.party)
+  if (men < def.men)
+    return fail('requirements', `На ${def.label} нужно ${def.men} рук, у тебя ${men}.`)
+  const price = enginePrice(engine)
+  if (state.character.money < price) {
+    return fail('noMoney', `На железо и канаты нужно ${price}, у тебя ${state.character.money}.`)
+  }
+  const craft = state.character.skills.engineering.level
+  const days = engineDays(engine, men, craft)
+
+  const draft = open(state)
+  addMoney(draft, -price)
+  advance(draft, hours(6))
+  draft.siege = { ...siege, works: { id: engine, daysLeft: days } }
+  notice(draft, `${def.label}: работы начаты, сроку ${days} сут.`, 'war')
+  return close(draft)
+}
+
+/**
+ * Предложить условия (этап 85, О3).
+ *
+ * Осада — это торг, а не отсчёт: под стенами считают не храбрость, а воду,
+ * хлеб и то, идёт ли выручка. Свободный выход принимают охотнее всего, выкуп
+ * оставляет место прежнему хозяину и приносит серебро, милости просят только
+ * когда терять уже нечего.
+ */
+function siegeTerms(state: GameState, term: TermId): CommandResult {
+  const siege = state.siege
+  if (!siege) return fail('invalid', 'Ты никого не осаждаешь.')
+  const fort = fortOf(state, state.world, siege.locationId)
+  const here = state.world.locations[siege.locationId]
+  if (!fort || !here) return fail('invalid', 'Осаждать нечего.')
+  const offer = offersFor(state, state.world, fort, siege.days, siege.breached === true).find(
+    (one) => one.term === term,
+  )
+  if (!offer) return fail('invalid', 'Таких условий не предлагают.')
+
+  const draft = open(state)
+  advance(draft, hours(4))
+  const [taken, afterRoll] = rollChance(draft.rng, offer.chance)
+  draft.rng = afterRoll
+  if (!taken) {
+    notice(
+      draft,
+      `С башни отвечают отказом: ${offer.label} — не те условия. (${Math.round(offer.chance * 100)} из ста)`,
+      'war',
+    )
+    return close(draft)
+  }
+  if (term === 'ransom') {
+    const paid = Math.abs(offer.silver)
+    addMoney(draft, paid)
+    draft.siege = null
+    notice(draft, `${here.name} откупился: ${paid} серебром, и осада снята.`, 'war')
+    return close(draft)
+  }
+  seizePlace(draft, siege.locationId, 'terms')
+  // Отпущенный гарнизон — это живые враги, зато целое место и слава милостивого.
+  draft.renown += term === 'free' ? 1 : 2
+  notice(draft, `${here.name} сдан: ${offer.label}.`, 'war')
+  return close(draft)
+}
+
+/**
+ * Запас в свою крепость (этап 85, О5).
+ *
+ * Крепость держится не стенами, а хлебом: запас на год — это год, который у
+ * тебя есть, чтобы собрать выручку. Покупается заранее: под стенами уже поздно.
+ */
+function stockFort(state: GameState, locationId: string, days: number): CommandResult {
+  const settlement = state.settlements[locationId]
+  const here = state.world.locations[locationId]
+  if (!settlement || !here) return fail('invalid', 'Такого места нет.')
+  if (!isOwnedByPlayer(settlement)) return fail('invalid', 'Запас кладут в свою крепость.')
+  if (!Number.isInteger(days) || days <= 0 || days > 365) {
+    return fail('invalid', 'Припасти можно от суток до года.')
+  }
+  const grain = Math.ceil(mouthsOf(settlement) * SIEGE.perMan * days)
+  const price = grain * SIEGE.storeSilver
+  if (state.character.money < price) {
+    return fail('noMoney', `Хлеб на ${days} сут. стоит ${price}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -price)
+  advance(draft, hours(6))
+  draft.settlements = {
+    ...draft.settlements,
+    [locationId]: {
+      ...settlement,
+      stock: { ...settlement.stock, grain: settlement.stock.grain + grain },
+    },
+  }
+  const fort = fortOf(draft.base, draft.base.world, locationId)
+  notice(
+    draft,
+    `${here.name}: в амбары свезли ${grain} мер. Крепость выстоит ${fort ? holdOut(fort) : days} сут.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Приказ гарнизону (этап 85, О5).
+ *
+ * Приказ даётся заранее и действует, когда тебя там нет: держать стены, ходить
+ * на вылазки или открыть ворота, не кладя людей. Своё войско ведут приказы, и
+ * своя крепость — тоже.
+ */
+function garrisonOrder(state: GameState, locationId: string, order: GarrisonOrder): CommandResult {
+  const settlement = state.settlements[locationId]
+  const here = state.world.locations[locationId]
+  if (!settlement || !here) return fail('invalid', 'Такого места нет.')
+  if (!isOwnedByPlayer(settlement)) return fail('invalid', 'Приказы отдают своему гарнизону.')
+
+  const draft = open(state)
+  advance(draft, hours(1))
+  draft.garrisons = { ...draft.garrisons, [locationId]: order }
+  notice(
+    draft,
+    `${here.name}: гарнизону велено ${order === 'hold' ? 'держать стены' : order === 'sally' ? 'ходить на вылазки' : 'открыть ворота, если обложат'}.`,
+    'world',
+  )
   return close(draft)
 }
 

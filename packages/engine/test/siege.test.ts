@@ -79,14 +79,16 @@ describe('осада', () => {
   })
 
   it('стены дорого обходятся штурмующему', () => {
+    // С этапа 85 стены — свойство места, а не постройки: городок за ними стоит
+    // с первого дня мира, деревня не стоит никогда. Поэтому сравниваются не
+    // одно место с постройкой и без, а крепость с открытым местом.
     const id = target()
-    const plain = ok(applyCommand(besieger(id), { type: 'besiege' }))
-    const settlement = plain.settlements[id]
-    if (!settlement) return
-    const walled: GameState = {
-      ...plain,
-      settlements: { ...plain.settlements, [id]: { ...settlement, buildings: ['walls'] } },
-    }
+    const walled = ok(applyCommand(besieger(id), { type: 'besiege' }))
+    const openId =
+      Object.values(world.locations).find(
+        (one) => one.archetype === 'village' && !one.id.startsWith('reEstiz.'),
+      )?.id ?? someplace('village')
+    const plain = ok(applyCommand(besieger(openId), { type: 'besiege' }))
 
     const fight = (state: GameState) => {
       let current = ok(applyCommand(state, { type: 'siegeAssault' }))

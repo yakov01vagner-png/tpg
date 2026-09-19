@@ -1,4 +1,4 @@
-import type { Band } from './band'
+import type { Band, GarrisonOrder } from './band'
 import { musterBands } from './band'
 import type { Battle } from './battle'
 import { startSway } from './brother'
@@ -333,6 +333,11 @@ export interface GameState {
   readonly campaign?: Campaign | null
   /** Донесения, которые ещё идут: весть от войска приходит не в тот же день. */
   readonly dispatches?: readonly Dispatch[]
+  /**
+   * Что велено своим гарнизонам (этап 85, О5): держать, ходить на вылазки или
+   * открыть ворота. Приказ даётся заранее — под стенами спрашивать некогда.
+   */
+  readonly garrisons?: Readonly<Record<string, GarrisonOrder>>
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -435,6 +440,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     congresses: [],
     campaign: null,
     dispatches: [],
+    garrisons: {},
     factions: {},
     spellcraft: {},
     weather: [],

@@ -3,6 +3,7 @@ import type { GroupId, OrderId } from './battle'
 import { WAR_MAGES } from './content/lore'
 import type { TroopId } from './content/troops'
 import type { Settlement } from './economy'
+import { type Fort, fortFrom, holdOut, stormCost, wallsAfterWorks } from './fort'
 import { PLAYER, takeLand } from './holding'
 import { ARMY_PACE, legHoursFor } from './journey'
 import { temperDeeds } from './lordlife'
@@ -68,7 +69,13 @@ export type BandEvent =
       readonly lost: number
     }
   | { readonly type: 'bandSiege'; readonly bandId: string; readonly locationId: string }
-  | { readonly type: 'bandTook'; readonly bandId: string; readonly locationId: string }
+  | {
+      readonly type: 'bandTook'
+      readonly bandId: string
+      readonly locationId: string
+      /** Сдались, а не пали: ворота открыли сами (этап 85, О3). */
+      readonly yielded?: boolean
+    }
   | {
       readonly type: 'bandClash'
       readonly locationId: string
@@ -90,6 +97,12 @@ export interface BandResult {
 
 /** Сколько суток осады нужно, прежде чем идти на приступ. */
 export const SIEGE_DAYS = 12
+
+/** Дольше этого под стенами не стоят: войско расходится само. */
+export const SIEGE_CAP = 60
+
+/** Что велено своему гарнизону (этап 85, О5). */
+export type GarrisonOrder = 'hold' | 'sally' | 'yield'
 
 /**
  * Кто встанет на стены.
@@ -611,6 +624,8 @@ export function tickBands(
   bands: readonly Band[],
   rng: Rng,
   day: number | null = null,
+  /** Приказы своим гарнизонам (этап 85, О5): держать, вылазка, сдать. */
+  orders: Readonly<Record<string, GarrisonOrder>> = {},
 ): BandResult {
   let generator = rng
   let places = settlements
@@ -787,7 +802,7 @@ export function tickBands(
 
   // 3. Дело на месте: осада, разорение, сбор.
   const acted: Band[] = []
-  for (const band of moved) {
+  for (let band of moved) {
     if (band.travel) {
       acted.push(band)
       continue
@@ -812,6 +827,108 @@ export function tickBands(
       if (siegeDays === 1) {
         events.push({ type: 'bandSiege', bandId: band.id, locationId: band.locationId })
       }
+
+      // Крепость — не одно число, а вода, хлеб, башни и донжон (этап 85, О1).
+      const here = world.locations[band.locationId]
+      const standingFort = places[band.locationId] as Settlement
+      const fort = here ? fortFrom(standingFort, here) : null
+      const order = orders[band.locationId] ?? 'hold'
+
+      // Свой гарнизон слушает приказ (О5). Вылазка кусает осаждающих каждые
+      // сутки и стоит своих: это размен, а не бесплатная помощь.
+      if (fort && order === 'sally' && fort.garrison >= 6 && standingFort.owner === PLAYER) {
+        const bite = Math.max(1, Math.round(bandSize(band) * 0.03))
+        band = {
+          ...band,
+          units: thinnedBy(band.units, bite),
+          morale: Math.max(15, band.morale - 2),
+        }
+        const ours = Math.max(1, Math.round(fort.garrison * 0.04))
+        places = {
+          ...places,
+          [band.locationId]: {
+            ...standingFort,
+            garrison: thinnedBy(standingFort.garrison, ours),
+          },
+        }
+      }
+
+      // Сдача (О3). Крепость, у которой кончились вода и хлеб, открывает
+      // ворота: приступ ей уже не нужен, и кровь под стенами не льётся. Своя
+      // крепость открывает их и по приказу.
+      // Морят голодом крепость, а не деревню: у открытого места нет ни ворот,
+      // ни запаса, и берут его приступом, как прежде. И обложить город можно
+      // лишь тем войском, которое его перекроет: горстке ворота не запереть.
+      const defenders = unitsSize(defendersOf(standingFort))
+      const blockading = fort !== null && bandSize(band) > defenders
+      const starved = fort !== null && blockading && siegeDays >= holdOut(fort)
+      const opens = starved || (order === 'yield' && standingFort.owner === PLAYER)
+      if (opens) {
+        const yielded = places[band.locationId] as Settlement
+        places = takeLand(world, places, band.locationId, conquerorSide(lords, band))
+        const seat = places[band.locationId]
+        if (seat) places = { ...places, [band.locationId]: { ...seat, garrison: {} } }
+        lords = lords.map((candidate) =>
+          candidate.id === band.lordId
+            ? {
+                ...candidate,
+                loyalty: Math.min(100, candidate.loyalty + 8),
+                spared: (candidate.spared ?? 0) + 1,
+              }
+            : candidate,
+        )
+        events.push({
+          type: 'bandTook',
+          bandId: band.id,
+          locationId: band.locationId,
+          yielded: true,
+        })
+        const previousOwner = yielded.owner
+        if (previousOwner && previousOwner !== band.lordId && !seatOf(places, previousOwner)) {
+          const outcome = submit(lords, wars, places, previousOwner, generator)
+          lords = outcome.lords
+          wars = outcome.wars
+          places = outcome.settlements
+          generator = outcome.rng
+          events.push(...outcome.events)
+        }
+        acted.push({ ...band, goal: goHome(places, band), siegeDays: 0 })
+        continue
+      }
+
+      // Стоять дольше, чем стоит дело, не будут: войско расходится само.
+      if (siegeDays >= SIEGE_CAP) {
+        acted.push({
+          ...band,
+          goal: goHome(places, band),
+          siegeDays: 0,
+          morale: Math.max(20, band.morale - 10),
+        })
+        continue
+      }
+
+      if (
+        siegeDays >= SIEGE_DAYS &&
+        fort !== null &&
+        !wantsStorm(band, fort, standingFort, blockading)
+      ) {
+        // Лезть на целые стены дороже, чем подождать, пока за ними съедят
+        // хлеб. Это и есть выбор, которого у дружин не было до 0.7. Но ждать
+        // имеет смысл, только если крепость обложена: иначе в неё везут, и
+        // войско под стенами голодает раньше, чем гарнизон.
+        if (blockading) {
+          acted.push({ ...band, siegeDays })
+          continue
+        }
+        acted.push({
+          ...band,
+          goal: goHome(places, band),
+          siegeDays: 0,
+          morale: Math.max(20, band.morale - 5),
+        })
+        continue
+      }
+
       if (siegeDays >= SIEGE_DAYS) {
         // Приступ: те же правила боя, что и у игрока, только стены выше.
         const held = places[band.locationId] as Settlement
@@ -822,11 +939,15 @@ export function tickBands(
           units: defendersOf(held),
           morale: 70,
         }
+        // Цена подхода (этап 85, О4): с башен бьют прежде, чем дойдёт первый.
+        const cost = fort ? stormCost(fort, [], false) : null
+        const shot = cost ? Math.round(bandSize(band) * cost.losses) : 0
+        if (shot > 0) band = { ...band, units: thinnedBy(band.units, shot) }
         const assault = clash(
           band,
           garrison,
           world.locations[band.locationId]?.terrain ?? 'plains',
-          wallsOf(held),
+          cost ? cost.walls : wallsOf(held),
           generator,
         )
         generator = assault.rng
@@ -1111,6 +1232,53 @@ function goalTarget(goal: BandGoal): string | null {
  * это и есть феодальный уклад (DESIGN.md, п.3.2): земля у того, кто её взял, а
  * корона сильна ровно настолько, насколько сильны её вассалы.
  */
+/**
+ * Убыль людей без броска (этап 85, О5).
+ *
+ * Вылазка и стрелы с башен — это числа, а не кубик: тратить на них случайность
+ * значит сдвигать поток и ломать повторяемость сейва (DESIGN.md, п.4). Убирают
+ * из самого многочисленного отряда: гибнут те, кого больше.
+ */
+function thinnedBy(units: Units, count: number): Units {
+  let left = count
+  const out: Partial<Record<TroopId, number>> = { ...units }
+  while (left > 0) {
+    let worst: TroopId | null = null
+    for (const [troop, men] of Object.entries(out)) {
+      if (!men || men <= 0) continue
+      if (!worst || men > (out[worst] ?? 0)) worst = troop as TroopId
+    }
+    if (!worst) break
+    const men = out[worst] ?? 0
+    const take = Math.min(men, left)
+    out[worst] = men - take
+    if (out[worst] === 0) delete out[worst]
+    left -= take
+  }
+  return out
+}
+
+/**
+ * Лезть ли на стены (этап 85, О4).
+ *
+ * До 0.7 осада была отсчётом: двенадцать суток — и приступ, чего бы он ни
+ * стоил. Теперь войско считает: сколько людей ляжет на подходе, во сколько раз
+ * целые стены помогают гарнизону и сколько крепости осталось жить без воды и
+ * хлеба. Если она всё равно скоро откроет ворота, на них не лезут.
+ */
+function wantsStorm(band: Band, fort: Fort, settlement: Settlement, blockading: boolean): boolean {
+  const cost = stormCost(fort, [], false)
+  const men = bandSize(band) * (1 - cost.losses)
+  const defenders = unitsSize(defendersOf(settlement))
+  if (defenders <= 0) return true
+  const walls = wallsAfterWorks(fort, [], false)
+  // Обложить нечем: ждать бессмысленно — или лезть сейчас, или уходить.
+  if (!blockading) return men > defenders * walls * 0.75
+  // Крепости, которой осталось недолго, дешевле дать доесть свой хлеб.
+  if (holdOut(fort) <= SIEGE_DAYS) return false
+  return men > defenders * walls * 0.9
+}
+
 function conquerorSide(_lords: readonly Lord[], band: Band): string {
   return band.lordId
 }
