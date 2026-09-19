@@ -1,4 +1,5 @@
 import {
+  ARTIFACTS,
   BUILDINGS,
   CAMP_HOURS,
   CLIMATE_LABELS,
@@ -6,6 +7,7 @@ import {
   type Command,
   FOUND_COST,
   type GameState,
+  HONE_HOURS,
   INTERDICT_DAYS,
   PLACE_LABELS,
   PRIEST_TEMPERS,
@@ -21,7 +23,10 @@ import {
   type Season,
   type SpellWhere,
   TERRAIN_LABELS,
+  WEATHER_LABELS,
   addressOf,
+  artifactDef,
+  artifactsOf,
   canApply,
   canFound,
   canWield,
@@ -29,6 +34,7 @@ import {
   charterById,
   companionsAt,
   coursesAt,
+  craftOf,
   dayOf,
   daysToFair,
   describeQuest,
@@ -57,6 +63,9 @@ import {
   lanesFrom,
   lordById,
   lordSays,
+  masteryLuck,
+  masteryOf,
+  masteryWord,
   matchesAt,
   offeringFor,
   offersAt,
@@ -78,6 +87,7 @@ import {
   ritesAt,
   roadsFrom,
   rumourAt,
+  schoolAt,
   seaHours,
   seasonOf,
   shipCarries,
@@ -87,6 +97,7 @@ import {
   timeOfDay,
   waitHours,
   walkMinutes,
+  weatherAt,
 } from '@tpg/engine'
 import type { Activity, QuarterId } from '@tpg/engine'
 import { useState } from 'react'
@@ -854,24 +865,102 @@ function Spells({
   const spells = spellsFor(game.character, where)
   if (spells.length === 0) return null
   const magic = skillLevel(game.character, 'magic')
+  const day = dayOf(game.time)
+  const called = weatherAt(game, game.locationId, day)
+  const school = schoolAt(game.world, game.locationId) !== null
   return (
     <Section title="Чары" aside={`${spells.length}`}>
+      {called.length > 0 ? (
+        <Panel tone="gold">
+          <Dim>
+            {called
+              .map((one) => `${WEATHER_LABELS[one.kind].label} до ${one.untilDay} дня`)
+              .join(', ')}
+          </Dim>
+        </Panel>
+      ) : null}
       {spells.map((spell) => {
         const command: Command = { type: 'cast', spellId: spell.id }
-        const odds = Math.round(castChance(magic, spell) * 100)
+        // Мастерство (этап 60, А5): удача считается с ним, и оно видно словом.
+        const mastery = masteryOf(craftOf(game, spell.id), day)
+        const odds = Math.round(
+          Math.min(0.97, castChance(magic, spell) + masteryLuck(mastery)) * 100,
+        )
         return (
           <Card
             key={spell.id}
             glyph={<Icon name="magic" size={20} color={palette.gold} />}
             title={spell.label}
             description={spell.description}
-            meta={`${formatDuration(spell.minutes)} · усталость ${spell.fatigue} · ${SPELL_FAMILY_LABELS[spell.family]} · удаётся ${odds}%`}
+            meta={`${formatDuration(spell.minutes)} · усталость ${spell.fatigue} · ${SPELL_FAMILY_LABELS[spell.family]} · удаётся ${odds}% · ${masteryWord(mastery)}`}
             reason={reasonOf(canApply(game, command))}
             onPress={() => dispatch(command)}
           />
         )
       })}
+      {school
+        ? spells.map((spell) => (
+            <Card
+              key={`hone:${spell.id}`}
+              title={`Упражняться: ${spell.label.toLowerCase()}`}
+              description="В школе есть кому смотреть на руки: четыре повторения вместо одного."
+              meta={`${HONE_HOURS} ч`}
+              reason={reasonOf(canApply(game, { type: 'honeSpell', spellId: spell.id }))}
+              onPress={() => dispatch({ type: 'honeSpell', spellId: spell.id })}
+            />
+          ))
+        : null}
+      <Artifacts game={game} dispatch={dispatch} />
     </Section>
+  )
+}
+
+/**
+ * Вещи с чарами (этап 60, А6).
+ *
+ * Что у тебя на руках и что можно сделать в школе. Вещь ничего не открывает:
+ * тому, кто не дорос до заклинания, она его не даст, — но тому, кто дорос, даёт
+ * больше, чем он сам.
+ */
+function Artifacts({
+  game,
+  dispatch,
+}: {
+  game: GameState
+  dispatch: (command: Command) => void
+}) {
+  const mine = artifactsOf(game)
+  const school = schoolAt(game.world, game.locationId) !== null
+  if (mine.length === 0 && !school) return null
+  return (
+    <>
+      {mine.map((one) => {
+        const def = artifactDef(one.defId)
+        if (!def) return null
+        return (
+          <Card
+            key={one.id}
+            glyph={<Icon name="magic" size={20} color={palette.gold} />}
+            title={def.label}
+            description={def.about}
+            meta={`${SPELL_FAMILY_LABELS[def.family]} ×${(1 + def.power).toFixed(2)} · ${one.found === 'wild' ? 'найден' : 'сделан'}`}
+            tone="gold"
+          />
+        )
+      })}
+      {school
+        ? ARTIFACTS.filter((def) => !mine.some((one) => one.defId === def.id)).map((def) => (
+            <Card
+              key={`make:${def.id}`}
+              title={`Сделать: ${def.label.toLowerCase()}`}
+              description={def.about}
+              meta={`−${def.price} · ${def.days} сут · магия ${def.needsMagic}`}
+              reason={reasonOf(canApply(game, { type: 'makeArtifact', defId: def.id }))}
+              onPress={() => dispatch({ type: 'makeArtifact', defId: def.id })}
+            />
+          ))
+        : null}
+    </>
   )
 }
 

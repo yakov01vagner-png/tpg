@@ -53,6 +53,12 @@ export type SpellEffect =
   | { readonly kind: 'cleanse'; readonly days: number }
   /** Свет: ночью идёшь как днём до утра. */
   | { readonly kind: 'light'; readonly hours: number }
+  /**
+   * Погода по зову (этап 60, А3): дождь правит год, оттепель распускает лёд,
+   * буря запирает море. Держится считанные сутки — иначе погода перестаёт быть
+   * погодой.
+   */
+  | { readonly kind: 'weather'; readonly weather: 'rain' | 'thaw' | 'gale'; readonly days: number }
 
 export interface SpellDef {
   readonly id: string
@@ -406,6 +412,45 @@ export const SPELLS: readonly SpellDef[] = [
     effect: { kind: 'bless', days: 12 },
     fatigue: 70,
     minutes: hours(10),
+    strain: 0,
+  },
+  // --- погода: её зовут, и она приходит (этап 60, А3) -----------------------
+  {
+    id: 'rainsong',
+    label: 'Зов дождя',
+    description:
+      'Тёплый дождь на сухие поля округи. Год выйдет лучше, чем шёл, — и об этом будут помнить.',
+    family: 'sea',
+    requiredSkill: 34,
+    where: 'place',
+    effect: { kind: 'weather', weather: 'rain', days: 6 },
+    fatigue: 40,
+    minutes: hours(4),
+    strain: 0,
+  },
+  {
+    id: 'thawword',
+    label: 'Слово оттепели',
+    description: 'Лёд трещит и расходится: и в гавани, и на дороге. Зима отступает на неделю.',
+    family: 'sea',
+    requiredSkill: 52,
+    where: 'place',
+    effect: { kind: 'weather', weather: 'thaw', days: 8 },
+    fatigue: 55,
+    minutes: hours(5),
+    strain: 0,
+  },
+  {
+    id: 'galecall',
+    label: 'Зов бури',
+    description:
+      'Море встаёт стеной. Чужие суда не выйдут из этой гавани — и твои тоже, пока не ляжет.',
+    family: 'sea',
+    requiredSkill: 66,
+    where: 'place',
+    effect: { kind: 'weather', weather: 'gale', days: 5 },
+    fatigue: 60,
+    minutes: hours(6),
     strain: 0,
   },
   {

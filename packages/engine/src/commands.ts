@@ -82,6 +82,21 @@ import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import { KIN_ASK, KIN_GIFT, UPBRINGING_MINUTES } from './content/home'
 import { TEMPER_LINES } from './content/lines'
+import {
+  ARCHMAGE_DEED_LABELS,
+  ARTIFACTS,
+  ARTIFACTS_BY_ID,
+  FEAR_PIETY,
+  FEAR_STANDING,
+  FIND_CHANCE,
+  HONE_HOURS,
+  HONE_USES,
+  LOSE_CHANCE,
+  RAIN_HARVEST,
+  WAR_MAGES,
+  WEATHER_LABELS,
+  WIND_HARVEST,
+} from './content/lore'
 import { ROWS_BY_ID } from './content/merchants'
 import type { QuarterId } from './content/quarters'
 import type { ShipKind } from './content/ships'
@@ -171,6 +186,22 @@ import {
 } from './knowledge'
 import type { HarvestEvent, LifeEvent } from './life'
 import { LIFE, foodSecurity, rollHarvest, tickDays } from './life'
+import {
+  type Artifact,
+  type Spellcraft,
+  type Weather,
+  artifactDef,
+  artifactPower,
+  craftOf,
+  fearOf,
+  hasWeather,
+  masteryLuck,
+  masteryOf,
+  masteryWord,
+  spellPower,
+  withUse,
+  withUses,
+} from './lore'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
 import type { PriceLog } from './market'
 import { recordPrices } from './market'
@@ -444,6 +475,8 @@ export type Command =
   | { readonly type: 'siegeBribe' }
   | { readonly type: 'captiveFate'; readonly captiveId: string; readonly fate: CaptiveFate }
   | { readonly type: 'inquire' }
+  | { readonly type: 'honeSpell'; readonly spellId: string }
+  | { readonly type: 'makeArtifact'; readonly defId: string }
   | { readonly type: 'orderSend'; readonly locationId: string }
   | { readonly type: 'orderPatronage' }
   | { readonly type: 'orderInterdict'; readonly locationId: string }
@@ -757,6 +790,10 @@ export function applyCommand(
       return captiveFate(state, command.captiveId, command.fate)
     case 'inquire':
       return inquire(state)
+    case 'honeSpell':
+      return honeSpell(state, command.spellId)
+    case 'makeArtifact':
+      return makeArtifact(state, command.defId)
     case 'orderSend':
       return orderSend(state, command.locationId)
     case 'orderPatronage':
@@ -1036,9 +1073,16 @@ function sail(state: GameState, toLocationId: string, manner: Passage): CommandR
   if (!destination) return fail('unknownAction', 'Такого места нет.')
   const lane = lanesFrom(state.world, state.locationId).find((one) => one.to === toLocationId)
   if (!lane) return fail('unknownAction', `Отсюда нет морского пути в ${destination.name}.`)
-  // Зимой море встаёт: до весны никто никуда не идёт (этап 38).
-  if (iceBound(dayOf(state.time))) {
+  // Зимой море встаёт: до весны никто никуда не идёт (этап 38). Но лёд можно
+  // распустить словом (этап 60, А3) — на восемь суток, не дольше.
+  const today = dayOf(state.time)
+  if (iceBound(today) && !hasWeather(state, state.locationId, 'thaw', today)) {
     return fail('ice', 'Море встало. До весны из гавани не выйти.')
+  }
+  // А можно, наоборот, поднять бурю — и тогда из этой гавани не выйдет никто,
+  // включая того, кто её позвал.
+  if (hasWeather(state, state.locationId, 'gale', today)) {
+    return fail('ice', 'Море стоит стеной: буря, которую позвали, не спрашивает, чья она.')
   }
   if (manner === 'own' && !state.ship) {
     return fail('requirements', 'Своего судна у тебя нет.')
@@ -1861,9 +1905,9 @@ function battleOrders(state: GameState, orders: Readonly<Record<GroupId, OrderId
       command,
       magic: skillLevel(state.character, 'magic'),
       spells: {
-        fire: spellInBattle(state.character, 'fire'),
-        curse: spellInBattle(state.character, 'curse'),
-        ward: spellInBattle(state.character, 'ward'),
+        fire: spellInBattle(state, 'fire'),
+        curse: spellInBattle(state, 'curse'),
+        ward: spellInBattle(state, 'ward'),
       },
       // Снаряжение отряда множит силу строя, железо героя прибавляет своё.
       gear: gearFactor(state.party),
@@ -2230,6 +2274,20 @@ function defeat(draft: Draft, foeId: string | null): void {
   addMoney(draft, -lost)
   addFatigue(draft, 40)
   if (lost > 0) notice(draft, `Разбитых обобрали: потеряно ${lost}.`)
+  // Вещь с чарами теряется там же, где кошель (этап 60, А6): взявший поле
+  // берёт и то, что на нём осталось.
+  if (draft.artifacts.length > 0) {
+    const [taken, afterTake] = rollChance(draft.rng, LOSE_CHANCE)
+    draft.rng = afterTake
+    if (taken) {
+      const [pick, afterPick] = nextInt(draft.rng, 0, draft.artifacts.length - 1)
+      draft.rng = afterPick
+      const gone = draft.artifacts[pick]
+      draft.artifacts = draft.artifacts.filter((_, index) => index !== pick)
+      const def = gone ? artifactDef(gone.defId) : null
+      if (def) notice(draft, `${def.label} остался на поле. Теперь он чужой.`, 'war')
+    }
+  }
 
   const captor = foeId ?? 'bandits'
   const [outcome, afterOutcome] = defeatOutcome(
@@ -3083,11 +3141,15 @@ function giveFood(state: GameState, amount: number): CommandResult {
 
 /** Что стоит за приказом кругу: сильнейшее известное заклинание рода. */
 function spellInBattle(
-  character: Character,
+  state: GameState,
   family: 'fire' | 'curse' | 'ward',
 ): { readonly power: number; readonly label: string } | null {
-  const spell = bestSpell(character, family)
-  return spell ? { power: battlePower(character, family), label: spell.label } : null
+  const spell = bestSpell(state.character, family)
+  if (!spell) return null
+  // Мастерство и вещи с чарами считаются здесь (этап 60, А5 и А6): круг бьёт
+  // тем, что маг знает, — и тем сильнее, чем чаще он это делал.
+  const power = battlePower(state.character, family) * spellPower(state, spell, dayOf(state.time))
+  return { power, label: spell.label }
 }
 
 /**
@@ -3120,13 +3182,92 @@ function cast(state: GameState, spellId: string): CommandResult {
   advance(draft, spell.minutes)
   addFatigue(draft, spell.fatigue)
   practice(draft, 'magic', 6 + spell.requiredSkill / 4)
-  const [done, afterRoll] = rollChance(draft.rng, castChance(magic, spell))
+  const day = dayOf(draft.time)
+  // Заклинание как ремесло (этап 60, А5): мастерство добавляет к удаче, но
+  // ничего не открывает — открывает по-прежнему навык.
+  const mastery = masteryOf(craftOf(state, spell.id), day)
+  const luck = Math.min(0.97, castChance(magic, spell) + masteryLuck(mastery))
+  const [done, afterRoll] = rollChance(draft.rng, luck)
   draft.rng = afterRoll
+  // Засечка ставится и за неудачу: учит и она.
+  draft.spellcraft = withUse(draft.spellcraft, spell.id, day)
+  magicSeen(draft, spell)
   if (!done) {
     notice(draft, `«${spell.label}» не далось: сила ушла в песок.`)
     return close(draft)
   }
   applySpell(draft, spell)
+  const grown = masteryOf(craftOf(draft, spell.id), day)
+  if (grown > mastery) {
+    notice(draft, `«${spell.label}» идёт ${masteryWord(grown)}: это уже твоё.`, 'people')
+  }
+  return close(draft)
+}
+
+/**
+ * Цена магии (этап 60, А4).
+ *
+ * Чары творят не в пустоте. Деревня видит то, чего не понимает, и запоминает
+ * это надолго; город видел всякое. Храм не любит чужой силы, а брат церковного
+ * ордена отвечает перед своими за то, что делает своими руками.
+ */
+function magicSeen(draft: Draft, spell: SpellDef): void {
+  const settlement = draft.settlements[draft.locationId]
+  if (!settlement || settlement.population <= 0) return
+  const chill = fearOf(settlement.population)
+  draft.reputation = withPlaceRep(draft.reputation, draft.locationId, chill)
+  const priest = priestAt(draft.base.world, draft.settlements, draft.locationId)
+  if (priest) {
+    draft.piety = Math.max(-100, Math.min(100, draft.piety + FEAR_PIETY))
+  }
+  const own = ownOrder(draft.base)
+  if (own?.kind === 'church') {
+    addStanding(draft, FEAR_STANDING, `${own.name}: колдовство своими руками.`)
+  }
+  if (chill <= -5) {
+    notice(
+      draft,
+      `${draft.base.world.locations[draft.locationId]?.name ?? 'Место'} видело, что ты делал. Здесь это не забудут.`,
+      'people',
+    )
+  }
+  void spell
+}
+
+/**
+ * Упражняться в чарах (этап 60, А5).
+ *
+ * В школе есть с кем повторять и кому смотреть на руки: четыре повторения за
+ * шесть часов против одного в поле. Ступени это не открывает — только доводит
+ * то, что уже знаешь.
+ */
+function honeSpell(state: GameState, spellId: string): CommandResult {
+  const spell = SPELLS_BY_ID[spellId]
+  if (!spell) return fail('unknownAction', 'Такого заклинания нет.')
+  const magic = skillLevel(state.character, 'magic')
+  if (magic < spell.requiredSkill) {
+    return fail('requirements', `«${spell.label}» тебе пока не даётся вовсе.`)
+  }
+  if (!schoolAt(state.world, state.locationId)) {
+    return fail('unavailableHere', 'Упражняются там, где есть школа: нужен тот, кто поправит.')
+  }
+  const blocked = checkFatigue(state.character, 25)
+  if (blocked) return blocked
+
+  const draft = open(state)
+  const day = dayOf(draft.time)
+  const before = masteryOf(craftOf(state, spell.id), day)
+  advance(draft, hours(HONE_HOURS))
+  addFatigue(draft, 25)
+  practice(draft, 'magic', 8)
+  draft.spellcraft = withUses(draft.spellcraft, spell.id, HONE_USES, day)
+  const after = masteryOf(craftOf(draft, spell.id), day)
+  notice(
+    draft,
+    after > before
+      ? `«${spell.label}» идёт ${masteryWord(after)}: повторение взяло своё.`
+      : `«${spell.label}» повторено ${HONE_USES} раза. Пока то же, но ближе.`,
+  )
   return close(draft)
 }
 
@@ -3191,6 +3332,19 @@ function applySpell(draft: Draft, spell: SpellDef): void {
       draft.character = { ...draft.character, insight: true }
       notice(draft, `«${spell.label}»: видно, где лежит. Осталось взять.`)
       return
+    case 'weather': {
+      // Погода по зову (этап 60, А3): её зовут на место и на считанные сутки.
+      const until = dayOf(draft.time) + effect.days
+      draft.weather = [
+        ...draft.weather.filter(
+          (one) => !(one.locationId === draft.locationId && one.kind === effect.weather),
+        ),
+        { locationId: draft.locationId, kind: effect.weather, untilDay: until },
+      ]
+      const words = WEATHER_LABELS[effect.weather]
+      notice(draft, `«${spell.label}»: ${words.label}. ${words.about}`, 'world')
+      return
+    }
     case 'mend': {
       const ship = draft.ship
       if (!ship) {
@@ -4082,6 +4236,64 @@ function search(state: GameState): CommandResult {
     draft.reputation = withPlaceRep(draft.reputation, state.locationId, -12)
     seeDeed(draft, 'sack')
   }
+  // Вещь с чарами (этап 60, А6): её находит тот, кто знает, на что смотреть.
+  // Без магии в глуши лежит просто старое железо.
+  const magic = skillLevel(state.character, 'magic')
+  if (magic >= 15) {
+    const [lucky, afterLucky] = rollChance(draft.rng, FIND_CHANCE)
+    draft.rng = afterLucky
+    if (lucky) {
+      const reachable = ARTIFACTS.filter((one) => one.needsMagic <= magic + 10)
+      const [pick, afterPick] = nextInt(draft.rng, 0, Math.max(0, reachable.length - 1))
+      draft.rng = afterPick
+      const def = reachable[pick]
+      if (def) {
+        draft.artifacts = [
+          ...draft.artifacts,
+          {
+            id: `${def.id}:${dayOf(draft.time)}`,
+            defId: def.id,
+            found: 'wild',
+            day: dayOf(draft.time),
+          },
+        ]
+        notice(draft, `Среди прочего — ${def.label.toLowerCase()}. ${def.about}`, 'world')
+      }
+    }
+  }
+  return close(draft)
+}
+
+/**
+ * Сделать вещь с чарами (этап 60, А6).
+ *
+ * В школе есть тигли, книги и тот, кто скажет, где ты ошибся. Работа долгая и
+ * дорогая: артефакт — не покупка, а месяц труда.
+ */
+function makeArtifact(state: GameState, defId: string): CommandResult {
+  const def = ARTIFACTS_BY_ID[defId]
+  if (!def) return fail('unknownAction', 'Такой вещи не делают.')
+  if (!schoolAt(state.world, state.locationId)) {
+    return fail('unavailableHere', 'Такое делают в школе: нужны тигли и тот, кто поправит.')
+  }
+  const magic = skillLevel(state.character, 'magic')
+  if (magic < def.needsMagic) {
+    return fail('requirements', `За такое берутся с навыка ${def.needsMagic}, у тебя ${magic}.`)
+  }
+  if (state.character.money < def.price) {
+    return fail('noMoney', `Работа стоит ${def.price}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -def.price)
+  advance(draft, hours(24 * def.days))
+  addFatigue(draft, 30)
+  practice(draft, 'magic', 20)
+  draft.artifacts = [
+    ...draft.artifacts,
+    { id: `${def.id}:${dayOf(draft.time)}`, defId: def.id, found: 'made', day: dayOf(draft.time) },
+  ]
+  notice(draft, `${def.label} готов. ${def.about}`, 'world')
   return close(draft)
 }
 
@@ -6134,6 +6346,9 @@ interface Draft {
   siege: Siege | null
   captives: readonly Captive[]
   orderSway: OrderSway
+  spellcraft: Spellcraft
+  weather: readonly Weather[]
+  artifacts: readonly Artifact[]
   interdicts: readonly Interdict[]
   brotherhood: Brotherhood | null
   renown: number
@@ -6187,6 +6402,9 @@ function open(state: GameState): Draft {
     siege: state.siege,
     captives: state.captives ?? [],
     orderSway: state.orderSway ?? startSway(),
+    spellcraft: state.spellcraft ?? {},
+    weather: state.weather ?? [],
+    artifacts: state.artifacts ?? [],
     interdicts: state.interdicts ?? [],
     brotherhood: state.brotherhood ?? null,
     renown: state.renown,
@@ -6196,6 +6414,60 @@ function open(state: GameState): Draft {
     over: state.over,
     base: state,
     events: [],
+  }
+}
+
+/**
+ * Где архимаг держит мор (этап 60, А1).
+ *
+ * Если тот, кто отводит мор, стоит именно здесь, смерть идёт вполовину — как
+ * при лекаре. Это и есть разница между «занят» и «занят чем-то».
+ */
+function wardingArchmage(politics: Politics, locationId: string): string | null {
+  for (const mage of Object.values(politics.archmages)) {
+    if (mage.deed === 'plague' && mage.locationId === locationId) return locationId
+  }
+  return null
+}
+
+/**
+ * Год, который поправили (этап 60, А1 и А3).
+ *
+ * Ветер архимага ложится на всю его корону, позванный дождь — на провинцию, где
+ * его звали. И то и другое считается на жатве и прибавляется к тому, что
+ * выросло само.
+ */
+function blessedHarvest(draft: Draft): void {
+  const world = draft.base.world
+  const bonuses = new Map<string, number>()
+  for (const mage of Object.values(draft.politics.archmages)) {
+    if (mage.deed !== 'wind') continue
+    for (const [id, settlement] of Object.entries(draft.settlements)) {
+      if (kingdomOf(world, id)?.id !== mage.kingdomId) continue
+      void settlement
+      bonuses.set(id, (bonuses.get(id) ?? 0) + WIND_HARVEST)
+    }
+  }
+  const today = dayOf(draft.time)
+  for (const called of draft.weather) {
+    if (called.kind !== 'rain' || called.untilDay < today) continue
+    const province = world.locations[called.locationId]?.provinceId
+    if (!province) continue
+    for (const id of world.provinces[province]?.locationIds ?? []) {
+      bonuses.set(id, (bonuses.get(id) ?? 0) + RAIN_HARVEST)
+    }
+  }
+  if (bonuses.size === 0) return
+  const next = { ...draft.settlements }
+  for (const [id, bonus] of bonuses) {
+    const settlement = next[id]
+    if (!settlement) continue
+    next[id] = { ...settlement, harvest: Math.round((settlement.harvest + bonus) * 100) / 100 }
+  }
+  draft.settlements = next
+  const mine = bonuses.get(draft.locationId)
+  if (mine !== undefined) {
+    notice(draft, 'Год на этих полях вышел лучше, чем шёл. Об этом будут помнить.', 'world')
   }
 }
 
@@ -6248,6 +6520,12 @@ function close(draft: Draft): CommandResult {
       draft.events.push(...bandNews(draft.base, draft.locationId, march.events))
     }
 
+    // Позванная погода держится считанные сутки и уходит сама (этап 60, А3).
+    const today = dayOf(draft.time)
+    if (draft.weather.some((one) => one.untilDay < today)) {
+      draft.weather = draft.weather.filter((one) => one.untilDay >= today)
+    }
+
     // Ордена живут свою жизнь (этап 59, О3): растут на своих землях и сходятся
     // там, где стоят враждующие. Свара братьев людям дорога.
     for (let i = 0; i < daysPassed; i += 1) {
@@ -6272,7 +6550,9 @@ function close(draft: Draft): CommandResult {
           draft.cleansed.untilDay >= dayOf(draft.time) &&
           draft.cleansed.locationId === draft.locationId)
           ? draft.locationId
-          : null
+          : // Архимаг, отводящий мор, держит смерть там, где стоит (этап 60, А1):
+            // «занят» теперь значит чем-то и для тех, кто его никогда не видел.
+            (wardingArchmage(draft.politics, draft.locationId) ?? null)
       const sick = tickPlague(draft.base.world, draft.settlements, draft.plagues, draft.rng, healer)
       draft.plagues = sick.plagues
       draft.settlements = sick.settlements
@@ -6299,6 +6579,9 @@ function close(draft: Draft): CommandResult {
       draft.settlements = harvest.settlements
       draft.rng = harvest.rng
       draft.events.push(...harvestNews(draft.world, draft.locationId, harvest.events))
+      // Позванная погода и ветер архимага правят год там, где их звали (этап
+      // 60, А1 и А3). Считается на жатве, вместе со всем прочим.
+      blessedHarvest(draft)
     }
 
     // Договоры корон: отношение, союзы, дань — и общий страх перед тем, кто
@@ -6417,6 +6700,9 @@ function close(draft: Draft): CommandResult {
     siege: draft.siege,
     captives: draft.captives,
     orderSway: draft.orderSway,
+    spellcraft: draft.spellcraft,
+    weather: draft.weather,
+    artifacts: draft.artifacts,
     interdicts: draft.interdicts,
     brotherhood: draft.brotherhood,
     renown: draft.renown,
@@ -6558,6 +6844,17 @@ function warNews(
         refused: 'архимаг короны отказался служить',
       }
       news.push({ type: 'notice', kind: 'war', text: `Говорят, ${words[event.state]}.` })
+      continue
+    }
+
+    // Архимаг взялся за дело (этап 60, А1): «занят» теперь значит чем-то.
+    if (event.type === 'archmageDeed') {
+      const deed = ARCHMAGE_DEED_LABELS[event.deed]
+      news.push({
+        type: 'notice',
+        kind: 'war',
+        text: `Архимаг короны ${kingdomName(event.kingdomId)}: ${deed.label}. ${deed.about}`,
+      })
       continue
     }
 

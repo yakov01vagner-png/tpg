@@ -1,5 +1,6 @@
 import { type BattleSide, type Units, resolveRound, startBattle, unitsSize } from './battle'
 import type { GroupId, OrderId } from './battle'
+import { WAR_MAGES } from './content/lore'
 import type { TroopId } from './content/troops'
 import type { Settlement } from './economy'
 import { takeLand } from './holding'
@@ -176,7 +177,11 @@ export function musterBands(
     for (const settlement of Object.values(settlements)) {
       if (settlement.owner === crown) people += settlement.population
     }
-    const [units, next] = retinue(Math.max(12, Math.round(people / 55)), generator)
+    const [units, next] = retinue(
+      Math.max(12, Math.round(people / 55)),
+      generator,
+      magesFor(politics, kingdomId),
+    )
     generator = next
     bands.push({
       id: `band:${crown}`,
@@ -194,7 +199,7 @@ export function musterBands(
   for (const lord of politics.lords) {
     const seat = seatOf(settlements, lord.id)
     if (!seat) continue
-    const [units, next] = retinue(lord.strength, generator)
+    const [units, next] = retinue(lord.strength, generator, magesFor(politics, lord.kingdomId))
     generator = next
     bands.push({
       id: `band:${lord.id}`,
@@ -211,8 +216,14 @@ export function musterBands(
   return [bands, generator]
 }
 
-/** Состав дружины по силе лорда: от ополчения до латников. */
-export function retinue(strength: number, rng: Rng): [Units, Rng] {
+/**
+ * Состав дружины по силе лорда: от ополчения до латников.
+ *
+ * С версии 0.6 (этап 60, А2) в строю бывает круг: когда архимаг короны при
+ * войске, с дружинами идут маги, и это видно по потерям — не в описании, а в
+ * отчёте века.
+ */
+export function retinue(strength: number, rng: Rng, mages = 0): [Units, Rng] {
   const [roll, next] = nextFloat(rng)
   const size = Math.max(6, Math.round(strength * (0.7 + roll * 0.6)))
   const units: Partial<Record<TroopId, number>> = {
@@ -221,7 +232,14 @@ export function retinue(strength: number, rng: Rng): [Units, Rng] {
     archer: Math.max(1, Math.round(size * 0.2)),
     manAtArms: Math.max(1, Math.round(size * 0.1)),
   }
+  if (mages > 0) units.mage = mages
   return [units, next]
+}
+
+/** Сколько магов даёт корона этой дружине: столько, сколько привёл архимаг. */
+export function magesFor(politics: Politics, kingdomId: string | null): number {
+  if (!kingdomId) return 0
+  return politics.archmages[kingdomId]?.deed === 'war' ? WAR_MAGES : 0
 }
 
 /**
@@ -498,7 +516,7 @@ const AI_ORDERS: Record<GroupId, OrderId> = {
   archers: 'shoot',
   flank: 'flank',
   reserve: 'hold',
-  mages: 'ward',
+  mages: 'fireball',
 }
 
 export interface ClashResult {
@@ -603,7 +621,11 @@ export function tickBands(
     if (withBand.has(lord.id)) continue
     const seat = seatOf(places, lord.id)
     if (!seat) continue
-    const [units, afterRetinue] = retinue(lord.strength, generator)
+    const [units, afterRetinue] = retinue(
+      lord.strength,
+      generator,
+      magesFor(politics, lord.kingdomId),
+    )
     generator = afterRetinue
     raised.push({
       id: `band:${lord.id}`,

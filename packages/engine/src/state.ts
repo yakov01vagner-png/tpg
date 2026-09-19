@@ -19,6 +19,7 @@ import type { Home } from './home'
 import type { Journey } from './journey'
 import type { Knowledge } from './knowledge'
 import { startKnowledge } from './knowledge'
+import type { Artifact, Spellcraft, Weather } from './lore'
 import { EMPTY_PRICE_LOG, type PriceLog } from './market'
 import type { Dealing } from './merchant'
 import type { Interdict, Membership } from './order'
@@ -201,6 +202,15 @@ export interface GameState {
   readonly interdicts?: readonly Interdict[]
   /** Своё братство, если основано (этап 59, О6). */
   readonly brotherhood?: Brotherhood | null
+  /**
+   * Заклинание как ремесло (этап 60, А5): сколько раз творили каждое и когда в
+   * последний раз. Необязательно — сейвы до 0.6 мастерства не знают.
+   */
+  readonly spellcraft?: Spellcraft
+  /** Позванная погода: где, какая и до какого дня (этап 60, А3). */
+  readonly weather?: readonly Weather[]
+  /** Вещи с чарами: найденные и сделанные (этап 60, А6). */
+  readonly artifacts?: readonly Artifact[]
   /** Своё владение, если провозглашено. */
   readonly realm: { readonly name: string } | null
   /** Взятые поручения. */
@@ -259,6 +269,9 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     ship: null,
     guild: null,
     orderSway: startSway(),
+    spellcraft: {},
+    weather: [],
+    artifacts: [],
     interdicts: [],
     brotherhood: null,
     battle: null,

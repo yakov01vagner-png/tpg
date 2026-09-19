@@ -129,12 +129,12 @@ describe('О2 и О4: ступень — власть', () => {
     const top = inOrder(order.id, 200)
     expect(rankOf(order, 200)).toBe(order.ranks.length - 1)
     expect(canWield(top, 'send').can).toBe(true)
+    const seat = top.settlements[top.locationId]
+    expect(seat).toBeDefined()
+    if (!seat) return
     const troubled: GameState = {
       ...top,
-      settlements: {
-        ...top.settlements,
-        [top.locationId]: { ...top.settlements[top.locationId]!, banditry: 0.6 },
-      },
+      settlements: { ...top.settlements, [top.locationId]: { ...seat, banditry: 0.6 } },
     }
     const sent = ok(applyCommand(troubled, { type: 'orderSend', locationId: top.locationId }))
     console.log(

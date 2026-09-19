@@ -1,4 +1,5 @@
 import type { BattleSide } from './battle'
+import { ARCHMAGE_DEED_LABELS, ARCHMAGE_NAMES, type ArchmageDeed, DEED_DAYS } from './content/lore'
 import type { TroopId } from './content/troops'
 import { LORD_NAMES, LORD_TITLES } from './content/world'
 import type { Settlement } from './economy'
@@ -6,6 +7,7 @@ import { PLAYER } from './holding'
 import { foodSecurity } from './life'
 import type { Rng } from './rng'
 import { nextFloat, nextInt, rollChance } from './rng'
+import { kingdomOf } from './world/queries'
 import type { World } from './world/types'
 
 /**
@@ -45,12 +47,30 @@ export interface Lord {
 /**
  * Архимаг короны (DESIGN.md, п.8): естественный ограничитель мятежей.
  * Своеволен — бывает свободен, занят или вовсе отказался служить.
+ *
+ * С версии 0.6 (этап 60, А1) у него есть имя и дело: «занят» значит чем-то.
+ * Он отводит мор, зовёт ветер над полями своей короны, идёт при войске — или
+ * уходит в затвор, и тогда его нет ни для кого. Дело решает, что он делает с
+ * миром, а `state` остаётся тем же, чем был: свободен, занят, отказался.
  */
 export interface Archmage {
   readonly kingdomId: string
   readonly state: 'free' | 'busy' | 'refused'
   /** До какого дня он в этом состоянии. */
   readonly untilDay: number
+  /** Чем занят. Необязательно — сейвы до 0.6 дел архимага не знают. */
+  readonly deed?: ArchmageDeed
+  /** Как его зовут. */
+  readonly name?: string
+  /** Где он сейчас, если дело привязано к месту. */
+  readonly locationId?: string | null
+}
+
+/** Что делает дело со `state`: свободен только тот, кто при дворе. */
+export function stateOfDeed(deed: ArchmageDeed): Archmage['state'] {
+  if (deed === 'court') return 'free'
+  if (deed === 'retreat') return 'refused'
+  return 'busy'
 }
 
 /** Договор о дани: проигравший платит победителю, пока срок не вышел. */
@@ -160,7 +180,19 @@ export function createPolitics(
   const usedNames = new Set<string>()
 
   for (const kingdom of Object.values(world.kingdoms)) {
-    archmages[kingdom.id] = { kingdomId: kingdom.id, state: 'free', untilDay: 0 }
+    // Имя даётся раз и навсегда: архимаг — человек, а не должность (этап 60).
+    const name =
+      ARCHMAGE_NAMES[
+        Object.keys(world.kingdoms).indexOf(kingdom.id) % Math.max(1, ARCHMAGE_NAMES.length)
+      ] ?? 'Безымянный'
+    archmages[kingdom.id] = {
+      kingdomId: kingdom.id,
+      state: 'free',
+      untilDay: 0,
+      deed: 'court',
+      name,
+      locationId: kingdom.capitalId,
+    }
     const crown = `crown:${kingdom.id}`
     const titles = LORD_TITLES[kingdom.id] ?? LORD_TITLES.reEstiz ?? ['барон']
     let index = 0
@@ -239,6 +271,7 @@ export type WarEvent =
   | { readonly type: 'peace'; readonly war: War }
   | { readonly type: 'rebellion'; readonly lordId: string }
   | { readonly type: 'archmage'; readonly kingdomId: string; readonly state: Archmage['state'] }
+  | { readonly type: 'archmageDeed'; readonly kingdomId: string; readonly deed: ArchmageDeed }
   | { readonly type: 'tribute'; readonly tribute: Tribute }
 
 export interface PoliticsResult {
@@ -381,17 +414,54 @@ function tickLords(
   let wars = [...politics.wars]
   let places = settlements
 
-  // Архимаг то занят своими делами, то снова свободен.
+  // Архимаг берётся за дело, кончает его и берётся за следующее (этап 60, А1).
+  // «Занят» больше не бросок кубика: у занятости есть имя и есть последствия.
   for (const kingdomId of Object.keys(archmages)) {
     const current = archmages[kingdomId]
     if (!current || politics.lastDay + days < current.untilDay) continue
     const [roll, afterRoll] = nextFloat(generator)
     generator = afterRoll
-    const state: Archmage['state'] = roll < 0.55 ? 'free' : roll < 0.9 ? 'busy' : 'refused'
-    const [span, afterSpan] = nextInt(generator, 20, 90)
+    // Мор зовёт сильнее прочего: где умирают, туда он и идёт.
+    const sick = Object.values(places).find(
+      (one) =>
+        one.population > 0 &&
+        kingdomOf(world, one.locationId)?.id === kingdomId &&
+        one.strain > 0.6,
+    )
+    // Доли те же, что были до этапа 60: при дворе 55 из ста, занят 35, в
+    // затворе 10. Архимаг при дворе — то, что держит вассалов от мятежа, и
+    // менять это число значило бы менять политику мира, а не магию в нём.
+    const deed: ArchmageDeed =
+      roll < 0.55
+        ? 'court'
+        : roll < 0.68
+          ? sick
+            ? 'plague'
+            : 'wind'
+          : roll < 0.8
+            ? 'wind'
+            : roll < 0.9
+              ? 'war'
+              : 'retreat'
+    const [span, afterSpan] = nextInt(generator, DEED_DAYS.min, DEED_DAYS.max)
     generator = afterSpan
+    const state = stateOfDeed(deed)
+    const where =
+      deed === 'plague'
+        ? (sick?.locationId ?? world.kingdoms[kingdomId]?.capitalId ?? null)
+        : deed === 'retreat'
+          ? null
+          : (world.kingdoms[kingdomId]?.capitalId ?? null)
     if (state !== current.state) events.push({ type: 'archmage', kingdomId, state })
-    archmages[kingdomId] = { kingdomId, state, untilDay: politics.lastDay + days + span }
+    if (deed !== current.deed) events.push({ type: 'archmageDeed', kingdomId, deed })
+    archmages[kingdomId] = {
+      ...current,
+      kingdomId,
+      state,
+      untilDay: politics.lastDay + days + span,
+      deed,
+      locationId: where,
+    }
   }
 
   // Кто чем владеет — один проход по миру на такт, а не по проходу на лорда.
