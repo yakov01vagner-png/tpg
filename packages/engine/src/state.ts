@@ -10,8 +10,10 @@ import type { ChainProgress } from './chain'
 import type { Character } from './character'
 import type { Generation, Marks } from './chronicle'
 import type { Companion } from './companion'
+import type { Commission, Company } from './company'
 import type { Congress, CongressRecord } from './congress'
 import type { BuildingId } from './content/buildings'
+import { COMPANIES } from './content/companies'
 import { PLAIN_LAW } from './content/estate'
 import type { Ailment } from './content/heal'
 import type { LordDeedId } from './content/lords'
@@ -338,6 +340,13 @@ export interface GameState {
    * открыть ворота. Приказ даётся заранее — под стенами спрашивать некогда.
    */
   readonly garrisons?: Readonly<Record<string, GarrisonOrder>>
+  /**
+   * Вольные роты (этап 86): кому служат, сколько их осталось и сколько им
+   * должны. Сами роты — содержимое; здесь только то, что меняется.
+   */
+  readonly companies?: readonly Company[]
+  /** Своя рота: сговор с короной, у которой ты в наёмниках. */
+  readonly commission?: Commission | null
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -441,6 +450,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     campaign: null,
     dispatches: [],
     garrisons: {},
+    companies: startingCompanies(world),
+    commission: null,
     factions: {},
     spellcraft: {},
     weather: [],
@@ -495,4 +506,28 @@ export function appendLog(
   }
   if (entries.length === 0) return log
   return [...log, ...entries].slice(-LOG_LIMIT)
+}
+
+/**
+ * Роты, с которых начинается мир (этап 86, Н1).
+ *
+ * Они есть до игрока и живут без него: стоят там, где их застали, никому не
+ * служат и кормятся чем придётся. Наниматель — дело наживное.
+ */
+function startingCompanies(world: World): readonly Company[] {
+  // Роту застают там, где она стояла: место выводится из её имени и мира, а не
+  // из броска, — как купцы (этап 49) и крепости (этап 85).
+  const places = Object.values(world.locations)
+    .filter((one) => one.population > 0)
+    .map((one) => one.id)
+  return COMPANIES.map((def, index) => ({
+    id: def.id,
+    men: def.men,
+    hiredBy: null,
+    untilDay: 0,
+    owed: 0,
+    unpaidDays: 0,
+    fame: 0,
+    locationId: places[(index * 37 + def.men) % Math.max(1, places.length)] ?? '',
+  }))
 }

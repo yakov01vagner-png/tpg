@@ -85,6 +85,23 @@ import {
   wishOf,
   witness,
 } from './companion'
+import type { Commission, Company } from './company'
+import {
+  COMPANY,
+  commissionOffer,
+  companiesOf,
+  companyById,
+  companyDef,
+  companyUnits,
+  hireBids,
+  hiringCrowns,
+  idleHarm,
+  patienceLeft,
+  rivalsFor,
+  treacheryChance,
+  upfrontFor,
+  wageOf,
+} from './company'
 import {
   CONGRESS_COST,
   type Congress,
@@ -116,6 +133,7 @@ import { BUILDINGS } from './content/buildings'
 import { TOURNEY_FEE, TOURNEY_PURSE } from './content/castle'
 import { ENVOY_FAVOUR } from './content/casus'
 import type { ChainDef } from './content/chains'
+import { COMPANY_WORDS, TEMPER_DEFS } from './content/companies'
 import type { CompanionDef, DeedId } from './content/companions'
 import { COMPANIONS, DEED_LABELS, TEMPERS } from './content/companions'
 import { CRAFT_MASTERS } from './content/craft'
@@ -924,6 +942,12 @@ export type Command =
       readonly locationId: string
       readonly order: GarrisonOrder
     }
+  /** Наёмники (этап 86): нанять роту, заплатить, распустить, наняться самому. */
+  | { readonly type: 'hireCompany'; readonly companyId: string; readonly days: number }
+  | { readonly type: 'payCompany'; readonly companyId: string }
+  | { readonly type: 'dismissCompany'; readonly companyId: string }
+  | { readonly type: 'takeCommission'; readonly kingdomId: string; readonly days: number }
+  | { readonly type: 'leaveCommission' }
   /** Съезд корон (этап 83): созвать, купить голос. */
   | {
       readonly type: 'callCongress'
@@ -1378,6 +1402,16 @@ export function applyCommand(
       return stockFort(state, command.locationId, command.days)
     case 'garrisonOrder':
       return garrisonOrder(state, command.locationId, command.order)
+    case 'hireCompany':
+      return hireCompany(state, command.companyId, command.days)
+    case 'payCompany':
+      return payCompany(state, command.companyId)
+    case 'dismissCompany':
+      return dismissCompany(state, command.companyId)
+    case 'takeCommission':
+      return takeCommission(state, command.kingdomId, command.days)
+    case 'leaveCommission':
+      return leaveCommission(state)
     case 'callCongress':
       return callCongress(state, command.question, command.about)
     case 'buyVote':
@@ -9250,6 +9284,8 @@ interface Draft {
   campaign: Campaign | null
   dispatches: readonly Dispatch[]
   garrisons: Readonly<Record<string, GarrisonOrder>>
+  companies: readonly Company[]
+  commission: Commission | null
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9339,6 +9375,8 @@ function open(state: GameState): Draft {
     campaign: state.campaign ?? null,
     dispatches: state.dispatches ?? [],
     garrisons: state.garrisons ?? {},
+    companies: state.companies ?? [],
+    commission: state.commission ?? null,
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9629,6 +9667,9 @@ function close(draft: Draft): CommandResult {
 
     // Войско ест каждый день, а донесения идут своим ходом (этап 84, Ка3 и Ка5).
     tickCampaign(draft, daysPassed)
+    // Роты служат, требуют жалованья и уходят к тому, кто платит больше
+    // (этап 86, Н2 и Н3); без нанимателя они кормятся разбоем (Н5).
+    tickCompanies(draft, daysPassed)
     // Съезд собирается в назначенный день (этап 83, Е4).
     holdCongress(draft)
     // Соглядатаев берут за руку, а слухи стихают (этап 82, С4 и С6).
@@ -9744,6 +9785,8 @@ function close(draft: Draft): CommandResult {
     campaign: draft.campaign,
     dispatches: draft.dispatches,
     garrisons: draft.garrisons,
+    companies: draft.companies,
+    commission: draft.commission,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -10707,6 +10750,311 @@ function garrisonOrder(state: GameState, locationId: string, order: GarrisonOrde
     'world',
   )
   return close(draft)
+}
+
+/**
+ * Нанять вольную роту (этап 86, Н1 и Н2).
+ *
+ * Рота — не отряд, который слушается: у неё есть имя, нрав и цена. Платят
+ * задаток вперёд, дальше капает жалованье; кончились деньги — кончилась и
+ * служба, и кончится она не молча (Н3).
+ */
+function hireCompany(state: GameState, companyId: string, days: number): CommandResult {
+  const company = companyById(state, companyId)
+  if (!company) return fail('invalid', 'Такой роты нет.')
+  if (company.hiredBy === PLAYER) return fail('invalid', 'Эта рота и так твоя.')
+  if (!Number.isInteger(days) || days < COMPANY.shortest || days > COMPANY.longest) {
+    return fail('invalid', `Нанимают от ${COMPANY.shortest} до ${COMPANY.longest} суток.`)
+  }
+  if (company.locationId !== state.locationId) {
+    return fail('unavailableHere', `${companyDef(companyId).name} стоит не здесь.`)
+  }
+  const def = companyDef(companyId)
+  const upfront = upfrontFor(company)
+  if (state.character.money < upfront) {
+    return fail('noMoney', `Задаток ${upfront}, у тебя ${state.character.money}.`)
+  }
+  // Занятую роту перекупают: капитан слушает того, кто кладёт больше.
+  if (company.hiredBy && company.hiredBy !== PLAYER) {
+    const paying = wageOf(company)
+    if (upfront < paying * COMPANY.outbid) {
+      return fail(
+        'requirements',
+        `${def.name} в службе: перебить цену — ${Math.round(paying * COMPANY.outbid)} задатком.`,
+      )
+    }
+  }
+
+  const draft = open(state)
+  const day = dayOf(draft.time)
+  addMoney(draft, -upfront)
+  advance(draft, hours(4))
+  draft.companies = companiesOf(draft).map((one) =>
+    one.id === companyId
+      ? {
+          ...one,
+          hiredBy: PLAYER,
+          untilDay: day + days,
+          owed: 0,
+          unpaidDays: 0,
+        }
+      : one,
+  )
+  // Нанятая рота встаёт на карту как своя часть (этап 84, Ка5): ею и
+  // распоряжаются приказами, а не уговорами.
+  draft.bands = [
+    ...draft.bands.filter((one) => one.id !== `company:${companyId}`),
+    {
+      id: `company:${companyId}`,
+      lordId: PLAYER,
+      kingdomId: PLAYER,
+      units: companyUnits(company),
+      morale: 75,
+      locationId: state.locationId,
+      travel: null,
+      goal: { type: 'defend', targetId: state.locationId },
+      siegeDays: 0,
+    },
+  ]
+  notice(
+    draft,
+    `${def.name} (${TEMPER_DEFS[def.temper].label}, ${company.men} человек) в службе до ${day + days} дня. Задаток ${upfront}, жалованья ${wageOf(company)} в сутки.`,
+    'war',
+  )
+  return close(draft)
+}
+
+/** Заплатить роте то, что задолжал (Н3). */
+function payCompany(state: GameState, companyId: string): CommandResult {
+  const company = companyById(state, companyId)
+  if (!company) return fail('invalid', 'Такой роты нет.')
+  if (company.hiredBy !== PLAYER) return fail('invalid', 'Эта рота служит не тебе.')
+  if (company.owed <= 0) return fail('invalid', 'Этой роте ты ничего не должен.')
+  if (state.character.money < company.owed) {
+    return fail('noMoney', `Долгу ${company.owed}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -company.owed)
+  advance(draft, hours(1))
+  draft.companies = companiesOf(draft).map((one) =>
+    one.id === companyId ? { ...one, owed: 0, unpaidDays: 0 } : one,
+  )
+  notice(
+    draft,
+    `${companyDef(companyId).name}: долг ${company.owed} отдан, капитан доволен.`,
+    'war',
+  )
+  return close(draft)
+}
+
+/** Распустить роту: честно и с концами. */
+function dismissCompany(state: GameState, companyId: string): CommandResult {
+  const company = companyById(state, companyId)
+  if (!company) return fail('invalid', 'Такой роты нет.')
+  if (company.hiredBy !== PLAYER) return fail('invalid', 'Эта рота служит не тебе.')
+  if (company.owed > 0) {
+    return fail('requirements', `Сперва отдай долг: ${company.owed}.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(2))
+  draft.companies = companiesOf(draft).map((one) =>
+    one.id === companyId ? { ...one, hiredBy: null, untilDay: 0 } : one,
+  )
+  draft.bands = draft.bands.filter((one) => one.id !== `company:${companyId}`)
+  notice(draft, `${companyDef(companyId).name} распущена: срок кончен, слово сдержано.`, 'war')
+  return close(draft)
+}
+
+/**
+ * Наняться самому (этап 86, Н4).
+ *
+ * Своя рота — это ты: корона платит за твоих людей столько же, сколько за
+ * чужих, и считает так же — по числу, по славе и по тому, насколько ей сейчас
+ * нужна война.
+ */
+function takeCommission(state: GameState, kingdomId: string, days: number): CommandResult {
+  if (state.commission) return fail('invalid', 'Ты уже в чужой службе.')
+  if (!Number.isInteger(days) || days < COMPANY.shortest || days > COMPANY.longest) {
+    return fail('invalid', `Нанимаются от ${COMPANY.shortest} до ${COMPANY.longest} суток.`)
+  }
+  const men = partySize(state.party)
+  if (men < 10)
+    return fail('requirements', 'Ротой называется не десяток: нужно хотя бы десять человек.')
+  const offer = hiringCrowns(state, state.world, men).find((one) => one.kingdomId === kingdomId)
+  if (!offer) return fail('requirements', 'Этой короне сейчас не нужны наёмники.')
+
+  const draft = open(state)
+  const day = dayOf(draft.time)
+  advance(draft, hours(6))
+  draft.commission = {
+    kingdomId,
+    sinceDay: day,
+    untilDay: day + days,
+    wage: offer.wage,
+    paid: 0,
+    share: COMPANY.share,
+  }
+  notice(
+    draft,
+    `Ты в службе у ${kingdomName(draft.base, kingdomId)} до ${day + days} дня: ${offer.wage} в сутки за ${men} человек. Воевать против ${kingdomName(draft.base, offer.against)}.`,
+    'war',
+  )
+  return close(draft)
+}
+
+/** Уйти со службы. До срока — с уроном имени. */
+function leaveCommission(state: GameState): CommandResult {
+  const commission = state.commission
+  if (!commission) return fail('invalid', 'Ты никому не служишь.')
+
+  const draft = open(state)
+  const day = dayOf(draft.time)
+  const early = day < commission.untilDay
+  draft.commission = null
+  advance(draft, hours(3))
+  if (early) {
+    draft.renown = Math.max(0, draft.renown - 2)
+    notice(
+      draft,
+      `Ты ушёл со службы раньше срока. Такое помнят: наёмник, бросивший войну, дорожает только для дураков.`,
+      'war',
+    )
+  } else {
+    draft.renown += 2
+    notice(
+      draft,
+      `Срок дослужен честно: ${kingdomName(draft.base, commission.kingdomId)} заплатил сполна.`,
+      'war',
+    )
+  }
+  return close(draft)
+}
+
+/**
+ * Сутки рот (этап 86).
+ *
+ * Здесь рота живёт: служит и ест жалованье, уходит к тому, кто платит больше,
+ * тает без денег и поворачивает оружие, если терпение кончилось. Без
+ * нанимателя она кормится разбоем, и округа это чувствует.
+ */
+function tickCompanies(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  const rows: Company[] = []
+  for (const company of companiesOf(draft)) {
+    let next = company
+    if (next.hiredBy === PLAYER) {
+      const wage = wageOf(next) * days
+      if (draft.character.money >= wage) {
+        addMoney(draft, -Math.round(wage))
+        next = { ...next, unpaidDays: 0 }
+      } else {
+        next = { ...next, owed: next.owed + Math.round(wage), unpaidDays: next.unpaidDays + days }
+      }
+      // Терпение кончилось: одни уходят, другие поворачивают оружие.
+      if (patienceLeft(next) <= 0) {
+        const [betrays, afterRoll] = rollChance(draft.rng, treacheryChance(next))
+        draft.rng = afterRoll
+        const def = companyDef(next.id)
+        if (betrays) {
+          // Повернувшая рота берёт своё сама: из лагеря уходит всё, что в нём
+          // было ценного, а округа получает ещё одну шайку при оружии.
+          const took = Math.min(draft.character.money, next.owed)
+          addMoney(draft, -took)
+          const place = draft.settlements[draft.locationId]
+          if (place) {
+            draft.settlements = {
+              ...draft.settlements,
+              [draft.locationId]: {
+                ...place,
+                banditry: Math.min(1, place.banditry + 0.15),
+              },
+            }
+          }
+          notice(
+            draft,
+            `${def.name} повернула оружие: ${COMPANY_WORDS.turned} Из казны взято ${took}.`,
+            'war',
+          )
+        } else {
+          notice(draft, `${def.name} ушла: ${COMPANY_WORDS.gone}`, 'war')
+        }
+        draft.bands = draft.bands.filter((one) => one.id !== `company:${next.id}`)
+        next = {
+          ...next,
+          hiredBy: null,
+          untilDay: 0,
+          owed: 0,
+          unpaidDays: 0,
+          locationId: draft.locationId,
+        }
+      } else if (next.untilDay > 0 && day >= next.untilDay && next.owed <= 0) {
+        notice(draft, `${companyDef(next.id).name}: срок вышел, рота свободна.`, 'war')
+        draft.bands = draft.bands.filter((one) => one.id !== `company:${next.id}`)
+        next = { ...next, hiredBy: null, untilDay: 0 }
+      }
+    }
+    // Короны нанимают те же роты и теми же деньгами (Н2). Считается по их
+    // войнам и землям, без броска: одна и та же война даёт один и тот же найм.
+    if (!next.hiredBy) {
+      const best = hireBids(draft.base, draft.base.world, next)[0]
+      if (best && best.bid > wageOf(next)) {
+        next = { ...next, hiredBy: best.kingdomId, untilDay: day + 120, owed: 0, unpaidDays: 0 }
+      }
+    } else if (next.hiredBy === PLAYER && next.unpaidDays > 0) {
+      // Кто платит больше — к тому и уходят: должнику роту не удержать.
+      const rival = rivalsFor(draft.base, draft.base.world, next, wageOf(next))[0]
+      if (rival) {
+        notice(
+          draft,
+          `${companyDef(next.id).name} ушла к ${kingdomName(draft.base, rival.kingdomId)}: там платят ${rival.bid} в сутки, а ты должен ${next.owed}.`,
+          'war',
+        )
+        draft.bands = draft.bands.filter((one) => one.id !== `company:${next.id}`)
+        next = { ...next, hiredBy: rival.kingdomId, untilDay: day + 120, owed: 0, unpaidDays: 0 }
+      }
+    }
+
+    // Вольная рота кормится с округи: там, где она стоит, это помнят (Н5).
+    if (!next.hiredBy && next.locationId) {
+      const harm = idleHarm(next)
+      draft.reputation = withPlaceRep(draft.reputation, next.locationId, harm.mood * days)
+      const place = draft.settlements[next.locationId]
+      if (place) {
+        draft.settlements = {
+          ...draft.settlements,
+          [next.locationId]: {
+            ...place,
+            banditry: Math.min(1, place.banditry + harm.banditry * days),
+          },
+        }
+      }
+    }
+    rows.push(next)
+  }
+  draft.companies = rows
+  tickCommission(draft, days)
+}
+
+/** Своя служба: корона платит по суткам, срок кончается сам (Н4). */
+function tickCommission(draft: Draft, days: number): void {
+  const commission = draft.commission
+  if (!commission) return
+  const day = dayOf(draft.time)
+  const paid = Math.round(commission.wage * days)
+  addMoney(draft, paid)
+  draft.commission = { ...commission, paid: commission.paid + paid }
+  if (day >= commission.untilDay) {
+    notice(
+      draft,
+      `Служба кончена: ${kingdomName(draft.base, commission.kingdomId)} заплатил ${commission.paid + paid} за весь срок.`,
+      'war',
+    )
+    draft.renown += 2
+    draft.commission = null
+  }
 }
 
 /**
