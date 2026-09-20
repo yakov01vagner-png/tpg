@@ -268,6 +268,7 @@ import { AILMENT_DEFS, type Ailment, HERB_GOOD, POTIONS, POTIONS_BY_ID } from '.
 import { KIN_ASK, KIN_GIFT, UPBRINGING_MINUTES } from './content/home'
 import { KITH, KITH_ASK_DEFS, KITH_WORDS } from './content/kith'
 import { KNOWN as KNOWN_DEFS } from './content/known'
+import { LIEGE, LIEGE_WORDS, type LordTrouble, TROUBLE_DEFS } from './content/liege'
 import { TEMPER_LINES } from './content/lines'
 import { FACTION_FAVOUR, FACTION_SPITE, type FactionId, type LordDeedId } from './content/lords'
 import {
@@ -606,6 +607,7 @@ import {
   loanWanted,
   mightCost,
 } from './lever'
+import { askOpen, bargainFor, letterFrom, troubleDrift } from './liege'
 import { LIES, lieLedger, mistakeOf, remember, trustOf, trustWords, weigh, whoGains } from './lies'
 import type { HarvestEvent, LifeEvent } from './life'
 import { LIFE, foodSecurity, rollHarvest, tickDays } from './life'
@@ -1216,6 +1218,14 @@ export type Command =
   | { readonly type: 'talk'; readonly speakerId: string; readonly topicId: string }
   /** Помочь спутнику с его делом (этап 54). */
   | { readonly type: 'grantWish'; readonly companionId: string }
+  /** Ответить вассалу на письмо (этап 169, Вл2): исполнить или отказать. */
+  | { readonly type: 'answerLord'; readonly lordId: string; readonly answer: 'yes' | 'no' }
+  /** Переписать присягу (этап 169, Вл4): уступить суд, долю подати или людей. */
+  | {
+      readonly type: 'bargainOath'
+      readonly lordId: string
+      readonly gives: 'justice' | 'share' | 'levy'
+    }
   /** Ответить на просьбу спутника (этап 167, Сп3): да, нет или «погоди». */
   | {
       readonly type: 'answerKith'
@@ -1760,6 +1770,10 @@ export function applyCommand(
       return talk(state, command.speakerId, command.topicId)
     case 'grantWish':
       return grantWish(state, command.companionId)
+    case 'answerLord':
+      return answerLord(state, command.lordId, command.answer)
+    case 'bargainOath':
+      return bargainOath(state, command.lordId, command.gives)
     case 'answerKith':
       return answerKith(state, command.companionId, command.answer)
     case 'buyBook':
@@ -8752,6 +8766,79 @@ function grantWish(state: GameState, companionId: string): CommandResult {
 }
 
 /**
+ * Ответить вассалу (этап 169, Вл2).
+ *
+ * Письмо — не текст, а положение дел: голод в его деревнях, набег, тяжба,
+ * вражда с соседом, выросший сын. Исполненное помнится годами, отказ — тоже, и
+ * молчание считается отказом само (такт).
+ */
+function answerLord(state: GameState, lordId: string, answer: 'yes' | 'no'): CommandResult {
+  const lord = state.politics.lords.find((one) => one.id === lordId)
+  if (!lord) return fail('unknownAction', 'Такого владетеля нет.')
+  const asked = askOpen(state, lordId)
+  if (!asked) return fail('invalid', `${lord.name} тебя ни о чём не просит.`)
+  const def = TROUBLE_DEFS[asked.trouble]
+  if (answer === 'yes' && def.cost > 0 && state.character.money < def.cost) {
+    return fail('noMoney', `Нужно ${def.cost}, а у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(2))
+  if (answer === 'yes' && def.cost > 0) addMoney(draft, -def.cost)
+  shiftLordLoyalty(draft, lordId, answer === 'yes' ? def.grants : def.refused)
+  draft.lordDeeds = withLordDeed(draft.lordDeeds, lordId, answer === 'yes' ? 'gifted' : 'refused')
+  const asks = { ...draft.lordAsks }
+  delete asks[lordId]
+  draft.lordAsks = asks
+  notice(
+    draft,
+    answer === 'yes'
+      ? `${lord.title} ${lord.name}: сделано (${def.asks}).`
+      : `${lord.title} ${lord.name}: отказано (${def.asks}).`,
+    'people',
+  )
+  return close(draft)
+}
+
+/** Переписать присягу (этап 169, Вл4): торг, а не приказ. */
+function bargainOath(
+  state: GameState,
+  lordId: string,
+  gives: 'justice' | 'share' | 'levy',
+): CommandResult {
+  const lord = state.politics.lords.find((one) => one.id === lordId)
+  if (!lord) return fail('unknownAction', 'Такого владетеля нет.')
+  const oath = oathOf(state, lordId)
+  if (!oath) return fail('requirements', `${lord.name} тебе не присягал.`)
+  const deal = bargainFor(state, lord, gives)
+  if (!deal.accepts) return fail('invalid', deal.says)
+
+  const draft = open(state)
+  advance(draft, hours(3))
+  const terms =
+    gives === 'justice'
+      ? { ...oath, justice: true }
+      : gives === 'share'
+        ? { ...oath, share: Math.max(0, Math.round((oath.share - 0.1) * 100) / 100) }
+        : { ...oath, levy: Math.max(0, Math.round((oath.levy - 0.1) * 100) / 100) }
+  draft.oaths = { ...draft.oaths, [lordId]: terms }
+  shiftLordLoyalty(draft, lordId, LIEGE.bargained)
+  notice(draft, `${lord.title} ${lord.name}: ${deal.says}`, 'people')
+  return close(draft)
+}
+
+function shiftLordLoyalty(draft: Draft, lordId: string, delta: number): void {
+  draft.politics = {
+    ...draft.politics,
+    lords: draft.politics.lords.map((one) =>
+      one.id === lordId
+        ? { ...one, loyalty: Math.max(0, Math.min(100, one.loyalty + delta)) }
+        : one,
+    ),
+  }
+}
+
+/**
  * Ответить на просьбу спутника (этап 167, Сп3 и Сп4).
  *
  * Три ответа, и каждый чего-то стоит. «Да» делается сразу, если делается
@@ -10190,6 +10277,8 @@ interface Draft {
   vows: readonly Vow[]
   /** Счёт двора (этап 168). */
   hallLog: { readonly through: number; readonly lost: number }
+  /** Открытые письма вассалов (этап 169). */
+  lordAsks: Readonly<Record<string, { readonly kind: string; readonly day: number }>>
   anointed: { readonly sinceDay: number } | null
   deeds: Readonly<Record<string, number>>
   dreadLog: Readonly<Record<string, { readonly score: number; readonly sinceDay: number }>>
@@ -10461,6 +10550,7 @@ function open(state: GameState): Draft {
     graves: (state.graves ?? []) as readonly Remembered[],
     vows: (state.vows ?? []) as readonly Vow[],
     hallLog: state.hallLog ?? { through: 0, lost: 0 },
+    lordAsks: state.lordAsks ?? {},
     anointed: state.anointed ?? null,
     deeds: state.deeds ?? {},
     dreadLog: state.dreadLog ?? {},
@@ -10895,6 +10985,8 @@ function close(draft: Draft): CommandResult {
     tickKith(draft, daysPassed)
     // Двор считает своё: вражду, выслугу и тех, кто смотрит на сторону (этап 168).
     tickHall(draft, daysPassed)
+    // А вассалы пишут о своём и ждут ответа (этап 169).
+    tickLiege(draft, daysPassed)
     // И сходятся против того, кто ближе всех к концу (этап 136).
     tickLeague(draft, daysPassed)
     // За слабых ручаются, и на зов приходят или не приходят (этап 137).
@@ -11103,6 +11195,7 @@ function close(draft: Draft): CommandResult {
     graves: draft.graves,
     vows: draft.vows,
     hallLog: draft.hallLog,
+    lordAsks: draft.lordAsks,
     anointed: draft.anointed,
     deeds: draft.deeds,
     dreadLog: draft.dreadLog,
@@ -13500,6 +13593,40 @@ function tickAnoint(draft: Draft, days: number): void {
   }
   shiftVassals(draft, world.unrest, null)
   if (day % (FAITH.beat * 18) === 0) notice(draft, world.says, 'world')
+}
+
+/**
+ * Вассалы пишут о своём (этап 169, Вл1–Вл3).
+ *
+ * Раз в месяц у каждого смотрится, что у него случилось, и самое больное
+ * уходит письмом. Неотвеченное через сто двадцать суток считается отказом —
+ * молчание тоже ответ. Беды тянут верность, пока стоят.
+ */
+function tickLiege(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % LIEGE.beat !== 0) return
+  const asks: Record<string, { kind: string; day: number }> = { ...draft.lordAsks }
+  for (const lord of vassalsOf(draft.base)) {
+    const waiting = asks[lord.id]
+    if (waiting) {
+      if (day - waiting.day < LIEGE.waits) continue
+      // Не дождался: это отказ, и он его запомнил.
+      const def = TROUBLE_DEFS[waiting.kind as LordTrouble]
+      shiftLordLoyalty(draft, lord.id, def?.refused ?? -8)
+      draft.lordDeeds = withLordDeed(draft.lordDeeds, lord.id, 'refused')
+      delete asks[lord.id]
+      notice(draft, `${lord.title} ${lord.name}: ${LIEGE_WORDS.waited}`, 'people')
+      continue
+    }
+    const drift = troubleDrift(draft.base, draft.world, lord, day)
+    if (drift !== 0) shiftLordLoyalty(draft, lord.id, drift)
+    const letter = letterFrom(draft.base, draft.world, lord, day)
+    if (!letter) continue
+    asks[lord.id] = { kind: letter.trouble, day }
+    notice(draft, `${LIEGE_WORDS.wrote} ${letter.says}`, 'people')
+  }
+  draft.lordAsks = asks
 }
 
 /**

@@ -80,7 +80,7 @@ import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 29
+export const SCHEMA_VERSION = 30
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -453,6 +453,14 @@ export interface GameState {
   readonly crownDebts?: Readonly<
     Record<string, { readonly owed: number; readonly sinceDay: number }>
   >
+  /**
+   * Письма вассалов (этап 169, Вл2): о чём просит и с какого дня ждёт.
+   *
+   * Беда выводится из мира (голод — по его деревням, набеги — по разбою,
+   * вражда — по соседям), а вот то, что он о ней написал и ждёт ответа, — нет.
+   * Одно открытое письмо на человека: вторая просьба ждёт своей очереди.
+   */
+  readonly lordAsks?: Readonly<Record<string, { readonly kind: string; readonly day: number }>>
   /**
    * Счёт двора (этап 168, Дв6): сколько человек через него прошло и сколько
    * потеряно. История, которой из мира не вывести: нынешний двор помнит только
@@ -926,6 +934,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     graves: [],
     vows: [],
     hallLog: { through: 0, lost: 0 },
+    lordAsks: {},
     anointed: null,
     deeds: {},
     dreadLog: {},

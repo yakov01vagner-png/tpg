@@ -5,6 +5,7 @@ import { citiesOf, cityLedger } from './city'
 import type { Command } from './commands'
 import { companyLedger } from './company'
 import { KNOWN_WORDS } from './content/known'
+import { TROUBLE_DEFS } from './content/liege'
 import { MOULD_WORDS } from './content/mould'
 import { OFFICES, type OfficeId } from './content/offices'
 import { vassalsOf } from './court'
@@ -18,6 +19,7 @@ import { PLAYER, holdingsOf } from './holding'
 import { claimantsOf, heirLawOf, heirUnder, partitionOf, regencyFor, strifeOf } from './inherit'
 import { type Known, askedDef, knownTo, sourceDef, wordsTo } from './known'
 import { leagueNow, whoToCall } from './league'
+import { askOpen, loyaltySays } from './liege'
 import { playStyle, worldOpinion } from './memory'
 import { strengthBoard } from './mind'
 import { mouldOf, paysWith } from './mould'
@@ -273,10 +275,25 @@ export function courtScreen(state: GameState, world: World): Screen {
     {
       label: 'Вассалы',
       value: `${vassals.length}`,
+      // Не «верность 62», а из чего она вышла и что у него сейчас болит
+      // (этап 169, Вл3).
+      hint:
+        vassals.map((one) => loyaltySays(state, world, one, day)).join(' ') ||
+        'Своей знати у тебя нет.',
+    },
+    {
+      label: 'Письма',
+      value: `${Object.keys(state.lordAsks ?? {}).length}`,
       hint:
         vassals
-          .map((one) => `${one.title} ${one.name} — верность ${Math.round(one.loyalty)}`)
-          .join('; ') || 'Своей знати у тебя нет.',
+          .map((one) => {
+            const asked = askOpen(state, one.id)
+            return asked
+              ? `${one.title} ${one.name} просит: ${TROUBLE_DEFS[asked.trouble].asks} (с ${asked.day}-го дня)`
+              : null
+          })
+          .filter((one): one is string => one !== null)
+          .join('; ') || 'Никто не писал.',
     },
     {
       label: 'Должности',

@@ -587,6 +587,11 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
     ...data,
     hallLog: data.hallLog ?? { through: 0, lost: 0 },
   }),
+  /** v29 → v30: письма вассалов (этап 169). Пусто — никто пока не писал. */
+  29: (data) => ({
+    ...data,
+    lordAsks: data.lordAsks ?? {},
+  }),
 }
 
 export type LoadResult =
