@@ -3,7 +3,14 @@ import { createCharacter } from '../src/character'
 import { PARLEY } from '../src/content/parley'
 import { createSettlements } from '../src/economy'
 import { PLAYER } from '../src/holding'
-import { agendaWith, argumentsFor, concessions, parleyEnd, parleyNow, parleyRoll } from '../src/parley'
+import {
+  agendaWith,
+  argumentsFor,
+  concessions,
+  parleyEnd,
+  parleyNow,
+  parleyRoll,
+} from '../src/parley'
 import { createRng } from '../src/rng'
 import type { GameState } from '../src/state'
 import { createGame } from '../src/state'

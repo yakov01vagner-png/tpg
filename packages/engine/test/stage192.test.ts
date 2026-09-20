@@ -48,7 +48,8 @@ function ruler(rows: readonly Treaty[] = [treaty]): GameState {
 describe('Дг1–Дг3: условия, срок и исполнение', () => {
   it('бумага собирается из условий, и у каждого свой повод быть порванным', () => {
     const clauses = clausesOf(treaty)
-    for (const one of clauses) console.log(`${CLAUSE_DEFS[one].label}: ${CLAUSE_DEFS[one].says} ${CLAUSE_DEFS[one].breaks}`)
+    for (const one of clauses)
+      console.log(`${CLAUSE_DEFS[one].label}: ${CLAUSE_DEFS[one].says} ${CLAUSE_DEFS[one].breaks}`)
     expect(clauses.length).toBeGreaterThan(0)
     const term = termOf(treaty, 500)
     console.log(term.says)

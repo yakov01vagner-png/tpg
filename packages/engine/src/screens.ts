@@ -39,6 +39,7 @@ import { SCOUT } from './scout'
 import { sheetOf } from './sheet'
 import { knowMap, tourPlan } from './sight'
 import { SKILLS, type SkillId } from './skills'
+import { standingOf } from './standing'
 import type { GameState } from './state'
 import { bread, fieldSays, fieldWork, whyIncome, whySpent } from './tillage'
 import { dayOf } from './time'
@@ -183,6 +184,7 @@ export function talksScreen(state: GameState, world: World): Screen {
   const standing = overturesOf(state).filter((one) => one.untilDay >= day)
   const liars = Object.keys(world.kingdoms).filter((one) => isLiar(state, one, day))
   const chronicle = peaceChronicle(state, day)
+  const ledger = standingOf(state, world, PLAYER, day)
   const lines: Line[] = [
     { label: 'Войны', value: `${warsOf(state.politics, PLAYER).length}`, hint: opinion.says },
     {
@@ -199,6 +201,22 @@ export function talksScreen(state: GameState, world: World): Screen {
     },
     { label: 'Миры', value: `${chronicle.made}`, hint: chronicle.says },
     { label: 'Твой стиль', value: playStyle(state, day).label, hint: playStyle(state, day).answer },
+    // Этап 195: весь расклад одной строкой, а в подсказке — чем он сложился.
+    {
+      label: 'Расклад',
+      value: `${ledger.bonds.length}`,
+      hint: `${ledger.says} ${ledger.bonds.map((one) => one.says).join('; ')}`,
+    },
+    {
+      label: 'Если не менять ничего',
+      value: `${ledger.ahead.length}`,
+      hint: ledger.ahead.join(' ') || 'Ничего не подходит к сроку.',
+    },
+    {
+      label: 'Что сделать',
+      value: `${ledger.moves.length}`,
+      hint: ledger.moves.join(' ') || 'Ходов нет: расклад ровный.',
+    },
   ]
   const deeds: Deed[] = []
   const first = standing[0]
