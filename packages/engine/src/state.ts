@@ -538,6 +538,17 @@ export interface GameState {
   readonly crownWays?: Readonly<
     Record<string, { readonly way: string; readonly sinceDay: number; readonly places: number }>
   >
+  /**
+   * Чужой конец (этап 142): кто дошёл, с какого дня и принял ли ты исход.
+   *
+   * Из мира это не вывести: дошедший может и потерять то, чем дошёл, а день,
+   * когда мир стал его, остаётся днём, когда он стал его.
+   */
+  readonly theirEnd?: {
+    readonly who: string
+    readonly sinceDay: number
+    readonly served?: number
+  } | null
   /** Гонка (этап 141): чья доля где была, сколько шагов замечено и кто дошёл. */
   readonly raceLog?: {
     readonly steps: number
@@ -798,6 +809,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     wrongCalls: [],
     crownWays: {},
     raceLog: { steps: 0, done: [], shares: {} },
+    theirEnd: null,
     usedDay: {},
     pathLog: { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: {},

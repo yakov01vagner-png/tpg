@@ -1006,6 +1006,7 @@ import {
   priestAt,
   templeAccepts,
 } from './temple'
+import { THEIREND, THEIREND_WORDS, endNear, theirEnd } from './theirend'
 import { THEIRWAY, crownWay, theirWay, theirWaySays, wouldChange } from './theirway'
 import { DAYS_PER_YEAR, timeOfDay } from './time'
 import type { GameTime } from './time'
@@ -1380,6 +1381,8 @@ export type Command =
   /** Коалиция (этап 136): разобрать чужую по одному и собрать свою против первого. */
   | { readonly type: 'breakLeague'; readonly member: string }
   | { readonly type: 'callLeague'; readonly against: string }
+  /** Чужой конец (этап 142): принять исход и стать первым человеком победителя. */
+  | { readonly type: 'serveWinner' }
   /** Цена первенства (этап 139): идти тихо или громко. */
   | { readonly type: 'goQuiet' }
   | { readonly type: 'goLoud' }
@@ -1971,6 +1974,8 @@ export function applyCommand(
       return breakLeague(state, command.member)
     case 'callLeague':
       return callLeague(state, command.against)
+    case 'serveWinner':
+      return serveWinner(state)
     case 'goQuiet':
       return goQuiet(state)
     case 'goLoud':
@@ -10081,6 +10086,7 @@ interface Draft {
     readonly done: readonly string[]
     readonly shares?: Readonly<Record<string, number>>
   }
+  theirEnd: { readonly who: string; readonly sinceDay: number; readonly served?: number } | null
   usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
@@ -10282,6 +10288,7 @@ function open(state: GameState): Draft {
     wrongCalls: state.wrongCalls ?? [],
     crownWays: state.crownWays ?? {},
     raceLog: state.raceLog ?? { steps: 0, done: [], shares: {} },
+    theirEnd: state.theirEnd ?? null,
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
@@ -10641,6 +10648,8 @@ function close(draft: Draft): CommandResult {
     tickTheirWay(draft, daysPassed)
     // И гонка между ними идёт: шаги, спешка у конца и откат (этап 141).
     tickRace(draft, daysPassed)
+    // А кто-нибудь может и дойти — без тебя (этап 142).
+    tickTheirEnd(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10831,6 +10840,7 @@ function close(draft: Draft): CommandResult {
     wrongCalls: draft.wrongCalls,
     crownWays: draft.crownWays,
     raceLog: draft.raceLog,
+    theirEnd: draft.theirEnd,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
@@ -13797,6 +13807,66 @@ function tickRace(draft: Draft, days: number): void {
     }
   }
   draft.raceLog = { steps, done, shares }
+}
+
+/**
+ * Кто-нибудь доходит до конца (этап 142, Дх1, Дх2 и Дх4).
+ *
+ * Дошедший не кончает игру: он делает мир другим. В этом мире спорят не за
+ * землю, а за место при нём, — и это видно в том, как холодеют все ко всем.
+ */
+function tickTheirEnd(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % THEIREND.beat !== 0) return
+  if (!draft.theirEnd) {
+    for (const id of Object.keys(draft.base.world.kingdoms)) {
+      if (!theirWay(draft.base, draft.world, id, day).finished) continue
+      draft.theirEnd = { who: id, sinceDay: day }
+      notice(
+        draft,
+        `${THEIREND_WORDS.done} ${kingdomName(draft.base, id)}. ${THEIREND_WORDS.after}`,
+        'world',
+      )
+      return
+    }
+    // Пока никто не дошёл, мир предупреждает о том, кто близко (Дх2).
+    const near = endNear(draft.base, draft.world, day)
+    if (near.who && day % (THEIREND.beat * 9) === 0) notice(draft, near.says, 'world')
+    return
+  }
+  // Мир под одной короной: все холодеют друг к другу, кроме неё.
+  const winner = draft.theirEnd.who
+  if ((draft.theirEnd.served ?? 0) > 0) return
+  for (const id of Object.keys(draft.base.world.kingdoms)) {
+    if (id === winner) continue
+    draft.politics = withRelation(draft.politics, PLAYER, id, THEIREND.chills)
+  }
+}
+
+/**
+ * Служить победителю (этап 142, Дх5).
+ *
+ * Отдельный конец: принять исход и стать первым человеком того, кто дошёл.
+ * Войны кончаются, земля остаётся, но путь твой кончен — дальше ты при нём.
+ */
+function serveWinner(state: GameState): CommandResult {
+  const day = dayOf(state.time)
+  const end = theirEnd(state, state.world, day)
+  if (!end.who) return fail('requirements', 'Мир ещё ничей: служить некому.')
+  if (end.served) return fail('invalid', 'Ты уже его первый человек.')
+
+  const draft = open(state)
+  advance(draft, hours(THEIREND.serveHours))
+  draft.theirEnd = draft.theirEnd ? { ...draft.theirEnd, served: day } : null
+  draft.politics = {
+    ...draft.politics,
+    wars: draft.politics.wars.filter((one) => !sameSides(one, PLAYER, end.who as string)),
+  }
+  draft.politics = withRelation(draft.politics, PLAYER, end.who as string, 40)
+  draft.hands = [...draft.hands, { patron: end.who as string, ward: PLAYER, sinceDay: day }]
+  notice(draft, `${THEIREND_WORDS.serve} ${kingdomName(draft.base, end.who as string)}.`, 'world')
+  return close(draft)
 }
 
 /**
