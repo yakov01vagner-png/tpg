@@ -125,7 +125,7 @@ describe('От5 и От6: люди уходят, и отряд считан', ()
     const rolled = folkRoll(starving, world, 1)
     console.log(rolled.says)
     expect(rolled.men).toBe(20)
-    expect(SCHEMA_VERSION).toBe(27)
+    expect(SCHEMA_VERSION).toBe(28)
   })
 
   it('за десять лет видно, кто дожил, кто ушёл и кто вырос', () => {

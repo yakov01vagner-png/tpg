@@ -80,7 +80,7 @@ import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 27
+export const SCHEMA_VERSION = 28
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -453,6 +453,21 @@ export interface GameState {
   readonly crownDebts?: Readonly<
     Record<string, { readonly owed: number; readonly sinceDay: number }>
   >
+  /**
+   * Обещания спутникам (этап 167): что обещано, кому и к какому дню.
+   *
+   * Просьба выводится из того, что между вами есть, а обещанное — нет: слова,
+   * сказанного вслух, в мире не видно. Сдержанное и нарушенное помнится
+   * (последние сорок) и объясняет, почему он ушёл.
+   */
+  readonly vows?: readonly {
+    readonly who: string
+    readonly ask: string
+    readonly day: number
+    readonly untilDay: number
+    readonly keptDay?: number
+    readonly brokenDay?: number
+  }[]
   /**
    * Книга набора (этап 166): кого, где и когда ты взял в отряд.
    *
@@ -903,6 +918,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     coinLog: {},
     roll: [],
     graves: [],
+    vows: [],
     anointed: null,
     deeds: {},
     dreadLog: {},

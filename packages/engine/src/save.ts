@@ -577,6 +577,11 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
     roll: data.roll ?? [],
     graves: data.graves ?? [],
   }),
+  /** v27 → v28: обещания спутникам (этап 167). Пустой список — никто ничего не обещал. */
+  27: (data) => ({
+    ...data,
+    vows: data.vows ?? [],
+  }),
 }
 
 export type LoadResult =

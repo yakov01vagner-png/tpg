@@ -265,6 +265,7 @@ import { GOODS } from './content/goods'
 import { GOSSIP_WORDS, type TalkKind } from './content/gossip'
 import { AILMENT_DEFS, type Ailment, HERB_GOOD, POTIONS, POTIONS_BY_ID } from './content/heal'
 import { KIN_ASK, KIN_GIFT, UPBRINGING_MINUTES } from './content/home'
+import { KITH, KITH_ASK_DEFS, KITH_WORDS } from './content/kith'
 import { KNOWN as KNOWN_DEFS } from './content/known'
 import { TEMPER_LINES } from './content/lines'
 import { FACTION_FAVOUR, FACTION_SPITE, type FactionId, type LordDeedId } from './content/lords'
@@ -570,6 +571,7 @@ import {
 } from './inherit'
 import type { Journey } from './journey'
 import { journeyLeft, legHoursFor, paceOf } from './journey'
+import { type Vow, askOf, promise, vowsDue, whoGoes } from './kith'
 import type { Knowledge } from './knowledge'
 import {
   BLIND_DANGER,
@@ -1212,6 +1214,12 @@ export type Command =
   | { readonly type: 'talk'; readonly speakerId: string; readonly topicId: string }
   /** Помочь спутнику с его делом (этап 54). */
   | { readonly type: 'grantWish'; readonly companionId: string }
+  /** Ответить на просьбу спутника (этап 167, Сп3): да, нет или «погоди». */
+  | {
+      readonly type: 'answerKith'
+      readonly companionId: string
+      readonly answer: 'yes' | 'no' | 'later'
+    }
   /** Учение (этап 55): книги, спор в школе, свой ученик. */
   | { readonly type: 'buyBook'; readonly bookId: string }
   | { readonly type: 'readBook'; readonly bookId: string }
@@ -1750,6 +1758,8 @@ export function applyCommand(
       return talk(state, command.speakerId, command.topicId)
     case 'grantWish':
       return grantWish(state, command.companionId)
+    case 'answerKith':
+      return answerKith(state, command.companionId, command.answer)
     case 'buyBook':
       return buyBook(state, command.bookId)
     case 'readBook':
@@ -8739,6 +8749,64 @@ function grantWish(state: GameState, companionId: string): CommandResult {
   return close(draft)
 }
 
+/**
+ * Ответить на просьбу спутника (этап 167, Сп3 и Сп4).
+ *
+ * Три ответа, и каждый чего-то стоит. «Да» делается сразу, если делается
+ * деньгами, и записывается обещанием, если нет: обещанного ждут и считают дни.
+ * «Нет» стоит расположения, но честно. «Погоди» — то же обещание, только без
+ * срока в твою пользу: он всё равно запомнит.
+ */
+function answerKith(
+  state: GameState,
+  companionId: string,
+  answer: 'yes' | 'no' | 'later',
+): CommandResult {
+  const companion = state.companions.find((one) => one.id === companionId)
+  if (!companion) return fail('unknownAction', 'Такого спутника у тебя нет.')
+  const day = dayOf(state.time)
+  const asked = askOf(state, companion, day)
+  if (!asked) return fail('invalid', `${companion.name} сейчас ничего не просит.`)
+  const def = KITH_ASK_DEFS[asked.ask]
+  if (answer === 'yes' && def.cost > 0 && state.character.money < def.cost) {
+    return fail('noMoney', `Нужно ${def.cost}, а у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(1))
+  if (answer === 'no') {
+    shiftMood(draft, companionId, def.refused)
+    notice(draft, `${companion.name}: отказано (${def.label}). ${KITH_WORDS.own}`, 'people')
+    return close(draft)
+  }
+  if (answer === 'yes' && def.cost > 0) {
+    addMoney(draft, -def.cost)
+    shiftMood(draft, companionId, def.grants)
+    notice(draft, `${companion.name} получил своё: ${def.label}.`, 'people')
+    return close(draft)
+  }
+  if (asked.ask === 'leave' && answer === 'yes') {
+    // Отпустить — тоже ответ: он уходит своим и помнит, что его отпустили.
+    draft.companions = draft.companions.filter((one) => one.id !== companionId)
+    notice(draft, `${companion.name} ушёл за своим. ${KITH_WORDS.own}`, 'people')
+    return close(draft)
+  }
+  draft.vows = promise(draft.vows, companionId, asked.ask, day)
+  shiftMood(draft, companionId, answer === 'yes' ? 4 : 1)
+  notice(
+    draft,
+    `${companion.name}: обещано ${def.label}, срок ${def.waits} сут. ${KITH_WORDS.waiting}`,
+    'people',
+  )
+  return close(draft)
+}
+
+function shiftMood(draft: Draft, companionId: string, delta: number): void {
+  draft.companions = draft.companions.map((one) =>
+    one.id === companionId ? { ...one, mood: Math.max(0, Math.min(100, one.mood + delta)) } : one,
+  )
+}
+
 /** Дело спутника сделано: он это помнит и остаётся твоим. */
 function finishWish(draft: Draft, companionId: string): void {
   const day = dayOf(draft.time)
@@ -10116,6 +10184,8 @@ interface Draft {
   /** Книга набора и имена, которые помнит отряд (этап 166). */
   roll: readonly Enlist[]
   graves: readonly Remembered[]
+  /** Обещания спутникам (этап 167). */
+  vows: readonly Vow[]
   anointed: { readonly sinceDay: number } | null
   deeds: Readonly<Record<string, number>>
   dreadLog: Readonly<Record<string, { readonly score: number; readonly sinceDay: number }>>
@@ -10385,6 +10455,7 @@ function open(state: GameState): Draft {
     coinLog: state.coinLog ?? {},
     roll: (state.roll ?? []) as readonly Enlist[],
     graves: (state.graves ?? []) as readonly Remembered[],
+    vows: (state.vows ?? []) as readonly Vow[],
     anointed: state.anointed ?? null,
     deeds: state.deeds ?? {},
     dreadLog: state.dreadLog ?? {},
@@ -10815,6 +10886,8 @@ function close(draft: Draft): CommandResult {
     tickCoin(draft, daysPassed)
     // И отряд смотрит, кому с тобой не по пути (этап 166).
     tickFolk(draft, daysPassed)
+    // А спутники считают обещанное и годы (этап 167).
+    tickKith(draft, daysPassed)
     // И сходятся против того, кто ближе всех к концу (этап 136).
     tickLeague(draft, daysPassed)
     // За слабых ручаются, и на зов приходят или не приходят (этап 137).
@@ -11021,6 +11094,7 @@ function close(draft: Draft): CommandResult {
     coinLog: draft.coinLog,
     roll: draft.roll,
     graves: draft.graves,
+    vows: draft.vows,
     anointed: draft.anointed,
     deeds: draft.deeds,
     dreadLog: draft.dreadLog,
@@ -13418,6 +13492,33 @@ function tickAnoint(draft: Draft, days: number): void {
   }
   shiftVassals(draft, world.unrest, null)
   if (day % (FAITH.beat * 18) === 0) notice(draft, world.says, 'world')
+}
+
+/**
+ * Спутники считают обещанное и годы (этап 167, Сп4 и Сп5).
+ *
+ * Срок обещанию вышел — это нарушенное слово, и оно стоит расположения. Годы
+ * берут своё: старый просится на покой и уходит сам. Ссоры в отряде тянут всех
+ * понемногу — это не новый счёт, а тот же, что с 0.2.
+ */
+function tickKith(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % KITH.beat !== 0) return
+  const due = vowsDue(draft.vows, day)
+  draft.vows = due.vows
+  for (const vow of due.broken) {
+    shiftMood(draft, vow.who, KITH.broken)
+    const who = draft.companions.find((one) => one.id === vow.who)
+    if (who) notice(draft, `${who.name}: ${KITH_WORDS.brokenWord}`, 'people')
+  }
+  if (quarrelsOf(draft.companions).length > 0) {
+    for (const one of draft.companions) shiftMood(draft, one.id, KITH.quarrel)
+  }
+  for (const row of whoGoes(draft.base, draft.world, day)) {
+    draft.companions = draft.companions.filter((one) => one.id !== row.who.id)
+    notice(draft, `${row.who.name} больше не идёт с тобой. ${row.why}`, 'people')
+  }
 }
 
 /**
