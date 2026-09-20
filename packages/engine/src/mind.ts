@@ -13,6 +13,7 @@ import {
 import { PLAYER } from './holding'
 import { crownWarlust } from './lordlife'
 import { crownFleet, fleetForce } from './navy'
+import { seenBy } from './picture'
 import type { GameState } from './state'
 import { allied, atWar, warsOf } from './war'
 import { neighbourSettlements } from './world/queries'
@@ -110,11 +111,21 @@ export function seenStrength(
   const lean = lust >= 1.2 ? -1 : lust <= 0.9 ? 1 : 0
   const jitter = ((hashOf(`${watcher}:${about}:${Math.floor(day / 180)}`) % 100) / 100 - 0.5) * 2
   const error = Math.round(span * (lean * 0.6 + jitter * 0.4) * 100) / 100
-  const score = Math.max(0, Math.round(truth.score * (1 + error)))
+  const guess = Math.max(0, Math.round(truth.score * (1 + error)))
+  // С 0.8 догадка — только основа: если короне что-то принесли, она считает по
+  // принесённому (этап 118). Оттого твой обман попадает в её решения.
+  const row = seenBy(state, world, watcher, about, day, { score: guess, error })
+  if (row.from === 'words') {
+    return {
+      score: row.value,
+      error: Math.round(((row.value - truth.score) / Math.max(1, truth.score)) * 100) / 100,
+      says: row.says,
+    }
+  }
   return {
-    score,
+    score: guess,
     error,
-    says: `${watcher} считает силу ${about} равной ${score} (на деле ${truth.score}${near ? '' : `, ${MIND_WORDS.blind}`}).`,
+    says: `${watcher} считает силу ${about} равной ${guess} (на деле ${truth.score}${near ? '' : `, ${MIND_WORDS.blind}`}).`,
   }
 }
 

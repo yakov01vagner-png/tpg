@@ -541,6 +541,7 @@ import {
   orderFrom,
   talesOf,
 } from './merchant'
+import { seenStrength } from './mind'
 import type { Blockade, Letter, Warship } from './navy'
 import {
   NAVY,
@@ -644,6 +645,7 @@ import {
   termDef,
   warToll,
 } from './peace'
+import { PICTURE, PICTURE_WORDS, canSeePicture, crownPicture, pictureSays } from './picture'
 import { isAvailableAt } from './place'
 import type { Plague, PlagueEvent } from './plague'
 import { plagueAt, tickPlague } from './plague'
@@ -1229,6 +1231,8 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Чужая голова (этап 118): узнать, из чего исходит эта корона. */
+  | { readonly type: 'askPicture'; readonly of: string }
   /** Постоянный посол (этап 117): посадить своего человека при чужом дворе и отозвать. */
   | { readonly type: 'seatResident'; readonly at: string }
   | { readonly type: 'recallResident'; readonly at: string }
@@ -1786,6 +1790,8 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'askPicture':
+      return askPicture(state, command.of)
     case 'seatResident':
       return seatResident(state, command.at)
     case 'recallResident':
@@ -12251,6 +12257,44 @@ function handMatter(state: GameState, matterId: string): CommandResult {
     `${matter.says} ${AUDIENCE_WORDS.handed} Взял ${who.name} (${who.temper}, умение ${who.worth}): выйдет на ${Math.round(worth * 100)} из ста от твоего.`,
     'people',
   )
+  return close(draft)
+}
+
+/**
+ * Узнать, из чего исходит чужая корона (этап 118, К5).
+ *
+ * Её картина не спрятана в коде: её можно подслушать — если у тебя есть там
+ * свой человек. Тогда видно не только чего она хочет, но и почему.
+ */
+function askPicture(state: GameState, of: string): CommandResult {
+  if (!state.world.kingdoms[of]) return fail('invalid', 'Такой короны нет.')
+  const can = canSeePicture(state, of)
+  if (!can.can) return fail('requirements', can.why)
+  if (state.character.money < PICTURE.askCost) {
+    return fail('noMoney', `На это нужно ${PICTURE.askCost} серебра.`)
+  }
+  const day = dayOf(state.time)
+  const rows = crownPicture(state, state.world, of, day, (about) => {
+    const seen = seenStrength(state, state.world, of, about, day)
+    return { score: seen.score, error: seen.error }
+  })
+
+  const draft = open(state)
+  advance(draft, hours(4))
+  addMoney(draft, -PICTURE.askCost)
+  notice(
+    draft,
+    `${PICTURE_WORDS.asked} (${can.why}) ${pictureSays(rows, of, draft.world)}`,
+    'world',
+  )
+  const mine = rows.find((one) => one.about === PLAYER)
+  if (mine) {
+    notice(
+      draft,
+      `О тебе: ${mine.value} при правде ${mine.truth} — ${mine.from === 'words' ? 'со слов' : 'догадка'}.`,
+      'world',
+    )
+  }
   return close(draft)
 }
 
