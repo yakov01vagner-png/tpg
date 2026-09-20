@@ -433,6 +433,7 @@ import {
   seenFrom,
 } from './knowledge'
 import { type Word, bring, forgetOld, truthOf } from './known'
+import { LIES, lieLedger, mistakeOf, remember, trustOf, trustWords, weigh, whoGains } from './lies'
 import type { HarvestEvent, LifeEvent } from './life'
 import { LIFE, foodSecurity, rollHarvest, tickDays } from './life'
 import { crownOf, factionDef, factionKey, factionMood, heirRegard, withLordDeed } from './lordlife'
@@ -9536,6 +9537,7 @@ interface Draft {
   audits: Readonly<Record<string, number>>
   gossip: readonly Talk[]
   looks: readonly Look[]
+  trust: Readonly<Record<string, { readonly said: number; readonly lied: number }>>
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9643,6 +9645,7 @@ function open(state: GameState): Draft {
     audits: state.audits ?? {},
     gossip: state.gossip ?? [],
     looks: state.looks ?? [],
+    trust: state.trust ?? {},
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -10088,6 +10091,7 @@ function close(draft: Draft): CommandResult {
     audits: draft.audits,
     gossip: draft.gossip,
     looks: draft.looks,
+    trust: draft.trust,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -11937,6 +11941,8 @@ function checkTalk(state: GameState, talkId: string): CommandResult {
   draft.gossip = gossipOf(draft).map((one) =>
     one.id === talkId ? { ...one, exposed: !right } : one,
   )
+  // Молва — тоже источник, и у неё тоже есть имя (этап 103, Л4).
+  draft.trust = remember(draft.trust, 'молва', !right)
   notice(
     draft,
     right
@@ -11998,6 +12004,8 @@ function orderAudit(state: GameState, locationId: string): CommandResult {
   advance(draft, hours(24 * audit.days))
   practice(draft, 'scholarship', 30)
   draft.audits = { ...(draft.audits ?? {}), [locationId]: day }
+  // Ревизия — это проверка человека, а не места: её итог помнится за ним.
+  if (reporter) draft.trust = remember(draft.trust, reporter.name, !audit.clean)
   // Проверенный помнит проверку: честный — с обидой поменьше, вор — с обидой.
   draft.reputation = withPlaceRep(
     draft.reputation,

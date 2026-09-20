@@ -392,6 +392,8 @@ export interface GameState {
   readonly gossip?: readonly Talk[]
   /** Посланные смотреть: ещё не вернулись (этап 102). */
   readonly looks?: readonly Look[]
+  /** Кто как с тобой говорил: сколько раз и сколько раз солгал (этап 103). */
+  readonly trust?: Readonly<Record<string, { readonly said: number; readonly lied: number }>>
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -513,6 +515,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     audits: {},
     gossip: [],
     looks: [],
+    trust: {},
     factions: {},
     spellcraft: {},
     weather: [],

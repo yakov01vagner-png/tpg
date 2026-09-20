@@ -243,7 +243,12 @@ export function knownTo(
         one.about === question.about &&
         day - one.day <= KNOWN.keepDays,
     )
-    .map((one) => ({ word: one, spread: spreadOf(one.source, day - one.day, hops) }))
+    // Имя источника меняет цену его вести (этап 103): тот, кто уже врал,
+    // проигрывает даже со свежей вестью.
+    .map((one) => ({
+      word: one,
+      spread: spreadOf(one.source, day - one.day, hops) / trustIn(state, one.from),
+    }))
     .sort((a, b) => a.spread - b.spread)
   const best = heard[0]
   if (!best || best.spread > KNOWN.useless) return blank
@@ -266,6 +271,14 @@ export function knownTo(
     clash,
     says: `${def.label}${best.word.from ? ` (${best.word.from})` : ''}, ${agedWords(age)}; вилка ${Math.round(best.spread * 100)} из ста${clash ? `. ${KNOWN_WORDS.clash}` : ''}`,
   }
+}
+
+/** Насколько верят этому имени: 1 — не врал, меньше — врал (этап 103). */
+function trustIn(state: GameState, from: string | null): number {
+  if (!from) return 1
+  const row = state.trust?.[from]
+  if (!row || row.said === 0) return 1
+  return Math.max(0.3, 1 - row.lied / row.said)
 }
 
 function differ(a: number | string, b: number | string): boolean {
