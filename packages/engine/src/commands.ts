@@ -538,6 +538,17 @@ import {
   seenFrom,
 } from './knowledge'
 import { type Word, bring, forgetOld, truthOf } from './known'
+import {
+  LEVER,
+  LEVER_DEFS,
+  LEVER_WORDS,
+  MIGHT,
+  buyPeaceCost,
+  crownDebtsOf,
+  debtAfterBeat,
+  loanWanted,
+  mightCost,
+} from './lever'
 import { LIES, lieLedger, mistakeOf, remember, trustOf, trustWords, weigh, whoGains } from './lies'
 import type { HarvestEvent, LifeEvent } from './life'
 import { LIFE, foodSecurity, rollHarvest, tickDays } from './life'
@@ -1306,6 +1317,9 @@ export type Command =
   | { readonly type: 'raiseHeir' }
   /** Путь короны (этап 131): дар за признание и смотр того, кто ещё не признал. */
   | { readonly type: 'giftRecognition'; readonly to: string }
+  /** Путь торга (этап 133): заём короне и откуп от войны. */
+  | { readonly type: 'lendToCrown'; readonly to: string }
+  | { readonly type: 'buyPeaceWith'; readonly against: string }
   /** Испытание (этап 124): выйти на турнир, охоту, диспут, смотр, мост, ярмарку. */
   | { readonly type: 'takeTrial'; readonly trialId: string }
   /** Чужое слово (этап 121): сдержит ли он обещанное. */
@@ -1877,6 +1891,10 @@ export function applyCommand(
       return raiseHeir(state)
     case 'giftRecognition':
       return giftRecognition(state, command.to)
+    case 'lendToCrown':
+      return lendToCrown(state, command.to)
+    case 'buyPeaceWith':
+      return buyPeaceWith(state, command.against)
     case 'takeTrial':
       return takeTrial(state, command.trialId)
     case 'weighPledge':
@@ -9912,6 +9930,7 @@ interface Draft {
   raised: number
   recognitions: Readonly<Record<string, number>>
   union: { readonly sinceDay: number } | null
+  crownDebts: Readonly<Record<string, { readonly owed: number; readonly sinceDay: number }>>
   usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
@@ -10098,6 +10117,7 @@ function open(state: GameState): Draft {
     raised: state.raised ?? 0,
     recognitions: state.recognitions ?? {},
     union: state.union ?? null,
+    crownDebts: state.crownDebts ?? {},
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
@@ -10439,6 +10459,8 @@ function close(draft: Draft): CommandResult {
     tickUnion(draft, daysPassed)
     // Дом сверяется с лучшим своим днём: потеря — это то, что было и ушло (этап 132).
     tickHouse(draft, daysPassed)
+    // Долги корон растут и отдаются, а высокий ранг берёт своё (этап 133).
+    tickLevers(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10614,6 +10636,7 @@ function close(draft: Draft): CommandResult {
     raised: draft.raised,
     recognitions: draft.recognitions,
     union: draft.union,
+    crownDebts: draft.crownDebts,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
@@ -12802,6 +12825,105 @@ function giftRecognition(state: GameState, to: string): CommandResult {
     'world',
   )
   return close(draft)
+}
+
+/**
+ * Заём короне (этап 133, Тс2).
+ *
+ * Серебро делает то, что делает войско: должник не идёт на заимодавца, и
+ * говорит с ним иначе. Берут по нужде — воюющему нужнее, — и больше, чем корона
+ * сможет отдать, не дают: заимодавец тоже считает.
+ */
+function lendToCrown(state: GameState, to: string): CommandResult {
+  if (!state.world.kingdoms[to]) return fail('invalid', 'Такой короны нет.')
+  const day = dayOf(state.time)
+  if (atWar(state.politics, PLAYER, to)) {
+    return fail('requirements', 'Тому, с кем воюешь, в долг не дают.')
+  }
+  const want = loanWanted(state, state.world, to, day)
+  if (!want.can) return fail('requirements', want.says)
+  if (state.character.money < want.wants) {
+    return fail('noMoney', `На заём нужно ${want.wants} серебра.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(6))
+  addMoney(draft, -want.wants)
+  draft.crownDebts = { ...draft.crownDebts, [to]: { owed: want.wants, sinceDay: day } }
+  draft.politics = withRelation(draft.politics, PLAYER, to, LEVER.loanWarms)
+  notice(
+    draft,
+    `${kingdomName(draft.base, to)} берёт у тебя ${want.wants}. ${LEVER_DEFS.loan.after}`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Откуп от войны (этап 133, Тс2).
+ *
+ * Второе, что делает серебро вместо войска: война кончается сегодня, а не через
+ * год. Платится дороже дани и тем дороже, чем лучше идут их дела, — и платится
+ * не только серебром: откупившийся не выглядит победителем.
+ */
+function buyPeaceWith(state: GameState, against: string): CommandResult {
+  if (!state.world.kingdoms[against]) return fail('invalid', 'Такой короны нет.')
+  const day = dayOf(state.time)
+  const price = buyPeaceCost(state, state.world, against, day)
+  if (price.cost <= 0) return fail('requirements', price.says)
+  if (!price.can) return fail('noMoney', `За мир просят ${price.cost} серебра.`)
+
+  const draft = open(state)
+  advance(draft, hours(10))
+  addMoney(draft, -price.cost)
+  draft.politics = {
+    ...draft.politics,
+    wars: draft.politics.wars.filter((one) => !sameSides(one, PLAYER, against)),
+  }
+  draft.politics = withRelation(draft.politics, PLAYER, against, 15)
+  // Слава воинов от купленного мира не растёт, а убывает: деньгами воюют не все.
+  draft.fame = {
+    ...draft.fame,
+    warriors: Math.max(-100, fameOf(draft, 'warriors') - 6),
+  }
+  notice(
+    draft,
+    `${kingdomName(draft.base, against)}: война куплена за ${price.cost}. ${LEVER_WORDS.bought}`,
+    'war',
+  )
+  return close(draft)
+}
+
+/**
+ * Долги и цена силы (этап 133, Тс2 и Тс4).
+ *
+ * Долг растёт процентом, пока корона воюет, и убывает, когда она в мире: долги
+ * переживают государей. Цена силы берётся с той же ступени, с какой с тобой
+ * начинают считаться, — церковь злится, свои отдаляются.
+ */
+function tickLevers(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % MIGHT.beat !== 0) return
+  const debts: Record<string, { readonly owed: number; readonly sinceDay: number }> = {}
+  for (const debt of crownDebtsOf(draft.base)) {
+    const after = debtAfterBeat(debt.owed, warsOf(draft.politics, debt.kingdomId).length > 0)
+    if (after.back > 0) addMoney(draft, after.back)
+    if (after.owed >= LEVER.leastLoan / 10) {
+      debts[debt.kingdomId] = { owed: after.owed, sinceDay: debt.sinceDay }
+    } else {
+      notice(
+        draft,
+        `${kingdomName(draft.base, debt.kingdomId)} отдаёт последнее: долг закрыт.`,
+        'world',
+      )
+    }
+  }
+  draft.crownDebts = debts
+  const cost = mightCost(draft.base, day)
+  if (cost.churchAnger === 0) return
+  draft.churchAnger = Math.max(0, (draft.churchAnger ?? 0) + cost.churchAnger)
+  shiftVassals(draft, cost.apart, null)
 }
 
 /**

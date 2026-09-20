@@ -12,6 +12,7 @@ import {
 } from './content/way'
 import { vassalsOf } from './court'
 import { PLAYER, holdingsOf } from './holding'
+import { MIGHT, crownDebtsOf, mightOf } from './lever'
 import { rankTier } from './magic'
 import { strengthOf } from './mind'
 import { reignOf } from './royal'
@@ -69,10 +70,14 @@ export function recognises(
   }
   // И то, что взято договором, дарами или разбитым войском, записано.
   if (who === PLAYER && (state.recognitions?.[other] ?? 0) > 0) return true
-  const mine = strengthOf(state, world, who, day).score
+  // Пятая дверь — сила без войска (этап 133, Тс3). Ранг, с которым считаются,
+  // стоит войска: его считают в чужую силу и спорят с ним вровень, а не в
+  // полтора раза сверху. На сильнейших это не действует — на слабых да.
+  const reckoned = who === PLAYER && mightOf(state, day).reckoned
+  const mine = strengthOf(state, world, who, day).score + (reckoned ? MIGHT.fearWorth : 0)
   const theirs = strengthOf(state, world, other, day).score
   const warm = relationOf(state.politics, who, other) >= -20
-  return warm && mine >= theirs * 1.5
+  return warm && mine >= theirs * (reckoned ? 1 : 1.5)
 }
 
 /** Сколько сторон признало того, кто идёт, и кто не признал (Пт3). */
@@ -139,8 +144,11 @@ export function measureFor(
   }
   if (measure === 'ventures') return player ? state.enterprises.length : 0
   if (measure === 'debtors') {
-    // Короны в долгу у тебя: дань в твою пользу — тот же долг, только признанный.
-    return state.politics.tributes.filter((one) => one.to === who).length
+    // Короны в долгу у тебя: дань в твою пользу — тот же долг, только признанный,
+    // а заём (этап 133) — долг названный, и считаются они вместе.
+    const paying = state.politics.tributes.filter((one) => one.to === who).map((one) => one.from)
+    const owing = player ? crownDebtsOf(state).map((one) => one.kingdomId) : []
+    return new Set([...paying, ...owing]).size
   }
   if (measure === 'magicRank') return player ? rankTier(state.character.magicRank) : 0
   if (measure === 'magicSkill') return player ? skillLevel(state.character, 'magic') : 0

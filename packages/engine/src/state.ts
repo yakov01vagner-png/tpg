@@ -443,6 +443,16 @@ export interface GameState {
    * состояние. Отвалился кто-нибудь — день сбрасывается, и круг идёт заново.
    */
   readonly union?: { readonly sinceDay: number } | null
+  /**
+   * Короны, которые у тебя в долгу (этап 133): сколько и с какого дня.
+   *
+   * Заём — история, а не состояние: вывести из мира, что ты дал Роблу двадцать
+   * тысяч на его войну, нельзя. Долг растёт процентом от дня займа и потому
+   * помнит день.
+   */
+  readonly crownDebts?: Readonly<
+    Record<string, { readonly owed: number; readonly sinceDay: number }>
+  >
   /** Когда каждый навык трогали в последний раз (этап 125): он ржавеет. */
   readonly usedDay?: Readonly<Record<string, number>>
   /** Чем ты рос на самом деле (этап 124) и какие испытания уже брал. */
@@ -676,6 +686,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     raised: 0,
     recognitions: {},
     union: null,
+    crownDebts: {},
     usedDay: {},
     pathLog: { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: {},
