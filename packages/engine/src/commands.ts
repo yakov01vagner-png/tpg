@@ -551,6 +551,15 @@ import {
 } from './knowledge'
 import { type Word, bring, forgetOld, truthOf } from './known'
 import {
+  KEY_DEFS,
+  LEAGUE,
+  LEAGUE_WORDS,
+  keyTo,
+  leagueAgainst,
+  leagueNow,
+  whoToCall,
+} from './league'
+import {
   LEVER,
   LEVER_DEFS,
   LEVER_WORDS,
@@ -1334,6 +1343,9 @@ export type Command =
   | { readonly type: 'buyPeaceWith'; readonly against: string }
   /** Путь веры (этап 134): дар, собор, поход по призыву, кара еретиков. */
   | { readonly type: 'churchDeed'; readonly deed: HolyDeedId }
+  /** Коалиция (этап 136): разобрать чужую по одному и собрать свою против первого. */
+  | { readonly type: 'breakLeague'; readonly member: string }
+  | { readonly type: 'callLeague'; readonly against: string }
   /** Испытание (этап 124): выйти на турнир, охоту, диспут, смотр, мост, ярмарку. */
   | { readonly type: 'takeTrial'; readonly trialId: string }
   /** Чужое слово (этап 121): сдержит ли он обещанное. */
@@ -1911,6 +1923,10 @@ export function applyCommand(
       return buyPeaceWith(state, command.against)
     case 'churchDeed':
       return churchDeed(state, command.deed)
+    case 'breakLeague':
+      return breakLeague(state, command.member)
+    case 'callLeague':
+      return callLeague(state, command.against)
     case 'takeTrial':
       return takeTrial(state, command.trialId)
     case 'weighPledge':
@@ -9955,6 +9971,17 @@ interface Draft {
   anointed: { readonly sinceDay: number } | null
   deeds: Readonly<Record<string, number>>
   dreadLog: Readonly<Record<string, { readonly score: number; readonly sinceDay: number }>>
+  league: {
+    readonly against: string
+    readonly members: readonly string[]
+    readonly sinceDay: number
+  } | null
+  leagueBought: Readonly<Record<string, number>>
+  leagueLog: {
+    readonly formed: number
+    readonly bought: number
+    readonly against: readonly string[]
+  }
   usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
@@ -10145,6 +10172,9 @@ function open(state: GameState): Draft {
     anointed: state.anointed ?? null,
     deeds: state.deeds ?? {},
     dreadLog: state.dreadLog ?? {},
+    league: state.league ?? null,
+    leagueBought: state.leagueBought ?? {},
+    leagueLog: state.leagueLog ?? { formed: 0, bought: 0, against: [] },
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
@@ -10492,6 +10522,8 @@ function close(draft: Draft): CommandResult {
     tickAnoint(draft, daysPassed)
     // Молва разносит чужое продвижение, а короны считают, кто им опасен (этап 135).
     tickDread(draft, daysPassed)
+    // И сходятся против того, кто ближе всех к концу (этап 136).
+    tickLeague(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10671,6 +10703,9 @@ function close(draft: Draft): CommandResult {
     anointed: draft.anointed,
     deeds: draft.deeds,
     dreadLog: draft.dreadLog,
+    league: draft.league,
+    leagueBought: draft.leagueBought,
+    leagueLog: draft.leagueLog,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
@@ -13056,7 +13091,9 @@ function tickDread(draft: Draft, days: number): void {
       const truth = wayTruth(draft.base, draft.world, of, day)
       if (truth === 0) continue
       const loud = rumouredWay(draft.base, draft.world, of, day)
-      for (const who of crowns) {
+      // Слушает и игрок: о чужом продвижении он узнаёт тем же слоем, что они о
+      // его, — своими людьми вблизи и молвой издалека.
+      for (const who of [...crowns, PLAYER]) {
         if (who === of) continue
         // Сосед слышит от своих и почти без прибавки; дальний — с торга.
         const near = dreadOf(draft.base, draft.world, who, of, day).parts.some(
@@ -13088,6 +13125,162 @@ function tickDread(draft: Draft, days: number): void {
     }
   }
   draft.dreadLog = log
+}
+
+/**
+ * Мир складывается против первого (этап 136, Ко1 и Ко4).
+ *
+ * Причина, которой не было: сходятся не против сильного, а против того, кто
+ * вот-вот дойдёт, — и видят это вестями (этап 135), а не правдой. Сложившаяся
+ * коалиция держится сроком: испуг прошёл, а война идёт.
+ */
+function tickLeague(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % LEAGUE.beat !== 0) return
+  const standing = draft.league
+  if (standing) {
+    if (day - standing.sinceDay < LEAGUE.holds) return
+    const still = leagueAgainst(draft.base, draft.world, day)
+    if (still.against === standing.against && still.members.length >= LEAGUE.least) return
+    draft.league = null
+    notice(
+      draft,
+      `Коалиция против ${kingdomName(draft.base, standing.against)} разошлась: держать её стало нечем.`,
+      'world',
+    )
+    return
+  }
+  const now = leagueAgainst(draft.base, draft.world, day)
+  if (!now.against || now.members.length < LEAGUE.least) return
+  draft.league = { against: now.against, members: now.members, sinceDay: day }
+  draft.leagueLog = {
+    ...draft.leagueLog,
+    formed: draft.leagueLog.formed + 1,
+    against: [...draft.leagueLog.against, now.against],
+  }
+  declareLeagueWars(draft, now.against, now.members, day)
+  notice(draft, now.says, 'war')
+}
+
+/** Каждый участник объявляет свою войну: согласованной она не будет (Ко4). */
+function declareLeagueWars(
+  draft: Draft,
+  against: string,
+  members: readonly string[],
+  day: number,
+): void {
+  for (const who of members) {
+    if (atWar(draft.politics, who, against)) continue
+    draft.politics = {
+      ...draft.politics,
+      wars: [
+        ...draft.politics.wars,
+        { a: who, b: against, since: day, reason: LEAGUE_WORDS.why, casus: { kind: 'ambition' } },
+      ],
+    }
+    draft.politics = withRelation(draft.politics, who, against, LEAGUE.chills)
+  }
+}
+
+/**
+ * Разобрать коалицию по одному (этап 136, Ко3).
+ *
+ * У всякого свой ключ, и он берётся из того, зачем он вошёл: холодному нужен
+ * выкуп, воюющему — уступка, дальнему — тайная статья, тёплому — родство.
+ */
+function breakLeague(state: GameState, member: string): CommandResult {
+  const day = dayOf(state.time)
+  const league = leagueNow(state, state.world, day)
+  if (!league.against) return fail('requirements', 'Разбирать нечего: коалиции нет.')
+  if (!league.members.includes(member)) {
+    return fail('invalid', 'Эта корона в коалиции не состоит.')
+  }
+  const key = keyTo(state, state.world, member, day)
+  if (key.cost > 0 && state.character.money < key.cost) {
+    return fail('noMoney', `${KEY_DEFS[key.key].label}: нужно ${key.cost} серебра.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(12))
+  if (key.cost > 0) addMoney(draft, -key.cost)
+  if (key.key === 'yield') {
+    // Уступка: отданная дань и есть уступка — её не просят назад.
+    draft.politics = {
+      ...draft.politics,
+      tributes: draft.politics.tributes.filter(
+        (one) => !(one.from === member && one.to === PLAYER),
+      ),
+    }
+    draft.politics = withRelation(draft.politics, PLAYER, member, LEAGUE.yieldWarms)
+  }
+  if (key.key === 'kin') {
+    draft.marriages = [
+      ...(draft.marriages ?? []),
+      {
+        kingdomId: member,
+        who: 'child',
+        name: kingdomName(draft.base, member),
+        sinceDay: day,
+        dowry: 0,
+      },
+    ]
+  }
+  if (key.key === 'secret') {
+    draft.hushed = { ...draft.hushed, [`league:${member}`]: day + SECRET.hushDays }
+    draft.politics = withRelation(draft.politics, PLAYER, member, 10)
+  }
+  draft.leagueBought = { ...draft.leagueBought, [member]: day }
+  draft.leagueLog = { ...draft.leagueLog, bought: draft.leagueLog.bought + 1 }
+  // Вышедший выходит и из войны: он входил в неё коалицией.
+  if (league.against === PLAYER) {
+    draft.politics = {
+      ...draft.politics,
+      wars: draft.politics.wars.filter((one) => !sameSides(one, PLAYER, member)),
+    }
+  }
+  draft.league = draft.league
+    ? { ...draft.league, members: draft.league.members.filter((one) => one !== member) }
+    : null
+  notice(
+    draft,
+    `${kingdomName(draft.base, member)} выходит: ${KEY_DEFS[key.key].label}${key.cost > 0 ? ` (${key.cost})` : ''}. ${KEY_DEFS[key.key].after}`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Собрать мир против того, кто ближе тебя (этап 136, Ко5).
+ *
+ * Быть участником, а не целью, — тоже ход: коалиция складывается против
+ * первого, и первым можно назначить другого, если мир и так его боится.
+ */
+function callLeague(state: GameState, against: string): CommandResult {
+  if (!state.world.kingdoms[against]) return fail('invalid', 'Такой короны нет.')
+  const day = dayOf(state.time)
+  const call = whoToCall(state, state.world, day)
+  if (call.against !== against) return fail('requirements', call.says)
+  if (call.members.length < LEAGUE.least) {
+    return fail('requirements', `Пойдут только ${call.members.length}, нужно ${LEAGUE.least}.`)
+  }
+  if (state.character.money < LEAGUE.callCost) {
+    return fail('noMoney', `На послов и дары нужно ${LEAGUE.callCost} серебра.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(LEAGUE.callHours))
+  addMoney(draft, -LEAGUE.callCost)
+  draft.league = { against, members: call.members, sinceDay: day }
+  draft.leagueLog = {
+    ...draft.leagueLog,
+    formed: draft.leagueLog.formed + 1,
+    against: [...draft.leagueLog.against, against],
+  }
+  declareLeagueWars(draft, against, call.members, day)
+  draft.politics = withRelation(draft.politics, PLAYER, against, LEAGUE.chills)
+  notice(draft, `${LEAGUE_WORDS.called} ${call.says}`, 'war')
+  return close(draft)
 }
 
 /**

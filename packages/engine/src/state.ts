@@ -471,6 +471,25 @@ export interface GameState {
   readonly dreadLog?: Readonly<
     Record<string, { readonly score: number; readonly sinceDay: number }>
   >
+  /**
+   * Коалиция, которая уже стоит (этап 136): против кого, кто в ней и с какого дня.
+   *
+   * Сложиться она может и заново, но пока стоит — держится сроком, а не
+   * сегодняшним страхом: войну не распускают оттого, что испуг прошёл.
+   */
+  readonly league?: {
+    readonly against: string
+    readonly members: readonly string[]
+    readonly sinceDay: number
+  } | null
+  /** Кого из коалиции выкупили и когда: ключ сработал один раз, и это помнится. */
+  readonly leagueBought?: Readonly<Record<string, number>>
+  /** Коалиции за игру: сколько сложилось, сколько разобрано и против кого. */
+  readonly leagueLog?: {
+    readonly formed: number
+    readonly bought: number
+    readonly against: readonly string[]
+  }
   /** Когда каждый навык трогали в последний раз (этап 125): он ржавеет. */
   readonly usedDay?: Readonly<Record<string, number>>
   /** Чем ты рос на самом деле (этап 124) и какие испытания уже брал. */
@@ -708,6 +727,9 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     anointed: null,
     deeds: {},
     dreadLog: {},
+    league: null,
+    leagueBought: {},
+    leagueLog: { formed: 0, bought: 0, against: [] },
     usedDay: {},
     pathLog: { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: {},
