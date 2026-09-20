@@ -1020,6 +1020,7 @@ import {
   studentNameFor,
 } from './study'
 import { answerOf, speakerById, stillTalks } from './talk'
+import { warReckon } from './tally'
 import {
   canPilgrimage,
   feastDoingsAt,
@@ -10528,6 +10529,9 @@ function close(draft: Draft): CommandResult {
       rankTier(draft.character.magicRank) >= MAGIC_RANKS.archmage.tier ? 'free' : 'busy',
       // Война объявляется расчётом, а не кубиком (этап 143, Рв0).
       (a, b) => warPressure(draft.base, draft.world, a, b, dayOf(draft.time)),
+      // И кончается тоже расчётом (этап 163, Вс1): сколько зим она идёт, взята
+      // ли цель, можно ли её ещё взять и давят ли со стороны.
+      (war, when) => warReckon(draft.base, draft.world, war, when),
     )
     draft.rng = politics.rng
     draft.politics = politics.politics

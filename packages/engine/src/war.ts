@@ -341,6 +341,24 @@ export function tickPolitics(
    * а тот, кто вызывает такт; по умолчанию давление ровно единица.
    */
   pressure: (a: string, b: string) => number = () => 1,
+  /**
+   * Счёт войны на этот день (этап 163, Вс1).
+   *
+   * Кончалась война броском в 0.006, и сто войн за век были одной и той же
+   * войной. Счёт — усталость, взятая цель, безнадёжность и чужое давление —
+   * считается не здесь (иначе ядро войны потянет за собой пути, поручительства
+   * и коалиции), а тем, кто вызывает такт: `tally.ts`. Такту передаётся итог.
+   * По умолчанию счёт ровно единица и ничего не решает — старые прогоны
+   * повторяются день в день.
+   */
+  reckon: (
+    war: War,
+    day: number,
+  ) => { haste: number; winner: string | null; term: PeaceTermKind | null } = () => ({
+    haste: 1,
+    winner: null,
+    term: null,
+  }),
 ): PoliticsResult {
   let generator = rng
   let wars = [...politics.wars]
@@ -440,9 +458,14 @@ export function tickPolitics(
       // войну, расчётливая ищет, как её кончить. Считаем по упрямейшей из
       // двух — мир заключают оба, и хватает одного, кто не хочет.
       const willing = Math.max(crownWarlust(war.a), crownWarlust(war.b))
+      // Счёт войны (этап 163, Вс1): бросок остался тем же, но его вес берётся
+      // из того, как война идёт. Вымотанные и добившиеся своего мирятся вдесятеро
+      // охотнее свежих, и ни одна война больше не кончается «просто так».
+      const counted = reckon(war, politics.lastDay + i)
       const [peace, afterPeace] = rollChance(
         generator,
-        (PEACE_CHANCE * (tiny ? 5 : 1)) / (stubbornOf(war.casus) * willing),
+        (PEACE_CHANCE * (tiny ? 5 : 1) * Math.max(0, counted.haste)) /
+          (stubbornOf(war.casus) * willing),
       )
       generator = afterPeace
       if (!peace) continue
@@ -452,11 +475,25 @@ export function tickPolitics(
       const mine = heldBy(current, war.a)
       const theirs = heldBy(current, war.b)
       if (mine === 0 || theirs === 0) continue
-      const [loser, winner, ratio] =
+      // Кто вышел с прибытком, решает ход войны, а не размер державы (Вс3):
+      // взявший спорную землю победил, даже если он меньше. Когда счёт молчит
+      // (старые сейвы, прогоны без слоя счёта), остаётся прежнее правило.
+      const bigger: [string, string, number] =
         mine < theirs ? [war.a, war.b, mine / theirs] : [war.b, war.a, theirs / mine]
-      // Условия следуют из повода (этап 65, Т3): за землю требуют землю, за
-      // набеги — виновного, за честолюбие — что дадут.
-      const term = war.casus ? termsFor(war.casus, ratio) : 'tribute'
+      const [loser, winner, ratio] =
+        counted.winner === null
+          ? bigger
+          : counted.winner === war.a
+            ? [war.b, war.a, Math.min(1, theirs / Math.max(1, mine))]
+            : [war.a, war.b, Math.min(1, mine / Math.max(1, theirs))]
+      if (counted.winner !== null && counted.term === 'nothing') {
+        // Выдохлись оба: мир без условий — тоже исход, и его видно.
+        events.push({ type: 'peaceTerms', war, term: 'nothing' })
+        continue
+      }
+      // Условия следуют из повода (этап 65, Т3) и из хода войны (этап 163, Вс3):
+      // за землю требуют землю, за набеги — виновного, за честолюбие — что дадут.
+      const term = counted.term ?? (war.casus ? termsFor(war.casus, ratio) : 'tribute')
       events.push({ type: 'peaceTerms', war, term })
       if (term === 'land' && war.casus?.provinceId) {
         // Спорная марка переходит победителю целиком: это и есть то, из-за чего
