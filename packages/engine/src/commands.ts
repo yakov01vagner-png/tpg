@@ -1020,6 +1020,7 @@ import {
 } from './sight'
 import type { SkillId } from './skills'
 import { SKILLS } from './skills'
+import { changedBy } from './sovereign'
 import { battlePower, bestSpell, castChance } from './spell'
 import {
   CAUGHT,
@@ -10976,6 +10977,9 @@ function close(draft: Draft): CommandResult {
         reckoned.set(key, made)
         return made
       },
+      // Охота воевать — охота человека, а не короны (этап 196, Гс1): колено,
+      // проигранные войны и годы входят в тот же бросок.
+      (kingdomId, when) => changedBy(draft.base, draft.world, kingdomId, when).taste,
     )
     draft.rng = politics.rng
     draft.politics = politics.politics

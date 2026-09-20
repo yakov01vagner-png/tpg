@@ -359,6 +359,16 @@ export function tickPolitics(
     winner: null,
     term: null,
   }),
+  /**
+   * Охота этой короны воевать в этот день (этап 196, Гс1).
+   *
+   * До 1.0 она была вечной: `crownWarlust` берёт нрав основателя и не знает ни
+   * о смене колена, ни о проигранных войнах, ни о годах. Считает это не
+   * `war.ts` (иначе ядро войны потянет за собой дом, миры и бумаги), а тот, кто
+   * вызывает такт. По умолчанию — прежняя вечная охота: старые прогоны
+   * повторяются день в день.
+   */
+  taste: (kingdomId: string, day: number) => number = (kingdomId) => crownWarlust(kingdomId),
 ): PoliticsResult {
   let generator = rng
   let wars = [...politics.wars]
@@ -379,7 +389,7 @@ export function tickPolitics(
     const a = kingdomIds[first]
     const [declares, afterDeclare] = rollChance(
       generator,
-      DECLARE_CHANCE * (a ? crownWarlust(a) : 1),
+      DECLARE_CHANCE * (a ? taste(a, politics.lastDay + i) : 1),
     )
     generator = afterDeclare
     // Врага выбирает не кубик, а корона (этап 72, Ч2): замысел смотрит на

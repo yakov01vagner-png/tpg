@@ -86,7 +86,11 @@ function holdingsOf(
   return Object.values(settlements).filter((one) => one.owner === lordId && one.population > 0)
 }
 
-function warsOfCrown(politics: Politics, kingdomId: string): readonly string[] {
+/**
+ * Экспортируется ради этапа 197: объяснение должно читать то же условие, что и
+ * решение, а не своё похожее.
+ */
+export function crownWars(politics: Politics, kingdomId: string): readonly string[] {
   const out: string[] = []
   for (const war of politics.wars) {
     if (war.a === kingdomId) out.push(war.b)
@@ -137,7 +141,7 @@ export function lordPlan(
     return said('war', 'Мятежнику мира не дадут: он или возьмёт своё, или ляжет.')
   }
 
-  const enemies = warsOfCrown(politics, lord.kingdomId)
+  const enemies = crownWars(politics, lord.kingdomId)
   if (enemies.length > 0) {
     const enemyName = world.kingdoms[enemies[0] as string]?.name ?? 'чужие'
     if (temper.warlike >= 1.1) {
@@ -273,7 +277,7 @@ export function crownPlan(
 
   // Начатая война — уже выбор: пока она не кончена, второй корона не откроет,
   // если только не воинственна настолько, что ей всё равно.
-  const enemies = warsOfCrown(politics, kingdomId)
+  const enemies = crownWars(politics, kingdomId)
   if (enemies.length > 0) {
     const foe = enemies[0] as string
     return said(
@@ -302,7 +306,7 @@ export function crownPlan(
         giant,
       )
     }
-    const friend = bestRelation(world, politics, kingdomId, [giant])
+    const friend = crownBestRelation(world, politics, kingdomId, [giant])
     if (friend) {
       return said(
         'ally',
@@ -318,7 +322,7 @@ export function crownPlan(
     )
   }
 
-  const friend = bestRelation(world, politics, kingdomId, [])
+  const friend = crownBestRelation(world, politics, kingdomId, [])
   if (friend && (politics.relations[pairOf(kingdomId, friend)] ?? 0) > WARM) {
     return said(
       'marry',
@@ -337,7 +341,8 @@ export function crownPlan(
  * приходит), «лучший сосед» иначе определялся бы порядком в списке королевств,
  * и все восемь корон сватались бы к одной и той же.
  */
-function bestRelation(
+/** Экспортируется ради этапа 197: см. `crownWars`. */
+export function crownBestRelation(
   world: World,
   politics: Politics,
   kingdomId: string,
@@ -387,7 +392,7 @@ export function crownFoe(
   // за век сводится к одному врагу всех: расчётливая корона проводила в войне
   // вдвое больше лет, чем воинственная, — не по нраву, а по колее.
   const others = Object.keys(world.kingdoms).filter((id) => id !== kingdomId)
-  const free = others.filter((id) => warsOfCrown(politics, id).length === 0)
+  const free = others.filter((id) => crownWars(politics, id).length === 0)
   const candidates = free.length > 0 ? free : others
   let worst: string | null = null
   let least = Number.POSITIVE_INFINITY
@@ -421,7 +426,7 @@ export function crownFoe(
 
 /** Открывает ли корона вторую войну: только очень воинственная. */
 export function opensSecondWar(politics: Politics, kingdomId: string): boolean {
-  if (warsOfCrown(politics, kingdomId).length === 0) return true
+  if (crownWars(politics, kingdomId).length === 0) return true
   return crownWarlust(kingdomId) >= 1.2
 }
 
