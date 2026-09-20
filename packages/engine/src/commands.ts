@@ -24,6 +24,7 @@ import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
 import { BALANCE, BALANCE_WORDS, betrayers, warPressure } from './balance'
 import type { Band, BandEvent, GarrisonOrder } from './band'
 import { bandSize, bandsOnLeg, clash, nextHop, roadHours, tickBands } from './band'
+import { marketMood } from './bargain'
 import type { Battle, BattleSide, GroupId, OrderId } from './battle'
 import {
   ORDER_LABELS,
@@ -8847,6 +8848,12 @@ function grantWish(state: GameState, companionId: string): CommandResult {
   return close(draft)
 }
 
+/** Во сколько раз мир меняет цену здесь (этап 178, Тг1). */
+function moodTimes(state: GameState, market: Settlement, good: GoodId, day: number): number {
+  const why = marketMood(state, state.world, market, good, day)
+  return why.base > 0 ? why.now / why.base : 1
+}
+
 /**
  * Заплатить семьям павших (этап 174, Пт4).
  *
@@ -9577,6 +9584,9 @@ function buyFrom(
       tradeSkill,
       dealing.standing,
       cut,
+      // Цена берёт своё из мира: война, разорение, дорога, год и пошлина
+      // (этап 178, Тг1). До 1.0 цена знала только о нужде.
+      moodTimes(state, market, good, dayOf(state.time)),
     )
     market = withStock(market, good, -1)
   }
@@ -9633,6 +9643,7 @@ function sellTo(state: GameState, merchantId: string, good: GoodId, amount: numb
       tradeSkill,
       dealing.standing,
       cut,
+      moodTimes(state, market, good, dayOf(state.time)),
     )
     market = withStock(market, good, 1)
   }

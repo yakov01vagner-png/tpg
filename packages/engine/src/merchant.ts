@@ -205,8 +205,15 @@ export function merchantBuyPrice(
   tradeSkill: number,
   standing: number,
   cut = 0,
+  /**
+   * Во сколько раз мир меняет цену здесь (этап 178, Тг1): война, разорение,
+   * расстояние до того места, где товар делают, год и пошлина. Считает это
+   * `bargain.ts`; купец берёт готовое число, чтобы не тянуть за собой полмира.
+   * По умолчанию единица — тогда цена такая, какой была до 1.0.
+   */
+  mood = 1,
 ): number {
-  const base = buyPrice(world, settlement, good, tradeSkill)
+  const base = buyPrice(world, settlement, good, tradeSkill) * mood
   const price = base * merchant.markup * standingFactor(standing, merchant.temper) * (1 - cut)
   return Math.max(1, Math.round(price))
 }
@@ -220,8 +227,9 @@ export function merchantSellPrice(
   tradeSkill: number,
   standing: number,
   cut = 0,
+  mood = 1,
 ): number {
-  const base = sellPrice(world, settlement, good, tradeSkill)
+  const base = sellPrice(world, settlement, good, tradeSkill) * mood
   const price =
     (base / merchant.markup) * (2 - standingFactor(standing, merchant.temper)) * (1 + cut)
   return Math.max(1, Math.round(price))
