@@ -270,6 +270,7 @@ import { UPBRINGING_MAX } from './content/home'
 import { KIN_ASK, KIN_GIFT, UPBRINGING_MINUTES } from './content/home'
 import { KITH, KITH_ASK_DEFS, KITH_WORDS } from './content/kith'
 import { KNOWN as KNOWN_DEFS } from './content/known'
+import { LEAGUER } from './content/leaguer'
 import { LIEGE, LIEGE_WORDS, type LordTrouble, TROUBLE_DEFS } from './content/liege'
 import { TEMPER_LINES } from './content/lines'
 import { FACTION_FAVOUR, FACTION_SPITE, type FactionId, type LordDeedId } from './content/lords'
@@ -599,6 +600,7 @@ import {
   leagueNow,
   whoToCall,
 } from './league'
+import { siegeTally, weekSays } from './leaguer'
 import {
   LEVER,
   LEVER_DEFS,
@@ -3941,9 +3943,28 @@ function siegeWait(state: GameState, days: number): CommandResult {
   draft.siege = { ...siege, days: siege.days + days }
   // Плотники не ждут приказа: работы идут, пока войско стоит (этап 85, О2).
   advanceWorks(draft, days)
+  // Неделя под стенами рассказывается, а не отмечается (этап 172, Ос5).
+  tellSiegeWeek(draft, days)
   // Гарнизон не сидит сложа руки (этап 58, Б2).
   sally(draft, siege.locationId)
   return close(draft)
+}
+
+/**
+ * Осада словами (этап 172, Ос5).
+ *
+ * Раз в неделю под стенами что-то происходит, и это говорится: голод, мор,
+ * пролом, подмога, разговоры внутри. Ничего нового не считается — говорится
+ * уже посчитанное одним счётом (`siegeTally`).
+ */
+function tellSiegeWeek(draft: Draft, days: number): void {
+  const siege = draft.siege
+  if (!siege) return
+  const day = dayOf(draft.time)
+  if (siege.days % LEAGUER.weekDays > days) return
+  const tally = siegeTally(draft.base, draft.world, siege, day)
+  notice(draft, tally.says, 'war')
+  for (const line of weekSays(draft.base, draft.world, siege, day)) notice(draft, line, 'war')
 }
 
 function siegeAssault(state: GameState): CommandResult {
