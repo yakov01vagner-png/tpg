@@ -306,6 +306,18 @@ import {
 } from './day'
 import { tickDiplomacy } from './diplomacy'
 import {
+  DISPATCH,
+  DISPATCH_WORDS,
+  type FieldOrder,
+  INTENT_DEFS,
+  type IntentId,
+  actsOn,
+  captainOf,
+  fieldReport,
+  foesNear,
+  linkTo,
+} from './dispatch'
+import {
   PRIME_AGE,
   ageOf,
   agedAttributes,
@@ -1148,6 +1160,9 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Поле (этап 111): дать части замысел и спросить с неё донесение. */
+  | { readonly type: 'setIntent'; readonly hostId: string; readonly intent: IntentId | null }
+  | { readonly type: 'askHost'; readonly hostId: string }
   /** Глаза (этап 110): послать часть смотреть, поставить завесу, спросить местных. */
   | { readonly type: 'setRole'; readonly hostId: string; readonly role: HostRole | null }
   | { readonly type: 'askLocals' }
@@ -1671,6 +1686,10 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'setIntent':
+      return setIntent(state, command.hostId, command.intent)
+    case 'askHost':
+      return askHost(state, command.hostId)
     case 'setRole':
       return setRole(state, command.hostId, command.role)
     case 'askLocals':
@@ -9642,6 +9661,14 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  fieldOrders: readonly FieldOrder[]
+  intents: Readonly<Record<string, IntentId>>
+  orderLog: {
+    readonly sent: number
+    readonly onTime: number
+    readonly stale: number
+    readonly ownWay: number
+  }
   roles: Readonly<Record<string, HostRole>>
   scoutLog: { readonly learned: number; readonly spent: number }
   behests: readonly Behest[]
@@ -9762,6 +9789,9 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    fieldOrders: state.fieldOrders ?? [],
+    intents: state.intents ?? {},
+    orderLog: state.orderLog ?? { sent: 0, onTime: 0, stale: 0, ownWay: 0 },
     roles: state.roles ?? {},
     scoutLog: state.scoutLog ?? { learned: 0, spent: 0 },
     behests: state.behests ?? [],
@@ -10065,6 +10095,8 @@ function close(draft: Draft): CommandResult {
     tickSightings(draft, daysPassed)
     // Дозоры и завесы едят серебро и людей каждый день (этап 110).
     tickEyes(draft, daysPassed)
+    // Приказы доезжают до частей — и застают другую войну (этап 111).
+    tickFieldOrders(draft, daysPassed)
     // Двор просит, стареет и уходит (этап 104).
     tickCourtiers(draft, daysPassed)
     // Посланные смотреть возвращаются (этап 102).
@@ -10226,6 +10258,9 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    fieldOrders: draft.fieldOrders,
+    intents: draft.intents,
+    orderLog: draft.orderLog,
     roles: draft.roles,
     scoutLog: draft.scoutLog,
     behests: draft.behests,
@@ -11006,6 +11041,33 @@ function orderHost(
     return fail('invalid', 'Такого места нет.')
   }
   const draft = open(state)
+  const day = dayOf(state.time)
+  const where = state.world.locations[target]?.name ?? 'место'
+  const link = linkTo(state, state.world, host.locationId, state.locationId)
+  draft.orderLog = { ...draft.orderLog, sent: draft.orderLog.sent + 1 }
+  advance(draft, hours(2))
+  // Часть в поле — приказ едет к ней, и по дороге война не стоит (этап 111, По1).
+  if (link.days > 0) {
+    draft.fieldOrders = [
+      ...draft.fieldOrders,
+      {
+        id: `order:${hostId}:${day}`,
+        hostId,
+        order,
+        targetId: target,
+        sentDay: day,
+        arrivesDay: day + link.days,
+        wasAt: host.locationId,
+        wasFoes: foesNear(state, host.locationId),
+      },
+    ]
+    notice(
+      draft,
+      `${DISPATCH_WORDS.sent} ${orderDef(order).label}${order === 'advance' || order === 'siege' ? ` — ${where}` : ''}. ${link.says} Дойдёт на ${day + link.days}-й день.`,
+      'war',
+    )
+    return close(draft)
+  }
   const goal =
     order === 'advance'
       ? ({ type: 'raid', targetId: target } as const)
@@ -11017,8 +11079,7 @@ function orderHost(
             ? ({ type: 'home', targetId: mineNearest(draft, host.locationId) } as const)
             : ({ type: 'muster' } as const)
   draft.bands = draft.bands.map((one) => (one.id === hostId ? { ...one, goal } : one))
-  advance(draft, hours(2))
-  const where = state.world.locations[target]?.name ?? 'место'
+  draft.orderLog = { ...draft.orderLog, onTime: draft.orderLog.onTime + 1 }
   notice(
     draft,
     `Приказ части: ${orderDef(order).label}${order === 'advance' || order === 'siege' ? ` — ${where}` : ''}.`,
@@ -11973,6 +12034,105 @@ function handMatter(state: GameState, matterId: string): CommandResult {
     'people',
   )
   return close(draft)
+}
+
+/**
+ * Дать части замысел (этап 111, По3).
+ *
+ * Замысел не стареет в дороге: «держи этот край» верно и через неделю, а «иди
+ * в Липовку» — уже нет. Оттого полководец с замыслом делает по-своему то, чего
+ * ты хочешь, а без замысла — то, чего хочет он.
+ */
+function setIntent(state: GameState, hostId: string, intent: IntentId | null): CommandResult {
+  const host = hostById(state, hostId)
+  if (!host) return fail('invalid', 'Такой части у тебя нет.')
+  const draft = open(state)
+  advance(draft, hours(1))
+  const intents = { ...draft.intents }
+  if (intent === null) {
+    delete intents[hostId]
+    draft.intents = intents
+    notice(draft, `${captainOf(host).name}: замысел снят, ждёт приказа.`, 'war')
+    return close(draft)
+  }
+  intents[hostId] = intent
+  draft.intents = intents
+  const def = INTENT_DEFS[intent]
+  notice(draft, `${captainOf(host).name} понял: «${def.label}». ${def.about}`, 'war')
+  return close(draft)
+}
+
+/**
+ * Спросить часть, как у неё дела (этап 111, По4).
+ *
+ * Донесение приходит его словами и с его поправкой: горячий прибавляет,
+ * осторожный убавляет, дорога портит и то, и другое. Поправки ты не видишь.
+ */
+function askHost(state: GameState, hostId: string): CommandResult {
+  const host = hostById(state, hostId)
+  if (!host) return fail('invalid', 'Такой части у тебя нет.')
+  const day = dayOf(state.time)
+  const link = linkTo(state, state.world, host.locationId, state.locationId)
+  const report = fieldReport(state, state.world, host, day)
+  const captain = captainOf(host)
+
+  const draft = open(state)
+  advance(draft, hours(2))
+  // Донесение ложится вестью: дальше оно стареет по общему правилу этапа 99.
+  draft.words = withSightings(draft.words, [
+    {
+      id: `field:${hostId}:${day}`,
+      to: PLAYER,
+      kind: 'host',
+      about: hostId,
+      value: host.locationId,
+      source: 'own',
+      from: captain.name,
+      day: day + link.days,
+    },
+  ])
+  notice(draft, `${report.says} ${link.says}`, 'war')
+  return close(draft)
+}
+
+/**
+ * Приказы доезжают (этап 111, По1, По2 и По6).
+ *
+ * Гонец едет, война двигается. Если к его приезду обстановка та же — делают
+ * велённое. Если разошлась — решает тот, кто получил: по своему нраву, а если
+ * ты дал замысел, то под замысел.
+ */
+function tickFieldOrders(draft: Draft, days: number): void {
+  if (days <= 0 || draft.fieldOrders.length === 0) return
+  const day = dayOf(draft.time)
+  const left: FieldOrder[] = []
+  for (const order of draft.fieldOrders) {
+    if (day < order.arrivesDay) {
+      left.push(order)
+      continue
+    }
+    const host = draft.bands.find((one) => one.id === order.hostId)
+    if (!host) continue
+    const captain = captainOf(host)
+    const acted = actsOn(draft.base, order, captain, draft.intents[order.hostId] ?? null, day)
+    const goal =
+      acted.order === 'advance'
+        ? ({ type: 'raid', targetId: acted.targetId } as const)
+        : acted.order === 'siege'
+          ? ({ type: 'siege', targetId: acted.targetId } as const)
+          : acted.order === 'home'
+            ? ({ type: 'home', targetId: mineNearest(draft, host.locationId) } as const)
+            : ({ type: 'defend', targetId: host.locationId } as const)
+    draft.bands = draft.bands.map((one) => (one.id === host.id ? { ...one, goal } : one))
+    draft.orderLog = {
+      ...draft.orderLog,
+      onTime: draft.orderLog.onTime + (acted.obeyed ? 1 : 0),
+      stale: draft.orderLog.stale + (acted.obeyed ? 0 : 1),
+      ownWay: draft.orderLog.ownWay + (acted.obeyed ? 0 : 1),
+    }
+    notice(draft, acted.says, 'war')
+  }
+  draft.fieldOrders = left
 }
 
 /** Во сколько раз каждая часть хуже в бою из-за того, чем она занята. */

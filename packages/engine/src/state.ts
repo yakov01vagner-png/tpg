@@ -17,12 +17,14 @@ import type { Commission, Company } from './company'
 import type { Congress, CongressRecord } from './congress'
 import type { BuildingId } from './content/buildings'
 import { COMPANIES } from './content/companies'
+import type { IntentId } from './content/dispatch'
 import { PLAIN_LAW } from './content/estate'
 import type { Ailment } from './content/heal'
 import type { LordDeedId } from './content/lords'
 import type { QuarterId } from './content/quarters'
 import type { HostRole } from './content/scout'
 import type { CechMembership } from './craft'
+import type { FieldOrder } from './dispatch'
 import type { Settlement } from './economy'
 import { createSettlements } from './economy'
 import type { Embassy } from './embassy'
@@ -409,6 +411,17 @@ export interface GameState {
   }
   /** Дела, которые ты уже разобрал или передал: чтобы не звали дважды. */
   readonly settled?: Readonly<Record<string, number>>
+  /** Приказы, которые ещё едут к своим частям в поле (этап 111). */
+  readonly fieldOrders?: readonly FieldOrder[]
+  /** Замысел, данный части: он не стареет в дороге. */
+  readonly intents?: Readonly<Record<string, IntentId>>
+  /** Что стало с приказами в поле. */
+  readonly orderLog?: {
+    readonly sent: number
+    readonly onTime: number
+    readonly stale: number
+    readonly ownWay: number
+  }
   /** Чем занята часть, кроме войны: дозором или завесой (этап 110). */
   readonly roles?: Readonly<Record<string, HostRole>>
   /** Что дала разведка и во что встала. */
@@ -547,6 +560,9 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     favours: {},
     ruleLog: { heard: 0, handed: 0, missed: 0 },
     settled: {},
+    fieldOrders: [],
+    intents: {},
+    orderLog: { sent: 0, onTime: 0, stale: 0, ownWay: 0 },
     roles: {},
     scoutLog: { learned: 0, spent: 0 },
     behests: [],
