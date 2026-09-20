@@ -12460,12 +12460,13 @@ function tickBeliefs(draft: Draft, days: number): void {
   if (days <= 0) return
   const day = dayOf(draft.time)
   if (day % BIAS.beat !== 0) return
+  if (!draft.realm) return
   const sides = Object.keys(draft.base.world.kingdoms)
+  // Сила считается один раз на всех: она об одном и том же — о тебе.
+  const about = PLAYER
+  const truth = strengthOf(draft.base, draft.world, about, day).score
+  if (truth <= 0) return
   for (const watcher of sides) {
-    const about = PLAYER
-    if (!draft.realm) continue
-    const truth = strengthOf(draft.base, draft.world, about, day).score
-    if (truth <= 0) continue
     // Свежее мнение: предубеждение поверх того, что ему принесли.
     const fresh = shadedBy(watcher, truth)
     const held = beliefOf(draft.base, watcher, about)

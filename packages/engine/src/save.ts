@@ -457,6 +457,60 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
       censure: data.censure ?? null,
     }
   },
+  /**
+   * v23 → v24: знание, туман войны и картины мира (версия 0.8).
+   *
+   * Всё, что добавила версия, — необязательные поля: сейв 0.7 читается и без
+   * них. Миграция проставляет их явно по правилу репозитория (CLAUDE.md, п.5):
+   * одна миграция на закрытие версии, а не по одной на этап. Знание при этом
+   * начинается с чистого листа — и это верно по смыслу: государь, о котором
+   * сейв не помнит, что он знал, не знает ничего и узнаёт заново.
+   */
+  23: (data) => ({
+    ...data,
+    // Знание (99–103): вести, ревизии, молва, объезды, доверие.
+    words: data.words ?? [],
+    audits: data.audits ?? {},
+    gossip: data.gossip ?? [],
+    looks: data.looks ?? [],
+    trust: data.trust ?? {},
+    // Двор и день государя (104–108).
+    favours: data.favours ?? {},
+    ruleLog: data.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
+    settled: data.settled ?? {},
+    behests: data.behests ?? [],
+    behestLog: data.behestLog ?? { sent: 0, full: 0, twisted: 0, none: 0 },
+    // Туман войны (109–113): роли частей, приказы в поле, обманы, осады.
+    roles: data.roles ?? {},
+    scoutLog: data.scoutLog ?? { learned: 0, spent: 0 },
+    fieldOrders: data.fieldOrders ?? [],
+    intents: data.intents ?? {},
+    orderLog: data.orderLog ?? { sent: 0, onTime: 0, stale: 0, ownWay: 0 },
+    ruses: data.ruses ?? [],
+    ruseLog: data.ruseLog ?? { made: 0, worked: 0, seen: 0 },
+    siegeLog: data.siegeLog ?? { byKnowing: 0, byWalls: 0, bluffs: 0, defectors: 0 },
+    // Дипломатия вслепую (114–117): гости, тайны, доказательства, резиденты.
+    showing: data.showing ?? {},
+    envoyLog: data.envoyLog ?? { sent: 0, brought: 0, offSum: 0, guests: 0 },
+    hushed: data.hushed ?? {},
+    secretLog: data.secretLog ?? { made: 0, leaked: 0, hushed: 0, caught: 0 },
+    learned: data.learned ?? {},
+    proofs: data.proofs ?? [],
+    proofLog: data.proofLog ?? { got: 0, shown: 0, forged: 0, caught: 0 },
+    residents: data.residents ?? [],
+    residentLog: data.residentLog ?? { seated: 0, words: 0, lost: 0 },
+    // ИИ, который тоже не видит (118–121).
+    guesses: data.guesses ?? {},
+    tellSeen: data.tellSeen ?? {},
+    guessLog: data.guessLog ?? { made: 0, right: 0, wrong: 0, confused: 0 },
+    beliefs: data.beliefs ?? {},
+    biasLog: data.biasLog ?? { held: 0, woke: 0, warsByError: 0 },
+    deceitLog: data.deceitLog ?? { made: 0, worked: 0, caught: 0 },
+    // Рост (124–126): пути, испытания, ржавчина.
+    usedDay: data.usedDay ?? {},
+    pathLog: data.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
+    trials: data.trials ?? {},
+  }),
 }
 
 export type LoadResult =
