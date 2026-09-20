@@ -1,6 +1,12 @@
 import type { Captive } from './captive'
 import { ransomFor } from './captive'
-import { LEVERS, LEVER_DEFS, RANSOM, RANSOM_WORDS, type RansomLeverId } from './content/ransom'
+import {
+  RANSOM,
+  RANSOM_LEVERS,
+  RANSOM_LEVER_DEFS,
+  RANSOM_WORDS,
+  type RansomLeverId,
+} from './content/ransom'
 import { sideName } from './dread'
 import { PLAYER } from './holding'
 import type { GameState } from './state'
@@ -16,7 +22,7 @@ import type { World } from './world/types'
  */
 
 export function leverDefOf(id: RansomLeverId) {
-  return LEVER_DEFS[id]
+  return RANSOM_LEVER_DEFS[id]
 }
 
 /** Свои, которые сидят у чужих (Пл1 и Пл4). */
@@ -37,7 +43,7 @@ export function yoursTaken(state: GameState): readonly {
  * серебро нужнее, и дно у него ниже. Всё это названо заранее — торгуются не
  * вслепую.
  */
-export function haggle(
+export function haggleRansomFor(
   state: GameState,
   world: World,
   captive: { readonly ransom: number; readonly kingdomId: string | null },
@@ -62,9 +68,9 @@ export function leversFor(
   day: number,
 ): readonly { readonly lever: RansomLeverId; readonly says: string }[] {
   const at = captive.kingdomId ? atWar(state.politics, PLAYER, captive.kingdomId) : false
-  return LEVERS.filter((id) => id !== 'peace' || at).map((id) => ({
+  return RANSOM_LEVERS.filter((id) => id !== 'peace' || at).map((id) => ({
     lever: id,
-    says: `${LEVER_DEFS[id].label}: ${LEVER_DEFS[id].about}`,
+    says: `${RANSOM_LEVER_DEFS[id].label}: ${RANSOM_LEVER_DEFS[id].about}`,
   }))
 }
 
@@ -78,7 +84,7 @@ export function ownRansom(
   const row = yoursTaken(state).find((one) => one.id === id)
   if (!row) return { cost: 0, years: 0, says: 'Такого в плену нет.' }
   const years = Math.round(((day - row.since) / 365) * 10) / 10
-  const price = haggle(state, world, { ransom: row.ransom, kingdomId: null }, row.by, day)
+  const price = haggleRansomFor(state, world, { ransom: row.ransom, kingdomId: null }, row.by, day)
   return {
     cost: price.asks,
     years,
@@ -101,4 +107,4 @@ export function ransomLedger(
   }
 }
 
-export { RANSOM, RANSOM_WORDS, LEVERS, LEVER_DEFS, ransomFor, type RansomLeverId }
+export { RANSOM, RANSOM_WORDS, RANSOM_LEVERS, RANSOM_LEVER_DEFS, ransomFor, type RansomLeverId }

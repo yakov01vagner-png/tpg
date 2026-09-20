@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { createCharacter } from '../src/character'
 import { applyCommand } from '../src/commands'
-import { LEVERS, LEVER_DEFS, RANSOM } from '../src/content/ransom'
+import { RANSOM, RANSOM_LEVERS, RANSOM_LEVER_DEFS } from '../src/content/ransom'
 import { createSettlements } from '../src/economy'
 import { PLAYER } from '../src/holding'
-import { haggle, leversFor, ownRansom, ransomLedger, yoursTaken } from '../src/ransom'
+import { haggleRansomFor, leversFor, ownRansom, ransomLedger, yoursTaken } from '../src/ransom'
 import { createRng } from '../src/rng'
 import type { GameState } from '../src/state'
 import { createGame } from '../src/state'
@@ -59,7 +59,7 @@ describe('Пл2 и Пл3: выкуп торгуют, а пленник — ры�
       ransom: 2000,
     }
     const state = ruler({ captives: [captive] })
-    const price = haggle(state, world, captive, foe, day)
+    const price = haggleRansomFor(state, world, captive, foe, day)
     console.log(price.says)
     for (const one of leversFor(state, world, captive, day)) console.log(one.says)
     expect(price.asks).toBeGreaterThan(price.least)
@@ -79,7 +79,7 @@ describe('Пл2 и Пл3: выкуп торгуют, а пленник — ры�
       `отпущен за ${price.asks}: казна ${state.character.money} -> ${sold.character.money}, пленных ${(sold.captives ?? []).length}`,
     )
     expect((sold.captives ?? []).length).toBe(0)
-    for (const id of LEVERS) expect(LEVER_DEFS[id].label.length).toBeGreaterThan(2)
+    for (const id of RANSOM_LEVERS) expect(RANSOM_LEVER_DEFS[id].label.length).toBeGreaterThan(2)
   })
 })
 

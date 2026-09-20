@@ -153,6 +153,15 @@ import {
   riotRisk,
   sideOfAsk,
 } from './city'
+import {
+  COMEBACK,
+  COMEBACK_WORDS,
+  ROAD_DEFS,
+  type RoadId,
+  oldClaim,
+  roadsBack,
+  secondTime,
+} from './comeback'
 import type { CompanionRole } from './companion'
 import type { Companion } from './companion'
 import {
@@ -776,7 +785,13 @@ import {
 import { describeQuest, isComplete, offersAt } from './quest'
 import type { Quest } from './quest'
 import { RACE, RACE_WORDS, dragsOn, risking, whoLeads } from './race'
-import { RANSOM, RANSOM_WORDS, ownRansom, haggle as ransomHaggle, yoursTaken } from './ransom'
+import {
+  RANSOM,
+  RANSOM_WORDS,
+  ownRansom,
+  haggleRansomFor as ransomHaggle,
+  yoursTaken,
+} from './ransom'
 import {
   type ArrearsAnswer,
   type Charters,
@@ -1390,6 +1405,8 @@ export type Command =
   /** Коалиция (этап 136): разобрать чужую по одному и собрать свою против первого. */
   | { readonly type: 'breakLeague'; readonly member: string }
   | { readonly type: 'callLeague'; readonly against: string }
+  /** Путь обратно (этап 152): вернуть своё одной из четырёх дорог. */
+  | { readonly type: 'claimBack'; readonly road: RoadId }
   /** Изгнание (этап 151): пойти к чужому двору, когда своего нет. */
   | { readonly type: 'goIntoExile'; readonly at: string }
   /** Плен (этап 150): выкупить своего и поторговаться за чужого. */
@@ -1992,6 +2009,8 @@ export function applyCommand(
       return breakLeague(state, command.member)
     case 'callLeague':
       return callLeague(state, command.against)
+    case 'claimBack':
+      return claimBack(state, command.road)
     case 'goIntoExile':
       return goIntoExile(state, command.at)
     case 'ransomOwn':
@@ -14356,6 +14375,50 @@ function goIntoExile(state: GameState, at: string): CommandResult {
   draft.exile = { at, sinceDay: day }
   draft.politics = withRelation(draft.politics, PLAYER, at, 10)
   notice(draft, `${FALLEN_WORDS.exile} Ты при дворе ${kingdomName(draft.base, at)}.`, 'world')
+  return close(draft)
+}
+
+/**
+ * Вернуть своё (этап 152, Об1, Об2 и Об4).
+ *
+ * Дорога открыта настолько, насколько её условия есть в мире. Возвращённая
+ * держава держится хуже: мир помнит, что однажды её уже не стало.
+ */
+function claimBack(state: GameState, road: RoadId): CommandResult {
+  const day = dayOf(state.time)
+  if (holdingsOf(state.settlements, PLAYER).length > 0) {
+    return fail('requirements', 'Возвращать нечего: земля при тебе.')
+  }
+  const claim = oldClaim(state, state.world, day)
+  if (!claim.has) return fail('requirements', claim.says)
+  const way = roadsBack(state, state.world, day).find((one) => one.road === road)
+  if (!way?.open) return fail('requirements', way?.says ?? 'Такой дороги нет.')
+  if (road === 'hire' && state.character.money < COMEBACK.hireSilver) {
+    return fail('noMoney', `На роту нужно ${COMEBACK.hireSilver}.`)
+  }
+  // Возвращаются туда, где стоят: место под ногами и есть начало.
+  const seat = state.settlements[state.locationId]
+  if (!seat || seat.population <= 0) {
+    return fail('unavailableHere', 'Здесь возвращать нечего: стань там, где есть люди.')
+  }
+
+  const draft = open(state)
+  advance(draft, hours(24 * 7))
+  if (road === 'hire') addMoney(draft, -COMEBACK.hireSilver)
+  draft.settlements = {
+    ...draft.settlements,
+    [seat.locationId]: { ...seat, owner: PLAYER },
+  }
+  draft.realm = { name: claim.name, sinceDay: day }
+  const worse = secondTime(draft.base, draft.world, day)
+  // Признание не возвращается вместе с землёй: его берут заново.
+  draft.recognitions = {}
+  shiftVassals(draft, -Math.round(worse.unrest / 3), null)
+  notice(
+    draft,
+    `${claim.name} возвращена дорогой «${ROAD_DEFS[road].label}». ${worse.says} ${COMEBACK_WORDS.worse}`,
+    'world',
+  )
   return close(draft)
 }
 

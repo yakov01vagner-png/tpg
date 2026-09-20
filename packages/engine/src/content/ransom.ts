@@ -7,16 +7,18 @@
  */
 
 /** Что можно взять с пленника, кроме серебра (Пл3). */
-export const LEVERS = ['silver', 'yield', 'recognise', 'peace'] as const
-export type RansomLeverId = (typeof LEVERS)[number]
+export const RANSOM_LEVERS = ['silver', 'yield', 'recognise', 'peace'] as const
+export type RansomLeverId = (typeof RANSOM_LEVERS)[number]
 
-export const LEVER_DEFS: Record<RansomLeverId, { readonly label: string; readonly about: string }> =
-  {
-    silver: { label: 'серебром', about: 'Обычный выкуп: цена и день, когда привезут.' },
-    yield: { label: 'уступкой', about: 'Спорная земля или дань вместо денег: дороже для чести.' },
-    recognise: { label: 'признанием', about: 'Его корона признаёт тебя: пленник дороже золота.' },
-    peace: { label: 'миром', about: 'Война кончается на твоих условиях: плен стоит войны.' },
-  }
+export const RANSOM_LEVER_DEFS: Record<
+  RansomLeverId,
+  { readonly label: string; readonly about: string }
+> = {
+  silver: { label: 'серебром', about: 'Обычный выкуп: цена и день, когда привезут.' },
+  yield: { label: 'уступкой', about: 'Спорная земля или дань вместо денег: дороже для чести.' },
+  recognise: { label: 'признанием', about: 'Его корона признаёт тебя: пленник дороже золота.' },
+  peace: { label: 'миром', about: 'Война кончается на твоих условиях: плен стоит войны.' },
+}
 
 export const RANSOM = {
   /** Насколько пленитель запрашивает больше расчётной цены. */
