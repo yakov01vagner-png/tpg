@@ -394,6 +394,7 @@ import {
   woundKindDef,
   woundKindOf,
 } from './heal'
+import { HIDDEN, HIDDEN_WORDS, denounceOffer, denounceWord, lossLedger, shading } from './hidden'
 import {
   PLAYER,
   dailyTax,
@@ -1108,6 +1109,8 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Утайка (этап 105): выслушать доносчика или прогнать. */
+  | { readonly type: 'hearDenounce'; readonly pay: boolean }
   /** Люди двора (этап 104): исполнить просьбу своего или отказать. */
   | { readonly type: 'answerCourtier'; readonly office: OfficeId; readonly grant: boolean }
   /** Свои глаза (этап 102): объехать державу, послать человека смотреть. */
@@ -1619,6 +1622,8 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'hearDenounce':
+      return hearDenounce(state, command.pay)
     case 'answerCourtier':
       return answerCourtier(state, command.office, command.grant)
     case 'rideOut':
@@ -11788,6 +11793,53 @@ function shutOwnHarbours(draft: Draft, days: number): void {
 }
 
 /**
+ * Выслушать доносчика (этап 105, С5).
+ *
+ * Доносят не из любви к правде: ревностный — из усердия и почти всегда верно,
+ * дошлый — чтобы убрать соперника. Слово стоит серебра, и оно может оказаться
+ * ложью — тогда за ним запишется ложь, как за всяким источником (этап 103).
+ */
+function hearDenounce(state: GameState, pay: boolean): CommandResult {
+  const day = dayOf(state.time)
+  const offer = denounceOffer(state, state.world, day)
+  if (!offer) return fail('invalid', 'Доносить некому и не на кого.')
+  if (!pay) {
+    const draft = open(state)
+    advance(draft, hours(1))
+    notice(draft, `${offer.says} Ты не стал слушать.`, 'people')
+    return close(draft)
+  }
+  if (state.character.money < offer.silver) {
+    return fail('noMoney', `Просят ${offer.silver}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -offer.silver)
+  advance(draft, hours(4))
+  const [right, afterRoll] = rollChance(draft.rng, offer.truth)
+  draft.rng = afterRoll
+  const skimmed = skimAt(draft.base, draft.base.world, offer.locationId, day)
+  draft.words = bring(draft.words, denounceWord(offer, right ? skimmed : 0, day))
+  draft.trust = remember(draft.trust, offer.from, !right)
+  if (right) {
+    // Принятый донос бьёт по тому, на кого донесли.
+    draft.reputation = withPlaceRep(draft.reputation, offer.locationId, HIDDEN.denouncedAnger)
+    notice(
+      draft,
+      `${offer.says} Сказанное подтвердилось: ${offer.about} кладёт себе ${skimmed} в месяц.`,
+      'people',
+    )
+  } else {
+    notice(
+      draft,
+      `${offer.says} Проверить нечем: похоже, ${offer.from} сводил свои счёты. Это за ним запишется.`,
+      'people',
+    )
+  }
+  return close(draft)
+}
+
+/**
  * Ответить своему (этап 104, Дв2 и Дв5).
  *
  * У каждого при дворе есть своё желание, и оно стоит того, чего стоит: серебра,
@@ -12146,18 +12198,24 @@ function tickReports(draft: Draft, days: number): void {
     const report = reportFrom(draft.base, draft.base.world, one.locationId, day)
     if (!report) continue
     skimmed += skimAt(draft.base, draft.base.world, one.locationId, day)
+    // Двор решает не только что сказать, но и когда (этап 105, С1): доброе
+    // доходит первым, дурное отстаёт и приходит мягче.
+    const seneschal = courtierAt(draft.base, 'seneschal', day)
     for (const line of report.lines) {
       if (line.kind !== 'grain' && line.kind !== 'people') continue
+      const good = line.kind === 'grain' ? line.said >= line.truth : true
+      const shade = shading(seneschal, good)
       words = bring(words, {
         id: `word:${line.kind}:${one.locationId}`,
         to: PLAYER,
         kind: line.kind === 'grain' ? 'stores' : 'garrison',
         about: one.locationId,
-        value: line.said,
+        value: Math.round(line.said * (good ? 1 : shade.soften)),
         source: 'own',
         from: report.reporter.name,
-        // Отчёт пишут сегодня, а доходит он позже: возраст вести — его дорога.
-        day: day - report.reporter.days,
+        // Отчёт пишут сегодня, а доходит он позже: возраст вести — его дорога,
+        // да ещё столько, сколько его придерживали.
+        day: day - report.reporter.days - shade.days,
       })
     }
   }
