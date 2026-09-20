@@ -80,7 +80,7 @@ import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 32
+export const SCHEMA_VERSION = 33
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -453,6 +453,25 @@ export interface GameState {
   readonly crownDebts?: Readonly<
     Record<string, { readonly owed: number; readonly sinceDay: number }>
   >
+  /**
+   * Реляции с войны (этап 175): что прислали, когда дойдёт и насколько соврали.
+   *
+   * Сам бой считается в мире, а вот весть о нём — история: она вышла в такой-то
+   * день из такого-то места и идёт столько, сколько идёт. Помнятся последние
+   * сорок.
+   */
+  readonly relations?: readonly {
+    readonly id: string
+    readonly from: string
+    readonly where: string
+    readonly day: number
+    readonly comesDay: number
+    readonly won: boolean
+    readonly off: number
+    readonly fell: number
+    readonly told: number
+    readonly says: string
+  }[]
   /**
    * Лазарет (этап 174): кто ранен, где лечится и когда встанет.
    *
@@ -961,6 +980,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     homeTalk: {},
     hurt: [],
     bloodPaid: 0,
+    relations: [],
     anointed: null,
     deeds: {},
     dreadLog: {},

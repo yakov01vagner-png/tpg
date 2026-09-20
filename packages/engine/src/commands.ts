@@ -545,6 +545,7 @@ import {
   woundKindOf,
 } from './heal'
 import { HEIRS, HEIRS_WORDS, heirWay, reignChanged, troubled } from './heirs'
+import { type Relation, relationFrom, rememberRelation } from './herald'
 import { HIDDEN, HIDDEN_WORDS, denounceOffer, denounceWord, lossLedger, shading } from './hidden'
 import {
   PLAYER,
@@ -3547,6 +3548,31 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
     )
   } else if (!held && unitsSize(battle.fallen ?? {}) > 0) {
     notice(draft, 'Раненых пришлось оставить на поле. Их там и добьют.', 'war')
+  }
+
+  // О бое идёт реляция (этап 175, Рл1–Рл3): и своя, и чужая. Своя дойдёт до
+  // твоей земли не сразу и привирает в твою пользу; чужая пишет о том же бое
+  // своё — и тоже о победе.
+  const day = dayOf(draft.time)
+  const mine = relationFrom(draft.base.world, {
+    from: PLAYER,
+    where: draft.locationId,
+    to: holdingsOf(draft.settlements, PLAYER)[0]?.locationId ?? draft.locationId,
+    day,
+    won: held,
+    fell: unitsSize(battle.fallen ?? {}),
+  })
+  draft.relations = rememberRelation(draft.relations, mine)
+  if (battle.foeId) {
+    const theirs = relationFrom(draft.base.world, {
+      from: battle.foeId,
+      where: draft.locationId,
+      to: draft.locationId,
+      day,
+      won: !held,
+      fell: Math.max(0, battle.enemyStart - unitsSize(battle.enemy.units)),
+    })
+    draft.relations = rememberRelation(draft.relations, theirs)
   }
 
   if (battle.outcome === 'won') {
@@ -10410,6 +10436,8 @@ interface Draft {
   /** Лазарет и выплаты за павших (этап 174). */
   hurt: readonly Hurt[]
   bloodPaid: number
+  /** Реляции с войны (этап 175). */
+  relations: readonly Relation[]
   anointed: { readonly sinceDay: number } | null
   deeds: Readonly<Record<string, number>>
   dreadLog: Readonly<Record<string, { readonly score: number; readonly sinceDay: number }>>
@@ -10685,6 +10713,7 @@ function open(state: GameState): Draft {
     homeTalk: state.homeTalk ?? {},
     hurt: (state.hurt ?? []) as readonly Hurt[],
     bloodPaid: state.bloodPaid ?? 0,
+    relations: (state.relations ?? []) as readonly Relation[],
     anointed: state.anointed ?? null,
     deeds: state.deeds ?? {},
     dreadLog: state.dreadLog ?? {},
@@ -11335,6 +11364,7 @@ function close(draft: Draft): CommandResult {
     homeTalk: draft.homeTalk,
     hurt: draft.hurt,
     bloodPaid: draft.bloodPaid,
+    relations: draft.relations,
     anointed: draft.anointed,
     deeds: draft.deeds,
     dreadLog: draft.dreadLog,

@@ -16,6 +16,7 @@ import { blindToShare, fogMap } from './fog'
 import { ageSays, skillCeiling } from './growth'
 import { hallNow } from './hall'
 import { childNow, houseRift, kinAbroad, spouseView } from './hearth'
+import { arrived, onTheWay, wasWrong } from './herald'
 import { PLAYER, holdingsOf } from './holding'
 import { claimantsOf, heirLawOf, heirUnder, partitionOf, regencyFor, strifeOf } from './inherit'
 import { type Known, askedDef, knownTo, sourceDef, wordsTo } from './known'
@@ -438,6 +439,22 @@ export function spreadValue(known: Known): string {
 export function newsScreen(state: GameState, world: World): Screen {
   const day = dayOf(state.time)
   const lines: Line[] = []
+  // Реляции с войны идут первыми: это то, ради чего на этот экран заходят,
+  // пока идёт война (этап 175, Рл1).
+  for (const one of arrived(state, day).slice(-3)) {
+    lines.push({
+      label: `С войны: ${world.locations[one.where]?.name ?? one.where}`,
+      value: one.won ? 'поле за нами' : 'поле за ними',
+      hint: `${one.says}${wasWrong(one) ? ' Считать по этому числу — ошибиться.' : ''}`,
+    })
+  }
+  for (const one of onTheWay(state, day).slice(0, 2)) {
+    lines.push({
+      label: 'В пути',
+      value: `${one.comesDay - day} сут.`,
+      hint: 'Весть ещё идёт: там уже всё случилось, а ты об этом не знаешь.',
+    })
+  }
   const asked = new Set<string>()
   for (const word of wordsTo(state, PLAYER)) {
     const key = `${word.kind}:${word.about}`

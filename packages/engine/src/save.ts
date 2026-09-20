@@ -603,6 +603,11 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
     hurt: data.hurt ?? [],
     bloodPaid: data.bloodPaid ?? 0,
   }),
+  /** v32 → v33: реляции с войны (этап 175). Пусто — старые вести давно дошли. */
+  32: (data) => ({
+    ...data,
+    relations: data.relations ?? [],
+  }),
 }
 
 export type LoadResult =
