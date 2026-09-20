@@ -3,17 +3,24 @@ import { churchLedger } from './church'
 import { citiesOf, cityLedger } from './city'
 import type { Command } from './commands'
 import { companyLedger } from './company'
+import { MOULD_WORDS } from './content/mould'
 import { OFFICES, type OfficeId } from './content/offices'
 import { vassalsOf } from './court'
 import { lawOf } from './estate'
+import { ageSays, skillCeiling } from './growth'
 import { PLAYER, holdingsOf } from './holding'
 import { claimantsOf, heirLawOf, heirUnder, partitionOf, regencyFor, strifeOf } from './inherit'
 import { playStyle, worldOpinion } from './memory'
+import { mouldOf, paysWith } from './mould'
 import { seaLedger } from './navy'
 import { officerAt } from './office'
 import { isLiar, overturesOf, wordOf } from './overture'
+import { TRIALS, trialOdds } from './paths'
 import { peaceChronicle, talksOf } from './peace'
+import { skillXpToNext } from './progression'
 import { courtMood, plotAgainst } from './revolt'
+import { sheetOf } from './sheet'
+import { SKILLS, type SkillId } from './skills'
 import type { GameState } from './state'
 import { dayOf } from './time'
 import { ledger } from './treasury'
@@ -49,7 +56,7 @@ export interface Deed {
 }
 
 export interface Screen {
-  readonly id: 'realm' | 'talks' | 'war' | 'court' | 'house'
+  readonly id: 'realm' | 'talks' | 'war' | 'court' | 'house' | 'growth'
   readonly title: string
   readonly lines: readonly Line[]
   readonly deeds: readonly Deed[]
@@ -315,6 +322,66 @@ export function houseScreen(state: GameState, world: World): Screen {
 }
 
 /** Все пять экранов власти разом: порядок тот же, что и в жизни державы. */
+/**
+ * Экран роста (этап 127).
+ *
+ * Лист героя перестаёт быть списком чисел: против каждой строки её дело, под
+ * ней — что даст следующий уровень и чем его брать. Правило этапа 97 держится:
+ * экран кончается действием, а не таблицей.
+ */
+export function growthScreen(state: GameState, world: World): Screen {
+  const day = dayOf(state.time)
+  const character = state.character
+  const mould = mouldOf(character)
+  const lines: Line[] = []
+
+  // Э1 и Э2: что у меня есть и что это даёт — числом.
+  for (const row of sheetOf(character)) {
+    if (row.kind === 'attribute') {
+      lines.push({ label: row.label, value: String(row.level), hint: row.does.join('; ') })
+    }
+  }
+  // Навыки — только те, что выше нуля: остальное не строка, а пустое место.
+  for (const row of sheetOf(character)) {
+    if (row.kind !== 'skill' || row.level <= 0) continue
+    const ceiling = skillCeiling(character, row.id as SkillId)
+    lines.push({
+      label: row.label,
+      value: `${row.level}${row.level >= ceiling.cap ? ` (потолок ${ceiling.cap})` : ''}`,
+      // Э3: что дальше — сколько стоит следующий уровень и что держит.
+      hint: `${row.does.join('; ')}. Следующий уровень: ${Math.round(skillXpToNext(row.level))} опыта${row.level >= ceiling.cap ? `, и ${ceiling.says}` : ''}`,
+    })
+  }
+
+  // Э4: чем качать — прямо отсюда.
+  const deeds: Deed[] = []
+  for (const trial of TRIALS) {
+    const odds = trialOdds(state, trial)
+    const last = state.trials?.[trial.id] ?? 0
+    const waited = last === 0 || day - last >= 180
+    deeds.push({
+      label: `${trial.label} (${SKILLS[trial.skill].label.toLowerCase()})`,
+      command: { type: 'takeTrial', trialId: trial.id },
+      can: odds.can && waited && state.character.money >= trial.cost,
+      why: odds.can
+        ? waited
+          ? odds.says
+          : 'Такое бывает не каждый месяц: жди следующего раза.'
+        : odds.says,
+    })
+  }
+
+  // Э5: куда я иду — склад назван, и названо, чего в нём не хватает.
+  const missing = mould.id ? paysWith(character, mould.id).says : MOULD_WORDS.none
+  return {
+    id: 'growth',
+    title: 'Рост',
+    lines,
+    deeds,
+    says: `${mould.says} ${missing} ${ageSays(character.age)}`,
+  }
+}
+
 export function powerScreens(state: GameState, world: World): readonly Screen[] {
   return [
     realmScreen(state, world),
@@ -322,5 +389,6 @@ export function powerScreens(state: GameState, world: World): readonly Screen[] 
     warScreen(state, world),
     courtScreen(state, world),
     houseScreen(state, world),
+    growthScreen(state, world),
   ]
 }

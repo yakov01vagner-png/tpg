@@ -91,7 +91,8 @@ describe('У1–У5: пять экранов власти', () => {
       expect(screen.lines.length).toBeGreaterThan(2)
       for (const line of screen.lines) expect(line.value.length).toBeGreaterThan(0)
     }
-    expect(powerScreens(state, world)).toHaveLength(5)
+    // С этапа 127 к пяти экранам власти прибавился шестой — рост.
+    expect(powerScreens(state, world)).toHaveLength(6)
   })
 })
 

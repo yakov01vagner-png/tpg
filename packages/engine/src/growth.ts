@@ -16,6 +16,16 @@ import { SKILLS, type SkillId } from './skills'
  * всё считается из тех же атрибутов, уровней и дней.
  */
 
+/** Названия атрибутов в винительном падеже: «поднять силу», а не «поднять сила». */
+const RAISE: Record<string, string> = {
+  strength: 'силу',
+  agility: 'ловкость',
+  endurance: 'выносливость',
+  mind: 'разум',
+  will: 'волю',
+  charisma: 'обаяние',
+}
+
 export interface Ceiling {
   readonly skill: SkillId
   readonly level: number
@@ -38,7 +48,7 @@ export function skillCeiling(character: Character, skill: SkillId): Ceiling {
     says:
       level < cap
         ? `${SKILLS[skill].label}: ${level} из ${cap}, которые тянет ${ATTRIBUTE_LABELS[SKILLS[skill].attribute].toLowerCase()} ${attribute}. Пока ничто не держит.`
-        : `${SKILLS[skill].label}: ${level} при потолке ${cap}. ${GROWTH_WORDS.cap} Учение идёт в ${slowed} от обычного; поднять ${ATTRIBUTE_LABELS[SKILLS[skill].attribute].toLowerCase()} — значит поднять потолок на ${PROGRESSION.softCapPerAttributePoint}.`,
+        : `${SKILLS[skill].label}: ${level} при потолке ${cap}. ${GROWTH_WORDS.cap} Учение идёт в ${slowed} от обычного; поднять ${RAISE[SKILLS[skill].attribute] ?? ATTRIBUTE_LABELS[SKILLS[skill].attribute].toLowerCase()} — значит поднять потолок на ${PROGRESSION.softCapPerAttributePoint}.`,
   }
 }
 

@@ -13,6 +13,7 @@ import {
   SLOT_LABELS,
   type SkillId,
   ageOf,
+  attributeDoes,
   bynameOf,
   canApply,
   circleDef,
@@ -23,7 +24,10 @@ import {
   fullName,
   gearBonus,
   heirOf,
+  mouldOf,
+  seenAs,
   shameDef,
+  skillDoes,
   skillXpToNext,
   skillsOfAttribute,
   unrecognizedGap,
@@ -120,13 +124,19 @@ export function CharacterScreen({ game }: { game: GameState }) {
         ))}
       </Section>
 
+      <Section title="Склад">
+        <Row title={mouldOf(hero).says} subtitle={seenAs(mouldOf(hero).id)} />
+      </Section>
+
       <Section
         title="Навыки"
         aside={hero.unspentSkillPoints > 0 ? `${hero.unspentSkillPoints} очк.` : undefined}
       >
         {ATTRIBUTE_IDS.map((attribute: AttributeId) => (
           <View key={attribute} style={styles.group}>
-            <Faint>{ATTRIBUTE_LABELS[attribute]}</Faint>
+            <Faint>
+              {ATTRIBUTE_LABELS[attribute]}: {attributeDoes(hero, attribute).join('; ')}
+            </Faint>
             {skillsOfAttribute(attribute).map((skill) => {
               const progress = hero.skills[skill.id as SkillId]
               return (
@@ -134,7 +144,7 @@ export function CharacterScreen({ game }: { game: GameState }) {
                   key={skill.id}
                   glyph={<Icon name={skill.id as SkillId} size={20} color={palette.dim} />}
                   title={skill.label}
-                  subtitle={`${Math.round(progress.xp)} из ${skillXpToNext(progress.level)} до следующего`}
+                  subtitle={`${skillDoes(hero, skill.id as SkillId).join('; ')} — ${Math.round(progress.xp)} из ${skillXpToNext(progress.level)} до следующего`}
                   right={
                     <>
                       <Text style={styles.value}>{progress.level}</Text>
