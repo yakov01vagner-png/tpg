@@ -332,6 +332,7 @@ import {
   worksWages,
 } from './estate'
 import type { GameEvent, LogKind } from './events'
+import { appointCost, balanceOf, intrigueNow, partiesOf, sidesWith } from './faction'
 import { FAIR_TRADE_BONUS, fairAt, feastAt } from './fair'
 import {
   ALL_CIRCLES,
@@ -12201,6 +12202,8 @@ function tickReports(draft: Draft, days: number): void {
     // Двор решает не только что сказать, но и когда (этап 105, С1): доброе
     // доходит первым, дурное отстаёт и приходит мягче.
     const seneschal = courtierAt(draft.base, 'seneschal', day)
+    // Двор, где одна партия победила, придерживает дурное сильнее (этап 106, П5).
+    const balance = balanceOf(draft.base, day)
     for (const line of report.lines) {
       if (line.kind !== 'grain' && line.kind !== 'people') continue
       const good = line.kind === 'grain' ? line.said >= line.truth : true
@@ -12210,12 +12213,14 @@ function tickReports(draft: Draft, days: number): void {
         to: PLAYER,
         kind: line.kind === 'grain' ? 'stores' : 'garrison',
         about: one.locationId,
-        value: Math.round(line.said * (good ? 1 : shade.soften)),
+        value: Math.round(
+          line.said * (good ? 1 : Math.max(0.2, 1 - (1 - shade.soften) * balance.hides)),
+        ),
         source: 'own',
         from: report.reporter.name,
         // Отчёт пишут сегодня, а доходит он позже: возраст вести — его дорога,
         // да ещё столько, сколько его придерживали.
-        day: day - report.reporter.days - shade.days,
+        day: day - report.reporter.days - Math.round(shade.days * balance.hides),
       })
     }
   }
