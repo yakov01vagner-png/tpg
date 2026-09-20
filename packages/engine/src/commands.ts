@@ -769,6 +769,17 @@ import {
   skyRoad,
   skySight,
 } from './season'
+import {
+  SECRET,
+  SECRET_WORDS,
+  caughtDouble,
+  doubleGames,
+  exposeCost,
+  hushCost,
+  keepersOf,
+  leakNow,
+  theirSecrets,
+} from './secret'
 import type { SettleEvent } from './settle'
 import { tickSettling } from './settle'
 import type { Passage, Ship } from './ship'
@@ -1196,6 +1207,9 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Тайна (этап 115): купить молчание, выведать чужой сговор. */
+  | { readonly type: 'hushSecret'; readonly treatyId: string }
+  | { readonly type: 'prySecret'; readonly a: string; readonly b: string }
   /** Чужой посол (этап 114): решить, что ему показать. */
   | { readonly type: 'showGuest'; readonly show: ShowKind }
   /** Осада вслепую (этап 113): что видно из-под стен, блеф, перебежчик, знамёна. */
@@ -1737,6 +1751,10 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'hushSecret':
+      return hushSecret(state, command.treatyId)
+    case 'prySecret':
+      return prySecret(state, command.a, command.b)
     case 'showGuest':
       return showGuest(state, command.show)
     case 'weighSiege':
@@ -9730,6 +9748,14 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  hushed: Readonly<Record<string, number>>
+  secretLog: {
+    readonly made: number
+    readonly leaked: number
+    readonly hushed: number
+    readonly caught: number
+  }
+  learned: Readonly<Record<string, number>>
   showing: Readonly<Record<string, 'plain' | 'strong' | 'poor'>>
   envoyLog: {
     readonly sent: number
@@ -9873,6 +9899,9 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    hushed: state.hushed ?? {},
+    secretLog: state.secretLog ?? { made: 0, leaked: 0, hushed: 0, caught: 0 },
+    learned: state.learned ?? {},
     showing: state.showing ?? {},
     envoyLog: state.envoyLog ?? { sent: 0, brought: 0, offSum: 0, guests: 0 },
     siegeLog: state.siegeLog ?? { byKnowing: 0, byWalls: 0, bluffs: 0, defectors: 0 },
@@ -10353,6 +10382,9 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    hushed: draft.hushed,
+    secretLog: draft.secretLog,
+    learned: draft.learned,
     showing: draft.showing,
     envoyLog: draft.envoyLog,
     siegeLog: draft.siegeLog,
@@ -11001,16 +11033,21 @@ function tickTreaties(draft: Draft, days: number): void {
     }
   }
 
-  // Тайное становится явным: один бросок на все тайны разом.
+  // Тайное становится явным: один бросок на все тайны разом. Считается раз в
+  // пять суток за все пять: людей в комнате пересчитывать каждый день дорого.
   const secrets = treaties.filter(
     (one) => one.secret !== undefined && one.secret.known !== true && one.brokenBy === undefined,
   )
   if (secrets.length === 0) return
+  if (day % SECRET_BEAT !== 0) return
   // Чужие глаза при твоём дворе ускоряют утечку (этап 82, С5): чем больше
-  // корон следит за тобой, тем короче жизнь твоей тайны.
+  // корон следит за тобой, тем короче жизнь твоей тайны. А держат тайну люди,
+  // названные по именам, — и у каждого своя доля (этап 115, Тн2).
   const eyes = leakFactor(watchers(draft.base, draft.base.world, day).length)
   let none = 1
-  for (const treaty of secrets) none *= (1 - leakChance(treaty, day) * eyes) ** days
+  for (const treaty of secrets) {
+    none *= (1 - leakNow(draft.base, treaty, day).chance * eyes) ** (days * SECRET_BEAT)
+  }
   const [leaked, afterRoll] = rollChance(draft.rng, 1 - none)
   draft.rng = afterRoll
   if (!leaked) return
@@ -11032,11 +11069,28 @@ function tickTreaties(draft: Draft, days: number): void {
     if (kingdomId === other || kingdomId === against) continue
     draft.politics = withRelation(draft.politics, PLAYER, kingdomId, Math.round(def.angers / 4))
   }
+  // Раскрытая тайна бьёт по слову сильнее нарушенной явной грамоты (Тн3).
+  const cost = exposeCost(treaty)
+  const who = leakNow(draft.base, treaty, day).who
+  draft.secretLog = { ...draft.secretLog, leaked: draft.secretLog.leaked + 1 }
   notice(
     draft,
-    `Тайное стало явным: ${def.label} в грамоте с ${kingdomName(draft.base, other)}. ${def.about}`,
+    `Тайное стало явным: ${def.label} в грамоте с ${kingdomName(draft.base, other)}. ${def.about} ${SECRET_WORDS.leaked}${who ? ` (${who.name})` : ''} ${cost.says}`,
     'world',
   )
+  // Двойную игру раскрывают отдельно, и она стоит доверия обеих сторон (Тн4).
+  const double = caughtDouble(draft.base, draft.base.world, day)
+  if (!double.caught || !double.against) return
+  draft.secretLog = { ...draft.secretLog, caught: draft.secretLog.caught + 1 }
+  for (const side of doubleGames(draft.base, day)[0]?.with ?? []) {
+    draft.politics = withRelation(
+      draft.politics,
+      PLAYER,
+      side,
+      Math.round((def.angers / 2) * SECRET.doubleAngers),
+    )
+  }
+  notice(draft, double.says, 'world')
 }
 
 /** Какой договор выходит из такого посольства. Не у всякого — бумага. */
@@ -12137,6 +12191,64 @@ function handMatter(state: GameState, matterId: string): CommandResult {
 }
 
 /**
+ * Купить молчание (этап 115, Тн1).
+ *
+ * Тайну держат люди, и каждому из них можно заплатить. Плата не отменяет
+ * утечку — она её замедляет вчетверо и кончается через полгода.
+ */
+function hushSecret(state: GameState, treatyId: string): CommandResult {
+  const treaty = treatiesOf(state).find((one) => one.id === treatyId)
+  if (!treaty) return fail('invalid', 'Такой грамоты нет.')
+  if (!treaty.secret || treaty.secret.known) {
+    return fail('invalid', 'В этой грамоте нечего скрывать.')
+  }
+  const day = dayOf(state.time)
+  const price = hushCost(state, treaty, day)
+  if (state.character.money < price) {
+    return fail('noMoney', `За молчание просят ${price} серебра.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(4))
+  addMoney(draft, -price)
+  draft.hushed = { ...draft.hushed, [treatyId]: day + SECRET.hushDays }
+  draft.secretLog = { ...draft.secretLog, hushed: draft.secretLog.hushed + 1 }
+  const keepers = keepersOf(state, treaty, day)
+  notice(
+    draft,
+    `${SECRET_WORDS.hushed} ${price} серебра на ${keepers.length} человек: ${keepers.map((one) => one.name).join(', ')}. Держится до ${day + SECRET.hushDays}-го дня.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Выведать чужой сговор (этап 115, Тн5).
+ *
+ * Короны договариваются и между собой — не вслух и против кого-то третьего.
+ * Узнать об этом можно; знать и доказать — разное (этап 116).
+ */
+function prySecret(state: GameState, a: string, b: string): CommandResult {
+  if (state.character.money < SECRET.pryCost) {
+    return fail('noMoney', `На это нужно ${SECRET.pryCost} серебра.`)
+  }
+  const day = dayOf(state.time)
+  const pacts = theirSecrets(state, state.world, day)
+  const found = pacts.find((one) => (one.a === a && one.b === b) || (one.a === b && one.b === a))
+
+  const draft = open(state)
+  advance(draft, hours(8))
+  addMoney(draft, -SECRET.pryCost)
+  if (!found) {
+    notice(draft, 'Серебро ушло, а сговора между ними нет — или он спрятан лучше.', 'world')
+    return close(draft)
+  }
+  draft.learned = { ...draft.learned, [`${found.a}:${found.b}`]: day }
+  notice(draft, `${SECRET_WORDS.pried} ${found.says}`, 'world')
+  return close(draft)
+}
+
+/**
  * Показать гостю то, что решил (этап 114, Пс4 и Пс5).
  *
  * Чужой посол приезжает смотреть, а не только говорить. Что он увезёт, решаешь
@@ -12962,6 +13074,8 @@ function tickDoorway(draft: Draft, days: number): void {
 
 /** Как часто считают, что осталось без ответа. */
 const DOOR_BEAT = 6
+/** Раз во сколько суток пересчитывается утечка тайн (этап 115). */
+const SECRET_BEAT = 5
 
 /**
  * Выслушать доносчика (этап 105, С5).
@@ -14603,6 +14717,15 @@ function applyEmbassy(draft: Draft, embassy: Embassy, day: number): void {
       ),
       treaty,
     ]
+    if (treaty.secret) {
+      draft.secretLog = { ...draft.secretLog, made: draft.secretLog.made + 1 }
+      const keepers = keepersOf(draft.base, treaty, day)
+      notice(
+        draft,
+        `${SECRET_WORDS.keepers} О тайной статье знают ${keepers.length}: ${keepers.map((one) => one.name).join(', ')}. Молчание можно купить.`,
+        'world',
+      )
+    }
     if (embassy.guarantor) {
       draft.politics = withRelation(draft.politics, PLAYER, embassy.guarantor, 6)
     }
