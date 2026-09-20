@@ -686,6 +686,18 @@ import { REPORT, auditOf, purseAsReported, reportFrom, reporterAt, skimAt } from
 import { isShunned, lordRep, placeRep, priceFactor, withLordRep, withPlaceRep } from './reputation'
 import type { Reputation } from './reputation'
 import {
+  RESIDENT,
+  RESIDENT_WORDS,
+  type Resident,
+  nativeShare,
+  residentAt,
+  residentCost,
+  residentWords,
+  riskNow,
+  theirResidents,
+  theyLearn,
+} from './resident'
+import {
   REVOLT,
   bribePriceFor,
   concessionsFor,
@@ -1217,6 +1229,9 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Постоянный посол (этап 117): посадить своего человека при чужом дворе и отозвать. */
+  | { readonly type: 'seatResident'; readonly at: string }
+  | { readonly type: 'recallResident'; readonly at: string }
   /** Чужие договоры (этап 116): добыть доказательство и предъявить его миру. */
   | {
       readonly type: 'getProof'
@@ -1771,6 +1786,10 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'seatResident':
+      return seatResident(state, command.at)
+    case 'recallResident':
+      return recallResident(state, command.at)
     case 'getProof':
       return getProof(state, command.kind, command.a, command.b, command.against ?? PLAYER)
     case 'showProof':
@@ -9774,6 +9793,8 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  residents: readonly Resident[]
+  residentLog: { readonly seated: number; readonly words: number; readonly lost: number }
   proofs: readonly Proof[]
   proofLog: {
     readonly got: number
@@ -9932,6 +9953,8 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    residents: state.residents ?? [],
+    residentLog: state.residentLog ?? { seated: 0, words: 0, lost: 0 },
     proofs: state.proofs ?? [],
     proofLog: state.proofLog ?? { got: 0, shown: 0, forged: 0, caught: 0 },
     hushed: state.hushed ?? {},
@@ -10256,6 +10279,8 @@ function close(draft: Draft): CommandResult {
     tickDefectors(draft, daysPassed)
     // Чужие послы приезжают смотреть и уезжают с тем, что увидели (этап 114).
     tickGuests(draft, daysPassed)
+    // Постоянные послы пишут, дорожают и попадаются (этап 117).
+    tickResidents(draft, daysPassed)
     // Двор просит, стареет и уходит (этап 104).
     tickCourtiers(draft, daysPassed)
     // Посланные смотреть возвращаются (этап 102).
@@ -10417,6 +10442,8 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    residents: draft.residents,
+    residentLog: draft.residentLog,
     proofs: draft.proofs,
     proofLog: draft.proofLog,
     hushed: draft.hushed,
@@ -12225,6 +12252,121 @@ function handMatter(state: GameState, matterId: string): CommandResult {
     'people',
   )
   return close(draft)
+}
+
+/**
+ * Посадить постоянного посла (этап 117, Рп1).
+ *
+ * Выездное посольство привозит картину раз в месяцы; постоянный человек пишет
+ * каждые десять суток и вдвое вернее. Платишь за это каждый день — и риском.
+ */
+function seatResident(state: GameState, at: string): CommandResult {
+  if (!state.world.kingdoms[at]) return fail('invalid', 'Такой короны нет.')
+  if (!state.realm) return fail('requirements', 'Послов держит держава.')
+  if (residentAt(state, at)) return fail('invalid', 'Твой человек там уже сидит.')
+  if (state.character.money < RESIDENT.setUp) {
+    return fail('noMoney', `На это нужно ${RESIDENT.setUp} серебра.`)
+  }
+  const day = dayOf(state.time)
+  const who = envoyChoices(state, day)[0]
+  if (!who) return fail('requirements', 'Сажать некого: нужен свой человек.')
+
+  const draft = open(state)
+  advance(draft, hours(6))
+  addMoney(draft, -RESIDENT.setUp)
+  const resident: Resident = {
+    id: `resident:${at}:${day}`,
+    at,
+    name: who.name,
+    sinceDay: day,
+    skill: who.skill,
+  }
+  draft.residents = [...draft.residents, resident]
+  draft.residentLog = { ...draft.residentLog, seated: draft.residentLog.seated + 1 }
+  notice(
+    draft,
+    `${RESIDENT_WORDS.seated} ${who.name} при ${kingdomName(draft.base, at)}: ${RESIDENT.perDay} серебра в сутки, вести каждые ${RESIDENT.beat} суток.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/** Отозвать своего человека: дешевле, чем ждать, пока его вышлют или купят. */
+function recallResident(state: GameState, at: string): CommandResult {
+  const resident = residentAt(state, at)
+  if (!resident) return fail('invalid', 'Там у тебя никого нет.')
+  const draft = open(state)
+  advance(draft, hours(2))
+  draft.residents = draft.residents.filter((one) => one.at !== at)
+  notice(draft, `${resident.name} отозван из ${kingdomName(draft.base, at)}.`, 'world')
+  return close(draft)
+}
+
+/**
+ * Постоянные послы живут своей жизнью (этап 117, Рп2–Рп5).
+ *
+ * Пишут по своему сроку, прирастают к месту, попадаются — и чужие резиденты у
+ * тебя тем же тактом пишут своим то, что ты им показал.
+ */
+function tickResidents(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  const cost = residentCost(draft.base) * days
+  if (cost > 0) addMoney(draft, -Math.round(cost))
+
+  if (day % RESIDENT.beat === 0) {
+    for (const resident of draft.residents) {
+      const brought = residentWords(draft.base, draft.world, resident, day)
+      draft.words = withSightings(draft.words, brought)
+      draft.residentLog = {
+        ...draft.residentLog,
+        words: draft.residentLog.words + brought.length,
+      }
+      const native = nativeShare(resident, day)
+      if (native >= 0.4 && day % (RESIDENT.beat * 6) === 0) {
+        notice(
+          draft,
+          `${resident.name}: ${RESIDENT_WORDS.native} (${Math.round(native * 100)} из ста)`,
+          'world',
+        )
+      }
+    }
+    // Чужие резиденты пишут своим то, что ты им показал (Рп5).
+    for (const theirs of theirResidents(draft.base, draft.world, day)) {
+      const learn = theyLearn(draft.base, draft.world, theirs, day)
+      draft.words = withSightings(draft.words, [
+        {
+          id: `theirs:${theirs.from}:${day}`,
+          to: theirs.from,
+          kind: 'strength',
+          about: PLAYER,
+          value: learn.sees,
+          source: 'own',
+          from: theirs.name,
+          day,
+        },
+      ])
+    }
+  }
+
+  if (day % RESIDENT.riskBeat !== 0) return
+  for (const resident of draft.residents) {
+    const risk = riskNow(draft.base, draft.world, resident, day)
+    if (risk.risk === 'none') continue
+    if (risk.risk === 'bought') {
+      draft.residents = draft.residents.map((one) =>
+        one.id === resident.id ? { ...one, bought: true } : one,
+      )
+      notice(draft, `${resident.name}: ${risk.says}`, 'world')
+      continue
+    }
+    draft.residents = draft.residents.filter((one) => one.id !== resident.id)
+    draft.residentLog = { ...draft.residentLog, lost: draft.residentLog.lost + 1 }
+    if (risk.risk === 'caught') {
+      draft.politics = withRelation(draft.politics, PLAYER, resident.at, -18)
+    }
+    notice(draft, `${resident.name}: ${risk.says} ${RESIDENT_WORDS.gone}`, 'world')
+  }
 }
 
 /**

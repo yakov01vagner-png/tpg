@@ -57,6 +57,7 @@ import type { Quest } from './quest'
 import type { Charters } from './realm'
 import type { Reputation } from './reputation'
 import { NO_REPUTATION } from './reputation'
+import type { Resident } from './resident'
 import type { Rng } from './rng'
 import { createRng } from './rng'
 import type { RoyalMarriage } from './royal'
@@ -413,6 +414,13 @@ export interface GameState {
   }
   /** Дела, которые ты уже разобрал или передал: чтобы не звали дважды. */
   readonly settled?: Readonly<Record<string, number>>
+  /** Постоянные послы при чужих дворах (этап 117). */
+  readonly residents?: readonly Resident[]
+  readonly residentLog?: {
+    readonly seated: number
+    readonly words: number
+    readonly lost: number
+  }
   /** Доказательства чужих сговоров, что у тебя на руках (этап 116). */
   readonly proofs?: readonly Proof[]
   readonly proofLog?: {
@@ -599,6 +607,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     favours: {},
     ruleLog: { heard: 0, handed: 0, missed: 0 },
     settled: {},
+    residents: [],
+    residentLog: { seated: 0, words: 0, lost: 0 },
     proofs: [],
     proofLog: { got: 0, shown: 0, forged: 0, caught: 0 },
     hushed: {},
