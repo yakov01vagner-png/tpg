@@ -415,6 +415,12 @@ export interface GameState {
   }
   /** Дела, которые ты уже разобрал или передал: чтобы не звали дважды. */
   readonly settled?: Readonly<Record<string, number>>
+  /** Что век записал о чужих обманах (этап 121). */
+  readonly deceitLog?: {
+    readonly made: number
+    readonly worked: number
+    readonly caught: number
+  }
   /** Во что верит каждая корона о чужой силе (этап 120): «кто:о ком» → число. */
   readonly beliefs?: Readonly<Record<string, { readonly value: number; readonly day: number }>>
   readonly biasLog?: {
@@ -627,6 +633,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     favours: {},
     ruleLog: { heard: 0, handed: 0, missed: 0 },
     settled: {},
+    deceitLog: { made: 0, worked: 0, caught: 0 },
     beliefs: {},
     biasLog: { held: 0, woke: 0, warsByError: 0 },
     guesses: {},

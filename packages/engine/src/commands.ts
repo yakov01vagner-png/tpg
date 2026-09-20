@@ -327,6 +327,15 @@ import {
   ruleYear,
   whoTakes,
 } from './day'
+import {
+  DECEIT,
+  DECEIT_DEFS,
+  DECEIT_WORDS,
+  deceitOf,
+  deceitWord,
+  seeThrough,
+  willBreak,
+} from './deceit'
 import { tickDiplomacy } from './diplomacy'
 import {
   DISPATCH,
@@ -1252,6 +1261,8 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Чужое слово (этап 121): сдержит ли он обещанное. */
+  | { readonly type: 'weighPledge'; readonly of: string }
   /** Чужое заблуждение (этап 120): чем он ошибается о тебе. */
   | { readonly type: 'weighError'; readonly of: string }
   /** Чужая голова (этап 118): узнать, из чего исходит эта корона. */
@@ -1813,6 +1824,8 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'weighPledge':
+      return weighPledge(state, command.of)
     case 'weighError':
       return weighError(state, command.of)
     case 'askPicture':
@@ -9824,6 +9837,7 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  deceitLog: { readonly made: number; readonly worked: number; readonly caught: number }
   beliefs: Readonly<Record<string, { readonly value: number; readonly day: number }>>
   biasLog: { readonly held: number; readonly woke: number; readonly warsByError: number }
   guesses: Readonly<
@@ -9996,6 +10010,7 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    deceitLog: state.deceitLog ?? { made: 0, worked: 0, caught: 0 },
     beliefs: state.beliefs ?? {},
     biasLog: state.biasLog ?? { held: 0, woke: 0, warsByError: 0 },
     guesses: state.guesses ?? {},
@@ -10333,6 +10348,8 @@ function close(draft: Draft): CommandResult {
     tickGuesses(draft, daysPassed)
     // Они упорствуют в заблуждениях и прозревают (этап 120).
     tickBeliefs(draft, daysPassed)
+    // И они обманывают нарочно (этап 121).
+    tickDeceit(draft, daysPassed)
     // Двор просит, стареет и уходит (этап 104).
     tickCourtiers(draft, daysPassed)
     // Посланные смотреть возвращаются (этап 102).
@@ -10494,6 +10511,7 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    deceitLog: draft.deceitLog,
     beliefs: draft.beliefs,
     biasLog: draft.biasLog,
     guesses: draft.guesses,
@@ -12312,6 +12330,59 @@ function handMatter(state: GameState, matterId: string): CommandResult {
 }
 
 /**
+ * Чужой обман (этап 121, Об1–Об5).
+ *
+ * Обман короны — та же весть, что правда, только с выгодной ей поправкой. Её
+ * можно раскусить своими людьми там и расхождением вестей; пойманный теряет
+ * доверие в общем слое (этап 103), а не в особом счётчике.
+ */
+function tickDeceit(draft: Draft, days: number): void {
+  if (days <= 0 || !draft.realm) return
+  const day = dayOf(draft.time)
+  if (day % DECEIT.beat !== 0) return
+  for (const side of Object.keys(draft.base.world.kingdoms)) {
+    const interested =
+      atWar(draft.politics, PLAYER, side) ||
+      Math.abs(relationOf(draft.politics, PLAYER, side)) >= 15
+    if (!interested) continue
+    const lie = deceitOf(draft.base, draft.world, side, day)
+    if (!lie.kind) continue
+    draft.deceitLog = { ...draft.deceitLog, made: draft.deceitLog.made + 1 }
+    const unmasked = seeThrough(draft.base, draft.world, side, day)
+    const teller = `посол ${kingdomName(draft.base, side)}`
+    if (unmasked.seen) {
+      draft.deceitLog = { ...draft.deceitLog, caught: draft.deceitLog.caught + 1 }
+      // Пойманный теряет слово: с этого дня его вести шире на всё (этап 103).
+      const row = draft.trust[teller] ?? { said: 0, lied: 0 }
+      draft.trust = { ...draft.trust, [teller]: { said: row.said + 1, lied: row.lied + 1 } }
+      notice(
+        draft,
+        `${kingdomName(draft.base, side)}: ${DECEIT_DEFS[lie.kind].label}. ${unmasked.says} ${DECEIT_WORDS.punished}`,
+        'world',
+      )
+      continue
+    }
+    draft.deceitLog = { ...draft.deceitLog, worked: draft.deceitLog.worked + 1 }
+    if (lie.kind === 'promise') {
+      const row = draft.trust[teller] ?? { said: 0, lied: 0 }
+      draft.trust = { ...draft.trust, [teller]: { said: row.said + 1, lied: row.lied } }
+      notice(
+        draft,
+        `${kingdomName(draft.base, side)}: ${lie.says} ${DECEIT_DEFS.promise.about}`,
+        'world',
+      )
+      continue
+    }
+    // Ложная сила и ложная слабость ложатся вестью в твоё знание.
+    draft.words = withSightings(draft.words, [
+      deceitWord(draft.base, draft.world, side, lie.kind, day),
+    ])
+    const row = draft.trust[teller] ?? { said: 0, lied: 0 }
+    draft.trust = { ...draft.trust, [teller]: { said: row.said + 1, lied: row.lied } }
+  }
+}
+
+/**
  * Заблуждение и прозрение (этап 120, Уп1, Уп3 и Уп4).
  *
  * Корона видит то, что ждёт увидеть: предубеждение выводится из нрава. Раз
@@ -12439,6 +12510,38 @@ function tickGuesses(draft: Draft, days: number): void {
       'world',
     )
   }
+}
+
+/**
+ * Сдержит ли он слово (этап 121, Об1 и Об4).
+ *
+ * Считается выгодой, а не честностью. И заодно видно, не показывает ли он тебе
+ * силу, которой нет, — если есть кому посмотреть.
+ */
+function weighPledge(state: GameState, of: string): CommandResult {
+  if (!state.world.kingdoms[of]) return fail('invalid', 'Такой короны нет.')
+  const day = dayOf(state.time)
+  const pledge = (state.pledges ?? []).find((one) => one.kingdomId === of && one.kept === null)
+  const draft = open(state)
+  advance(draft, hours(2))
+  if (pledge) {
+    const weighed = willBreak(state, state.world, pledge, day)
+    notice(draft, `${kingdomName(draft.base, of)}: ${weighed.says}`, 'world')
+  } else {
+    notice(draft, `${kingdomName(draft.base, of)} тебе ничего не обещал.`, 'world')
+  }
+  const lie = deceitOf(state, state.world, of, day)
+  if (lie.kind) {
+    const unmasked = seeThrough(state, state.world, of, day)
+    notice(
+      draft,
+      unmasked.seen
+        ? `${DECEIT_DEFS[lie.kind].label}: ${unmasked.says} Ему нужно, чтобы ${DECEIT_DEFS[lie.kind].wants}.`
+        : unmasked.says,
+      'world',
+    )
+  }
+  return close(draft)
 }
 
 /**
