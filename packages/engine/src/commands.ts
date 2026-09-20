@@ -775,6 +775,7 @@ import {
 import { describeQuest, isComplete, offersAt } from './quest'
 import type { Quest } from './quest'
 import { RACE, RACE_WORDS, dragsOn, risking, whoLeads } from './race'
+import { RANSOM, RANSOM_WORDS, ownRansom, haggle as ransomHaggle, yoursTaken } from './ransom'
 import {
   type ArrearsAnswer,
   type Charters,
@@ -1388,6 +1389,9 @@ export type Command =
   /** Коалиция (этап 136): разобрать чужую по одному и собрать свою против первого. */
   | { readonly type: 'breakLeague'; readonly member: string }
   | { readonly type: 'callLeague'; readonly against: string }
+  /** Плен (этап 150): выкупить своего и поторговаться за чужого. */
+  | { readonly type: 'ransomOwn'; readonly id: string }
+  | { readonly type: 'haggleRansom'; readonly captiveId: string; readonly offer: number }
   /** Летопись (этап 147): писать свою — дело, которое стоит серебра и правды. */
   | { readonly type: 'writeAnnals' }
   /** Эпоха (этап 146): чем держава её встречает. */
@@ -1985,6 +1989,10 @@ export function applyCommand(
       return breakLeague(state, command.member)
     case 'callLeague':
       return callLeague(state, command.against)
+    case 'ransomOwn':
+      return ransomOwn(state, command.id)
+    case 'haggleRansom':
+      return haggleRansom(state, command.captiveId, command.offer)
     case 'writeAnnals':
       return writeAnnals(state)
     case 'meetEra':
@@ -10105,6 +10113,14 @@ interface Draft {
   balanceLog: { readonly betrayals: number; readonly wars: number }
   reigns: Readonly<Record<string, number>>
   curves: Readonly<Record<string, readonly number[]>>
+  taken: readonly {
+    readonly id: string
+    readonly name: string
+    readonly by: string
+    readonly since: number
+    readonly ransom: number
+  }[]
+  ransomLog: { readonly taken: number; readonly freed: number; readonly paid: number }
   annals: {
     readonly added: number
     readonly lastDay: number
@@ -10328,6 +10344,8 @@ function open(state: GameState): Draft {
     balanceLog: state.balanceLog ?? { betrayals: 0, wars: 0 },
     reigns: state.reigns ?? {},
     curves: state.curves ?? {},
+    taken: state.taken ?? [],
+    ransomLog: state.ransomLog ?? { taken: 0, freed: 0, paid: 0 },
     annals: state.annals ?? { added: 0, lastDay: 0 },
     era: state.era ?? null,
     eraLog: state.eraLog ?? [],
@@ -10703,6 +10721,8 @@ function close(draft: Draft): CommandResult {
     tickCurves(draft, daysPassed)
     // И эпохи приходят и уходят, меняя правила для всех (этап 146).
     tickEra(draft, daysPassed)
+    // В плену бегут, а оставленный в плену помнит это (этап 150).
+    tickRansom(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10897,6 +10917,8 @@ function close(draft: Draft): CommandResult {
     balanceLog: draft.balanceLog,
     reigns: draft.reigns,
     curves: draft.curves,
+    taken: draft.taken,
+    ransomLog: draft.ransomLog,
     annals: draft.annals,
     era: draft.era,
     eraLog: draft.eraLog,
@@ -14175,6 +14197,107 @@ function writeAnnals(state: GameState): CommandResult {
     'people',
   )
   return close(draft)
+}
+
+/**
+ * Выкупить своего (этап 150, Пл4).
+ *
+ * Оставленный в плену помнит это: за каждый год его верность падает. Выкуп —
+ * не кнопка «вернуть», а торг с тем, кто его держит.
+ */
+function ransomOwn(state: GameState, id: string): CommandResult {
+  const day = dayOf(state.time)
+  const row = yoursTaken(state).find((one) => one.id === id)
+  if (!row) return fail('invalid', 'Такого в плену нет.')
+  const price = ownRansom(state, state.world, id, day)
+  if (state.character.money < price.cost) {
+    return fail('noMoney', `За него просят ${price.cost}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(8))
+  addMoney(draft, -price.cost)
+  draft.taken = draft.taken.filter((one) => one.id !== id)
+  draft.ransomLog = {
+    ...draft.ransomLog,
+    freed: draft.ransomLog.freed + 1,
+    paid: draft.ransomLog.paid + price.cost,
+  }
+  // Выкупленный помнит, кто за ним пришёл.
+  draft.politics = {
+    ...draft.politics,
+    lords: draft.politics.lords.map((lord) =>
+      lord.id === id ? { ...lord, loyalty: Math.min(100, lord.loyalty + 12) } : lord,
+    ),
+  }
+  notice(
+    draft,
+    `${row.name} выкуплен у ${kingdomName(draft.base, row.by)} за ${price.cost}.`,
+    'people',
+  )
+  return close(draft)
+}
+
+/**
+ * Торг за чужого пленника (этап 150, Пл2).
+ *
+ * Цена не вычисляется: она торгуется. Ниже своего дна пленителя не уговоришь,
+ * а выше дна — дело твоё.
+ */
+function haggleRansom(state: GameState, captiveId: string, offer: number): CommandResult {
+  const day = dayOf(state.time)
+  const captive = (state.captives ?? []).find((one) => one.id === captiveId)
+  if (!captive) return fail('invalid', 'Такого пленника у тебя нет.')
+  if (!Number.isFinite(offer) || offer <= 0) return fail('invalid', 'Цена должна быть числом.')
+  const price = ransomHaggle(state, state.world, captive, captive.kingdomId ?? PLAYER, day)
+  if (offer < price.least) {
+    return fail('requirements', `${price.says} Твоё «${offer}» ниже дна.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(4))
+  addMoney(draft, offer)
+  draft.captives = (draft.captives ?? []).filter((one) => one.id !== captiveId)
+  draft.ransomLog = {
+    ...draft.ransomLog,
+    freed: draft.ransomLog.freed + 1,
+    paid: draft.ransomLog.paid + offer,
+  }
+  if (captive.kingdomId) {
+    draft.politics = withRelation(draft.politics, PLAYER, captive.kingdomId, 8)
+  }
+  notice(draft, `${captive.name} отпущен за ${offer}. ${RANSOM_WORDS.haggle}`, 'people')
+  return close(draft)
+}
+
+/**
+ * Плен идёт своим чередом (этап 150, Пл4 и Пл5).
+ *
+ * Из плена бегут, а оставленный там помнит: верность забытого вассала падает
+ * год за годом, и двор это видит.
+ */
+function tickRansom(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % RANSOM.beat !== 0) return
+  for (const row of draft.taken) {
+    const [runs, afterRun] = rollChance(draft.rng, RANSOM.escape)
+    draft.rng = afterRun
+    if (runs) {
+      draft.taken = draft.taken.filter((one) => one.id !== row.id)
+      notice(draft, `${row.name} бежал из плена. ${RANSOM_WORDS.escaped}`, 'people')
+      continue
+    }
+    if ((day - row.since) % 365 !== 0) continue
+    draft.politics = {
+      ...draft.politics,
+      lords: draft.politics.lords.map((lord) =>
+        lord.id === row.id
+          ? { ...lord, loyalty: Math.max(0, lord.loyalty + RANSOM.forgotten) }
+          : lord,
+      ),
+    }
+  }
 }
 
 /**

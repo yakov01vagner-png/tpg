@@ -556,6 +556,16 @@ export interface GameState {
    * Всё остальное — направление, длительность, причины — считается из замеров.
    */
   readonly curves?: Readonly<Record<string, readonly number[]>>
+  /** Свои, которые сидят у чужих (этап 150): кто, у кого, с какого дня и почём. */
+  readonly taken?: readonly {
+    readonly id: string
+    readonly name: string
+    readonly by: string
+    readonly since: number
+    readonly ransom: number
+  }[]
+  /** Плен в числах (этап 150): пленений, выкупов и на сколько серебра. */
+  readonly ransomLog?: { readonly taken: number; readonly freed: number; readonly paid: number }
   /**
    * Своя летопись (этап 147): сколько приписано своей рукой и когда.
    *
@@ -853,6 +863,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     balanceLog: { betrayals: 0, wars: 0 },
     reigns: {},
     curves: {},
+    taken: [],
+    ransomLog: { taken: 0, freed: 0, paid: 0 },
     annals: { added: 0, lastDay: 0 },
     era: null,
     eraLog: [],
