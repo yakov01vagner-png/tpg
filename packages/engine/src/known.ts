@@ -260,7 +260,10 @@ export function knownTo(
     // проигрывает даже со свежей вестью.
     .map((one) => ({
       word: one,
-      spread: spreadOf(one.source, day - one.day, hops) / trustIn(state, one.from),
+      // Разум работает прямо (этап 122, А3): тот, кто умнее, складывает вести
+      // точнее — вилка у него уже при том же источнике и том же возрасте.
+      spread:
+        spreadOf(one.source, day - one.day, hops) / (trustIn(state, one.from) * witsOf(state, who)),
     }))
     .sort((a, b) => a.spread - b.spread)
   const best = heard[0]
@@ -284,6 +287,18 @@ export function knownTo(
     clash,
     says: `${def.label}${best.word.from ? ` (${best.word.from})` : ''}, ${agedWords(age)}; вилка ${Math.round(best.spread * 100)} из ста${clash ? `. ${KNOWN_WORDS.clash}` : ''}`,
   }
+}
+
+/**
+ * Насколько разум спрашивающего сужает вилку (этап 122, А3).
+ *
+ * Прямое дело атрибута: шесть — ничего, десять — вилка на пятую часть уже.
+ * Чужим коронам это не даётся: у них своё предубеждение (этап 120).
+ */
+function witsOf(state: GameState, who: string): number {
+  if (who !== PLAYER) return 1
+  const mind = state.character.attributes.mind
+  return 1 + Math.max(0, mind - 6) * KNOWN.perWit
 }
 
 /** Насколько верят этому имени: 1 — не врал, меньше — врал (этап 103). */
@@ -341,8 +356,12 @@ export function bring(words: readonly Word[], word: Word): readonly Word[] {
 }
 
 /** Сколько вестей помнит этот: чтобы сейв не рос без меры. */
-export function forgetOld(words: readonly Word[], day: number): readonly Word[] {
-  return words.filter((one) => day - one.day <= KNOWN.keepDays)
+export function forgetOld(
+  words: readonly Word[],
+  day: number,
+  keepDays: number = KNOWN.keepDays,
+): readonly Word[] {
+  return words.filter((one) => day - one.day <= keepDays)
 }
 
 export { KNOWN, KNOWN_WORDS, SOURCE_DEFS, ASKED_DEFS, type QuestionKind, type SourceKind }

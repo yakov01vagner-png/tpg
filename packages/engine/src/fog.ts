@@ -6,6 +6,7 @@ import { ROLE_DEFS, SCOUT } from './content/scout'
 import { PLAYER } from './holding'
 import { type Word, bring } from './known'
 import { placeRep } from './reputation'
+import { scoutReach } from './sheet'
 import type { GameState } from './state'
 import { atWar } from './war'
 import { neighbourSettlements, roadsFrom } from './world/queries'
@@ -117,10 +118,13 @@ function eyesOf(
     if (!theirs || band.travel) continue
     // Дозор видит вдвое дальше обычной части: он для того и послан (этап 110).
     const role = state.roles?.[band.id]
+    // Дальность дозора — дело верховой езды (этап 122, А2).
     eyes.push({
       eye: 'host',
       from: band.locationId,
-      ...(role === 'scout' ? { reach: ROLE_DEFS.scout.hops } : {}),
+      ...(role === 'scout'
+        ? { reach: who === PLAYER ? scoutReach(state.character) : ROLE_DEFS.scout.hops }
+        : {}),
     })
   }
   for (const one of Object.values(state.settlements)) {

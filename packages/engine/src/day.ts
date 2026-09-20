@@ -171,9 +171,24 @@ export function whoTakes(state: GameState, matter: Matter, day: number): CourtPe
 }
 
 /** Насколько хуже выйдет дело в чужих руках (Дн4). */
-export function delegatedWorth(one: CourtPerson | null): number {
+export function delegatedWorth(one: CourtPerson | null, charisma = 6): number {
   if (!one) return 0
-  return Math.round(AUDIENCE.delegated * (0.6 + one.worth / 10) * 100) / 100
+  // Обаяние работает прямо (этап 122, А3): при государе, которого слушают,
+  // чужая рука выходит ближе к твоей.
+  const heard = 1 + Math.max(0, charisma - 6) * AUDIENCE.perCharisma
+  return Math.round(AUDIENCE.delegated * (0.6 + one.worth / 10) * heard * 100) / 100
+}
+
+/**
+ * Сколько усталости стоит разобранное дело (этап 122, А3).
+ *
+ * Прямое дело воли: у твёрдого приёмы отнимают меньше. Это не «+к воле», а
+ * названное число: десятка снимает четверть усталости с каждого дела.
+ */
+export function matterFatigue(state: GameState): number {
+  const will = state.character.attributes.will
+  const held = 1 - Math.max(0, will - 6) * AUDIENCE.perWill
+  return Math.round(AUDIENCE.fatiguePerMatter * Math.max(0.5, held) * 10) / 10
 }
 
 /** Сколько дней ждало дело и не пора ли ему решиться без тебя (Дн3). */

@@ -1,5 +1,6 @@
 import { PLAYER, holdingsOf } from './holding'
 import { type Word, bring, knownTo } from './known'
+import { ridesQuicker } from './sheet'
 import type { GameState } from './state'
 import { neighbourSettlements } from './world/queries'
 import type { World } from './world/types'
@@ -94,9 +95,14 @@ export function tourPlan(state: GameState, world: World, day: number): Tour {
     })
     .sort((a, b) => b.age - a.age || a.hops - b.hops)
     .slice(0, SIGHT.placesAtOnce)
+  // Атлетика — дело объезда: кто крепче в седле и на ногах, тот успевает
+  // больше за те же сутки (этап 122, А2).
   const days = Math.max(
     1,
-    Math.round(stops.reduce((sum, one) => sum + one.hops * SIGHT.daysPerHop, 0)),
+    Math.round(
+      stops.reduce((sum, one) => sum + one.hops * SIGHT.daysPerHop, 0) *
+        ridesQuicker(state.character),
+    ),
   )
   return {
     stops,

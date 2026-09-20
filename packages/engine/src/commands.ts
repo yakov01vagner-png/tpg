@@ -229,6 +229,7 @@ import { GOODS } from './content/goods'
 import { GOSSIP_WORDS, type TalkKind } from './content/gossip'
 import { AILMENT_DEFS, type Ailment, HERB_GOOD, POTIONS, POTIONS_BY_ID } from './content/heal'
 import { KIN_ASK, KIN_GIFT, UPBRINGING_MINUTES } from './content/home'
+import { KNOWN as KNOWN_DEFS } from './content/known'
 import { TEMPER_LINES } from './content/lines'
 import { FACTION_FAVOUR, FACTION_SPITE, type FactionId, type LordDeedId } from './content/lords'
 import {
@@ -323,6 +324,7 @@ import {
   delegatedWorth,
   doorway,
   matterDef,
+  matterFatigue,
   overdue,
   ruleYear,
   whoTakes,
@@ -836,6 +838,18 @@ import {
 } from './secret'
 import type { SettleEvent } from './settle'
 import { tickSettling } from './settle'
+import {
+  digsFaster,
+  hidesSpy,
+  holdsOut,
+  remembersDays,
+  ridersSpeed,
+  ridesQuicker,
+  scoutReach,
+  sparesMen,
+  steadyUnder,
+  stealsCheaper,
+} from './sheet'
 import type { Passage, Ship } from './ship'
 import {
   ABOARD_MAX,
@@ -2680,8 +2694,9 @@ function roadMeet(draft: Draft, journey: Journey, hoursOnRoad: number): void {
   // Встретить на дороге то, о чём не знал, — и есть внезапность (этап 109, Т4).
   const ambush = surpriseOf(draft.base, draft.base.world, PLAYER, met, dayOf(draft.time))
   if (ambush.surprised) {
-    draft.party = { ...draft.party, morale: Math.max(0, draft.party.morale - ambush.moraleHit) }
-    notice(draft, `${who}: ${ambush.says} Дух −${ambush.moraleHit}.`, 'war')
+    const hit = Math.round(ambush.moraleHit * steadyUnder(draft.character))
+    draft.party = { ...draft.party, morale: Math.max(0, draft.party.morale - hit) }
+    notice(draft, `${who}: ${ambush.says} Дух −${hit}.`, 'war')
   }
   draft.bands = draft.bands.filter((one) => one.id !== met.id)
   const enemy: BattleSide = {
@@ -3752,7 +3767,8 @@ function siegeSap(state: GameState, days: number): CommandResult {
   if (!settlement || !here) return fail('invalid', 'Осаждать нечего.')
 
   const draft = open(state)
-  const dug = Math.min(days, sapLeft(siege))
+  // Тяжёлый труд копает быстрее (этап 122, А2): те же сутки дают больше сажен.
+  const dug = Math.min(Math.round(days * digsFaster(state.character)), sapLeft(siege))
   advance(draft, hours(24 * days))
   addFatigue(draft, days * 7)
   blockade(draft, siege.locationId, days)
@@ -3850,7 +3866,8 @@ function siegeBribe(state: GameState): CommandResult {
 function advanceWorks(draft: Draft, days: number): void {
   const siege = draft.siege
   if (!siege?.works) return
-  const daysLeft = siege.works.daysLeft - days
+  // Работы под стенами идут быстрее у того, кто умеет работать (этап 122).
+  const daysLeft = siege.works.daysLeft - days * digsFaster(draft.character)
   if (daysLeft > 0) {
     draft.siege = { ...siege, works: { ...siege.works, daysLeft } }
     return
@@ -6970,8 +6987,10 @@ function attackBand(state: GameState, bandId: string): CommandResult {
   // Войско, о котором не знали, застаёт врасплох — и это считается духом (этап 109, Т4).
   const surprise = surpriseOf(state, state.world, PLAYER, band, dayOf(state.time))
   if (surprise.surprised) {
-    draft.party = { ...draft.party, morale: Math.max(0, draft.party.morale - surprise.moraleHit) }
-    notice(draft, `${name}: ${surprise.says} Дух −${surprise.moraleHit}.`, 'war')
+    // Стойкость держит строй: внезапность бьёт слабее (этап 122, А2).
+    const hit = Math.round(surprise.moraleHit * steadyUnder(state.character))
+    draft.party = { ...draft.party, morale: Math.max(0, draft.party.morale - hit) }
+    notice(draft, `${name}: ${surprise.says} Дух −${hit}.`, 'war')
   }
   draft.battle = startBattle(draft.party, softened, here?.terrain ?? 'plains', {
     ...(stake ? { stake } : {}),
@@ -11082,7 +11101,9 @@ function tickSpies(draft: Draft, days: number): void {
   // Один бросок на всех: по броску на человека — это лишняя случайность там,
   // где событие и так редкое.
   let none = 1
-  for (const spy of mine) none *= (1 - catchChance(spy, day)) ** days
+  // Ловкость рук прячет соглядатая (этап 122, А2).
+  const hides = hidesSpy(draft.character)
+  for (const spy of mine) none *= (1 - catchChance(spy, day, hides)) ** days
   const [caught, afterRoll] = rollChance(draft.rng, 1 - none)
   draft.rng = afterRoll
   if (!caught) return
@@ -12280,7 +12301,7 @@ function hearMatter(state: GameState, matterId: string): CommandResult {
 
   const draft = open(state)
   advance(draft, hours(4))
-  addFatigue(draft, AUDIENCE.fatiguePerMatter)
+  addFatigue(draft, matterFatigue(state))
   draft.settled = { ...(draft.settled ?? {}), [matterId]: day }
   draft.ruleLog = { ...draft.ruleLog, heard: draft.ruleLog.heard + 1 }
   // Разобранное тобой идёт в зачёт тому, о ком оно: место, вассал, свой человек.
@@ -12316,7 +12337,7 @@ function handMatter(state: GameState, matterId: string): CommandResult {
   advance(draft, hours(1))
   draft.settled = { ...(draft.settled ?? {}), [matterId]: day }
   draft.ruleLog = { ...draft.ruleLog, handed: draft.ruleLog.handed + 1 }
-  const worth = delegatedWorth(who)
+  const worth = delegatedWorth(who, state.character.attributes.charisma)
   if (matter.kind === 'plea') {
     draft.reputation = withPlaceRep(draft.reputation, matter.about, Math.round(6 * worth))
   }
@@ -12745,13 +12766,15 @@ function getProof(
   if (!can) return fail('invalid', 'Такого доказательства не бывает.')
   if (!can.can) return fail('requirements', can.why)
   const def = PROOF_DEFS[kind]
-  if (state.character.money < def.cost) {
-    return fail('noMoney', `На это нужно ${def.cost} серебра.`)
+  // Ловкость рук достаёт бумагу дешевле (этап 122, А2).
+  const price = Math.round(def.cost * stealsCheaper(state.character))
+  if (state.character.money < price) {
+    return fail('noMoney', `На это нужно ${price} серебра.`)
   }
 
   const draft = open(state)
   advance(draft, hours(10))
-  addMoney(draft, -def.cost)
+  addMoney(draft, -price)
   const proof: Proof = {
     id: `proof:${kind}:${a}:${b}:${day}`,
     kind,
@@ -13444,7 +13467,7 @@ function probeBand(state: GameState, bandId: string): CommandResult {
   if (men < 4) return fail('requirements', 'Для пробы нужен хоть какой-то отряд.')
 
   const day = dayOf(state.time)
-  const cost = probeCost(state.party, men)
+  const cost = probeCost(state.party, Math.round(men * sparesMen(state.character)))
   const draft = open(state)
   advance(draft, hours(6))
   // Платишь людьми и духом — из строя вынимают тех, кто попроще.
@@ -14156,7 +14179,8 @@ function tickReports(draft: Draft, days: number): void {
       })
     }
   }
-  draft.words = forgetOld(words, day)
+  // Концентрация держит вести в голове дольше (этап 122, А2).
+  draft.words = forgetOld(words, day, remembersDays(draft.character, KNOWN_DEFS.keepDays))
   // Чужая рука видна не по надписи, а по расхождению: раз в год об этом говорят.
   if (skimmed > 0 && day % (REPORT.everyDays * 12) === 0) {
     const purse = purseAsReported(draft.base, draft.base.world, day)
@@ -16286,7 +16310,10 @@ function addMoney(draft: Draft, delta: number): void {
 }
 
 function addFatigue(draft: Draft, delta: number): void {
-  const next = Math.min(FATIGUE_MAX, Math.max(0, Math.round(draft.character.fatigue + delta)))
+  // Стойкость держит дорогу и голод: усталость набирается медленнее, а отдых
+  // считается полностью (этап 122, А2).
+  const held = delta > 0 ? delta * holdsOut(draft.character) : delta
+  const next = Math.min(FATIGUE_MAX, Math.max(0, Math.round(draft.character.fatigue + held)))
   if (next === draft.character.fatigue) return
   const applied = next - draft.character.fatigue
   patch(draft, { fatigue: next })

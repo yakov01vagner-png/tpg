@@ -75,9 +75,9 @@ export function depth(spy: Spy, day: number): number {
 }
 
 /** Насколько вероятно, что его возьмут за сутки. */
-export function catchChance(spy: Spy, day: number): number {
+export function catchChance(spy: Spy, day: number, hides = 1): number {
   const years = Math.max(0, day - spy.sinceDay) / 365
-  return SPY_SEAT_DEFS[spy.seat].risk * (1 + Math.min(3, years))
+  return hides * (SPY_SEAT_DEFS[spy.seat].risk * (1 + Math.min(3, years)))
 }
 
 export interface Report {

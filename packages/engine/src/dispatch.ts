@@ -11,6 +11,7 @@ import {
 import { SENESCHAL_NAMES } from './content/estate'
 import { hasBuilding } from './holding'
 import { PLAYER } from './holding'
+import { ridersSpeed } from './sheet'
 import type { GameState } from './state'
 import { neighbourSettlements } from './world/queries'
 import type { World } from './world/types'
@@ -107,7 +108,12 @@ export function linkTo(
   const chain = towers.length >= 2
   const own = mine.length >= Math.max(1, Math.floor(hops / 3))
   const speed = chain ? DISPATCH.towerSpeeds : own ? DISPATCH.ownRoadSpeeds : 1
-  const days = Math.max(1, Math.round(hops * DISPATCH.daysPerHop * speed))
+  // Верховая езда — дело гонца: у того, кто сам умеет ездить, и люди едут
+  // быстрее (этап 122, А2).
+  const days = Math.max(
+    1,
+    Math.round(hops * DISPATCH.daysPerHop * speed * ridersSpeed(state.character)),
+  )
   return {
     days,
     how: chain ? 'fire' : own ? 'ownRoad' : 'rider',
