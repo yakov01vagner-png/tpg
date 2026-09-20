@@ -16,6 +16,7 @@ import { garrisonSize } from '../src/holding'
 import { partySize } from '../src/party'
 import type { Party } from '../src/party'
 import { lordRep } from '../src/reputation'
+import { createRng } from '../src/rng'
 import { bribePrice, surrenderChance, wallsUnderSiege } from '../src/siege'
 import type { GameState } from '../src/state'
 import { createGame } from '../src/state'
@@ -189,28 +190,48 @@ describe('Б4 и Б5: полководец и ветераны', () => {
 
   it('прошедший бой отряд бьёт крепче набранного заново', () => {
     expect(veteranPower(1)).toBeGreaterThan(veteranPower(0))
-    const state = at(capital, party({ spearman: 30 }))
-    const green = fight(
-      {
-        ...state,
-        battle: startBattle(state.party, foe(30), 'plains', { ground: 'open', veterans: 0 }),
-      },
-      'hold',
-    )
-    const veterans = fight(
-      {
-        ...state,
-        battle: startBattle(state.party, foe(30), 'plains', { ground: 'open', veterans: 30 }),
-      },
-      'hold',
-    )
+    // Один бой — плохая мерка: разброс в нём больше, чем разница между
+    // новобранцем и ветераном (этап 171 сделал раунды неодинаковыми, и это
+    // стало видно). Считаем по пяти боям своими уцелевшими — тем, ради чего
+    // ветераны и нужны.
+    let greenLeft = 0
+    let veteranLeft = 0
+    let greenRounds = 0
+    let veteranRounds = 0
+    let greenOut: GameState | null = null
+    for (let seed = 1; seed <= 10; seed += 1) {
+      const state = at(capital, party({ spearman: 100 }), 60, 3000)
+      const seeded = { ...state, rng: createRng(seed) }
+      const green = fight(
+        {
+          ...seeded,
+          battle: startBattle(seeded.party, foe(100), 'plains', { ground: 'open', veterans: 0 }),
+        },
+        'charge',
+      )
+      const veterans = fight(
+        {
+          ...seeded,
+          battle: startBattle(seeded.party, foe(100), 'plains', { ground: 'open', veterans: 100 }),
+        },
+        'charge',
+      )
+      greenLeft += partySize(green.party)
+      veteranLeft += partySize(veterans.party)
+      greenRounds += green.battle?.round ?? 0
+      veteranRounds += veterans.battle?.round ?? 0
+      greenOut = green
+    }
+    // Мерка — свои уцелевшие и длина боя. Чужих уцелевших в неё брать нельзя:
+    // ветераны ломают врага раньше, и с поля убегает больше живых — выходит,
+    // что «чужих осталось больше» у того, кто победил чище.
     console.log(
-      `тридцать против тридцати: новобранцы — ${green.battle?.outcome}, ветераны — ${veterans.battle?.outcome}; ` +
-        `у врага осталось ${unitsSize(green.battle?.enemy.units ?? {})} против ${unitsSize(veterans.battle?.enemy.units ?? {})}`,
+      `десять боёв сто на сто: новобранцев уцелело ${greenLeft} за ${greenRounds} раундов, ` +
+        `ветеранов ${veteranLeft} за ${veteranRounds}`,
     )
-    expect(unitsSize(veterans.battle?.enemy.units ?? {})).toBeLessThanOrEqual(
-      unitsSize(green.battle?.enemy.units ?? {}),
-    )
+    expect(veteranLeft).toBeGreaterThan(greenLeft)
+    expect(veteranRounds).toBeLessThanOrEqual(greenRounds)
+    const green = greenOut as GameState
     // И после боя те, кто уцелел, ветеранами уже записаны.
     const after = ok(applyCommand(green, { type: 'battleEnd', prisoners: 'release' }))
     expect(after.party.veterans).toBe(partySize(after.party))

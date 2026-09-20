@@ -1,5 +1,6 @@
 import type { GroundId } from './content/field'
 import type { GoodId } from './content/goods'
+import { MELEE, PHASE_DEFS, type PhaseId, WEATHER_DEFS, type WeatherId } from './content/melee'
 import { TROOPS, type TroopId } from './content/troops'
 import {
   engagedShare,
@@ -125,6 +126,12 @@ export interface Battle {
   readonly sight?: number
   /** С чем враг вышел на поле: по разнице считают, что с него снимут. */
   readonly enemyStartUnits?: Units
+  /**
+   * Небо над полем (этап 171, Бй2): дождь, распутица, зной, метель, туман.
+   * Выводится из дня и времени года тем, кто начинает бой, — здесь оно только
+   * лежит и считается. Необязательно: сейвы до 1.0 погоды не знают.
+   */
+  readonly weather?: WeatherId
 }
 
 export type BattleStake =
@@ -195,6 +202,7 @@ export interface BattleOptions {
   readonly ground?: GroundId
   readonly veterans?: number
   readonly sight?: number
+  readonly weather?: WeatherId
 }
 
 export function startBattle(
@@ -212,7 +220,10 @@ export function startBattle(
     strain: 0,
     ground: options.ground ?? 'open',
     veterans: options.veterans ?? 0,
-    sight: options.sight ?? 1,
+    // Небо решает, насколько далеко видно: туман и метель слепят стрелка
+    // (этап 171). Если зовущий бой погоды не назвал, стоит ясный день.
+    sight: options.sight ?? (options.weather ? WEATHER_DEFS[options.weather].sight : 1),
+    weather: options.weather ?? 'clear',
     fallen: {},
     enemy,
     enemyStart: unitsSize(enemy.units),
@@ -226,6 +237,7 @@ export function startBattle(
     log: [
       `${enemy.name} — ${unitsSize(enemy.units)} против ${partySize(party)}.`,
       `${groundOf(options.ground).label}. ${groundOf(options.ground).about}`,
+      `${WEATHER_DEFS[options.weather ?? 'clear'].label}: ${WEATHER_DEFS[options.weather ?? 'clear'].about}`,
     ],
     spoils: { money: 0, prisoners: 0 },
   }
@@ -305,6 +317,18 @@ export function resolveRound(
   // Место боя (этап 58): оно решает, сколько людей доходит до сшибки, видно ли
   // стрелку цель и есть ли куда обходить.
   const ground = groundOf(battle.ground)
+  // Пора боя (этап 171, Бй1): сходятся, сшиблись, переломилось, гонят. Она не
+  // хранится — она считается из раунда и духа обеих сторон, и это единственное,
+  // чем один раунд теперь отличается от другого.
+  const phase: PhaseId =
+    battle.round < MELEE.arrayRounds
+      ? 'array'
+      : battle.morale < MELEE.breaks || battle.enemy.morale < MELEE.breaks
+        ? 'break'
+        : 'clash'
+  const pace = PHASE_DEFS[phase]
+  // Небо над полем (Бй2): конница вязнет в распутице, в зной люди сдают раньше.
+  const sky = WEATHER_DEFS[battle.weather ?? 'clear']
   let feinting = 0
   let rallying = 0
 
@@ -362,12 +386,24 @@ export function resolveRound(
       defense += power.defense * effect.defense * 0.8
       continue
     }
+    // Пора боя весит по-разному для стрелка и для строя: пока сходятся, бьют
+    // одни стрелки; в погоне стрелять уже не в кого. Конница считается небом.
+    const paced =
+      order === 'shoot'
+        ? pace.shot
+        : order === 'charge'
+          ? Math.max(pace.melee, MELEE.chargeCloses)
+          : pace.melee
+    // Конный в группе — не отдельная группа: небо считается по тому, сколько
+    // в ней всадников (распутица вязнет под копытами, а не под сапогами).
+    const horses = (units.horseman ?? 0) / Math.max(1, unitsSize(units))
+    const sky5 = 1 - horses * (1 - sky.horse)
     if (order === 'flank' && !engaged) {
       // Обход работает, только когда врага кто-то держит перед собой.
       log.push(`${GROUP_LABELS[id]} заходит в пустоту: враг не связан боем.`)
-      attack += power.attack * effect.attack * 0.4 * seen
+      attack += power.attack * effect.attack * 0.4 * seen * paced * sky5
     } else {
-      attack += power.attack * effect.attack * seen
+      attack += power.attack * effect.attack * seen * paced * sky5
     }
     defense += power.defense * effect.defense
   }
@@ -441,8 +477,19 @@ export function resolveRound(
   const [enemySwing, afterEnemySwing] = variance(generator, 0.15)
   generator = afterEnemySwing
 
-  const enemyLossShare = lossShare(attack * swing, enemyDefense) + extraEnemyLosses
-  const ownLossShare = lossShare(enemyAttack * enemySwing, defense)
+  // Дрогнувшему достаётся больше: в перелом и в погоню бьют по тем, кто уже
+  // повернулся спиной (этап 171, Бй1).
+  const broke =
+    battle.morale < MELEE.breaks && battle.morale <= battle.enemy.morale
+      ? 'own'
+      : battle.enemy.morale < MELEE.breaks
+        ? 'enemy'
+        : null
+  const enemyLossShare =
+    (lossShare(attack * swing, enemyDefense) + extraEnemyLosses) *
+    (broke === 'enemy' ? pace.onBroken : 1)
+  const ownLossShare =
+    lossShare(enemyAttack * enemySwing, defense) * (broke === 'own' ? pace.onBroken : 1)
 
   const enemySize = unitsSize(battle.enemy.units)
   const ownSize = groupsSize(battle.groups)
@@ -457,10 +504,11 @@ export function resolveRound(
   const [groups, afterOwn] = takeGroupLosses(battle.groups, ownLosses, orders, generator)
   generator = afterOwn
 
+  // Раунд называется порой боя: видно, когда сошлись и когда переломилось.
   log.push(
     ownLosses > 0 || enemyLosses > 0
-      ? `Раунд ${round}: их потери ${enemyLosses}, наши ${ownLosses}.`
-      : `Раунд ${round}: сошлись, но никто не дрогнул.`,
+      ? `${pace.label} (раунд ${round}): их потери ${enemyLosses}, наши ${ownLosses}.`
+      : `${pace.label} (раунд ${round}): сошлись, но никто не дрогнул.`,
   )
 
   // Откат: перегоревший круг теряет человека и пугает своих.
@@ -511,7 +559,7 @@ export function resolveRound(
     ...battle.enemy,
     units: enemyUnits,
     morale: enemyMorale,
-    fatigue: Math.min(100, battle.enemy.fatigue + 8),
+    fatigue: Math.min(100, battle.enemy.fatigue + Math.round(8 * sky.toil)),
   }
 
   let outcome: BattleOutcome = 'ongoing'
@@ -551,7 +599,7 @@ export function resolveRound(
       fallen,
       strain,
       morale,
-      fatigue: Math.min(100, battle.fatigue + 8),
+      fatigue: Math.min(100, battle.fatigue + Math.round(8 * sky.toil)),
       round,
       outcome,
       log: [...battle.log, ...log],
