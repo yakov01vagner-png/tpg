@@ -564,6 +564,14 @@ export interface GameState {
     readonly since: number
     readonly ransom: number
   }[]
+  /** Потерянные державы (этап 151): что, когда и сколько мест в ней было. */
+  readonly fallenLog?: readonly {
+    readonly name: string
+    readonly day: number
+    readonly places: number
+  }[]
+  /** Изгнание (этап 151): при чьём дворе ты живёшь и с какого дня. */
+  readonly exile?: { readonly at: string; readonly sinceDay: number } | null
   /** Плен в числах (этап 150): пленений, выкупов и на сколько серебра. */
   readonly ransomLog?: { readonly taken: number; readonly freed: number; readonly paid: number }
   /**
@@ -864,6 +872,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     reigns: {},
     curves: {},
     taken: [],
+    fallenLog: [],
+    exile: null,
     ransomLog: { taken: 0, freed: 0, paid: 0 },
     annals: { added: 0, lastDay: 0 },
     era: null,

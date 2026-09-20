@@ -441,6 +441,7 @@ import {
 import type { GameEvent, LogKind } from './events'
 import { appointCost, balanceOf, intrigueNow, partiesOf, sidesWith } from './faction'
 import { FAIR_TRADE_BONUS, fairAt, feastAt } from './fair'
+import { FALLEN, FALLEN_WORDS, exileAt, realmLost, whatRemains } from './fallen'
 import {
   ALL_CIRCLES,
   type Fame,
@@ -1389,6 +1390,8 @@ export type Command =
   /** Коалиция (этап 136): разобрать чужую по одному и собрать свою против первого. */
   | { readonly type: 'breakLeague'; readonly member: string }
   | { readonly type: 'callLeague'; readonly against: string }
+  /** Изгнание (этап 151): пойти к чужому двору, когда своего нет. */
+  | { readonly type: 'goIntoExile'; readonly at: string }
   /** Плен (этап 150): выкупить своего и поторговаться за чужого. */
   | { readonly type: 'ransomOwn'; readonly id: string }
   | { readonly type: 'haggleRansom'; readonly captiveId: string; readonly offer: number }
@@ -1989,6 +1992,8 @@ export function applyCommand(
       return breakLeague(state, command.member)
     case 'callLeague':
       return callLeague(state, command.against)
+    case 'goIntoExile':
+      return goIntoExile(state, command.at)
     case 'ransomOwn':
       return ransomOwn(state, command.id)
     case 'haggleRansom':
@@ -10121,6 +10126,8 @@ interface Draft {
     readonly ransom: number
   }[]
   ransomLog: { readonly taken: number; readonly freed: number; readonly paid: number }
+  fallenLog: readonly { readonly name: string; readonly day: number; readonly places: number }[]
+  exile: { readonly at: string; readonly sinceDay: number } | null
   annals: {
     readonly added: number
     readonly lastDay: number
@@ -10346,6 +10353,8 @@ function open(state: GameState): Draft {
     curves: state.curves ?? {},
     taken: state.taken ?? [],
     ransomLog: state.ransomLog ?? { taken: 0, freed: 0, paid: 0 },
+    fallenLog: state.fallenLog ?? [],
+    exile: state.exile ?? null,
     annals: state.annals ?? { added: 0, lastDay: 0 },
     era: state.era ?? null,
     eraLog: state.eraLog ?? [],
@@ -10723,6 +10732,8 @@ function close(draft: Draft): CommandResult {
     tickEra(draft, daysPassed)
     // В плену бегут, а оставленный в плену помнит это (этап 150).
     tickRansom(draft, daysPassed)
+    // И держава может кончиться совсем — а игрок нет (этап 151).
+    tickFallen(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10919,6 +10930,8 @@ function close(draft: Draft): CommandResult {
     curves: draft.curves,
     taken: draft.taken,
     ransomLog: draft.ransomLog,
+    fallenLog: draft.fallenLog,
+    exile: draft.exile,
     annals: draft.annals,
     era: draft.era,
     eraLog: draft.eraLog,
@@ -14298,6 +14311,52 @@ function tickRansom(draft: Draft, days: number): void {
       ),
     }
   }
+}
+
+/**
+ * Держава кончается (этап 151, По1, По4 и По5).
+ *
+ * Последнее место взято — державы нет. Игра при этом не кончается: остаются
+ * имя, дом, слово, спутники и знание, и это названо прямо.
+ */
+function tickFallen(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % FALLEN.beat !== 0) return
+  if (!realmLost(draft.base)) return
+  const name = draft.realm?.name ?? 'держава'
+  draft.fallenLog = [...draft.fallenLog, { name, day, places: 0 }]
+  draft.realm = null
+  draft.crowned = null
+  // Бывшие вассалы холодеют, мир — меньше: с безземельным не считаются, но и
+  // не воюют.
+  shiftVassals(draft, FALLEN.vassalsChill, null)
+  for (const id of Object.keys(draft.base.world.kingdoms)) {
+    draft.politics = withRelation(draft.politics, PLAYER, id, FALLEN.worldChill)
+  }
+  const remains = whatRemains(draft.base, draft.world, day)
+  notice(draft, `${FALLEN_WORDS.lost} ${remains.says}`, 'world')
+}
+
+/**
+ * Пойти в изгнание (этап 151, По3).
+ *
+ * У изгнанника есть место при чужом дворе и нет власти. Принимают не всякого:
+ * нужен двор, которому ты не холоден.
+ */
+function goIntoExile(state: GameState, at: string): CommandResult {
+  if (!state.world.kingdoms[at]) return fail('invalid', 'Такой короны нет.')
+  const day = dayOf(state.time)
+  if (state.exile) return fail('invalid', 'Ты и так при чужом дворе.')
+  const where = exileAt(state, state.world, day)
+  if (where.at !== at) return fail('requirements', where.says)
+
+  const draft = open(state)
+  advance(draft, hours(24))
+  draft.exile = { at, sinceDay: day }
+  draft.politics = withRelation(draft.politics, PLAYER, at, 10)
+  notice(draft, `${FALLEN_WORDS.exile} Ты при дворе ${kingdomName(draft.base, at)}.`, 'world')
+  return close(draft)
 }
 
 /**
