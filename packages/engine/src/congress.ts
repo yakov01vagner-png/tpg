@@ -8,6 +8,7 @@ import {
 import { overgrown } from './diplomacy'
 import { PLAYER } from './holding'
 import { crownPlan } from './plans'
+import { congressWeight } from './proof'
 import { childless, royalHouse } from './royal'
 import type { GameState } from './state'
 import { recognitionOf } from './title'
@@ -166,6 +167,15 @@ export function voteOf(
   if (question === 'faith') vote += plan.want === 'rest' ? 0.1 : -0.1
   const bribe = state.congress?.bribes?.[kingdomId] ?? 0
   if (bribe > 0) vote += Math.min(0.8, bribe / Math.max(1, votePrice(state, world, kingdomId, 1)))
+  // На съезде бумага весит больше речи (этап 116, Чд5): предъявленное
+  // доказательство чужого сговора склоняет тех, кто в нём не замешан.
+  if (about && (question === 'commonFoe' || question === 'partition')) {
+    const shown = (state.proofs ?? [])
+      .filter((one) => !one.exposed && one.shown && one.about.includes(about))
+      .map((one) => congressWeight(one, day))
+    const best = shown.length > 0 ? Math.max(...shown) : 0
+    if (kingdomId !== about) vote += best
+  }
   return Math.round(vote * 100) / 100
 }
 

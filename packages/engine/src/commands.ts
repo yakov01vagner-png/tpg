@@ -650,6 +650,16 @@ import { plagueAt, tickPlague } from './plague'
 import { aimEra, orderAim, orderAimLabel, tickTrade } from './plans'
 import { PROGRESSION, applyCharacterXp, applySkillXp } from './progression'
 import {
+  PROOF,
+  PROOF_DEFS,
+  PROOF_WORDS,
+  type Proof,
+  type ProofKind,
+  forgerySeen,
+  proofsAvailable,
+  showWorth,
+} from './proof'
+import {
   activityOf,
   arrivalQuarter,
   hasQuarters,
@@ -1207,6 +1217,16 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Чужие договоры (этап 116): добыть доказательство и предъявить его миру. */
+  | {
+      readonly type: 'getProof'
+      readonly kind: ProofKind
+      readonly a: string
+      readonly b: string
+      readonly against?: string
+    }
+  | { readonly type: 'showProof'; readonly proofId: string }
+  | { readonly type: 'accuse'; readonly a: string; readonly b: string }
   /** Тайна (этап 115): купить молчание, выведать чужой сговор. */
   | { readonly type: 'hushSecret'; readonly treatyId: string }
   | { readonly type: 'prySecret'; readonly a: string; readonly b: string }
@@ -1751,6 +1771,12 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'getProof':
+      return getProof(state, command.kind, command.a, command.b, command.against ?? PLAYER)
+    case 'showProof':
+      return showProof(state, command.proofId)
+    case 'accuse':
+      return accuse(state, command.a, command.b)
     case 'hushSecret':
       return hushSecret(state, command.treatyId)
     case 'prySecret':
@@ -9748,6 +9774,13 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  proofs: readonly Proof[]
+  proofLog: {
+    readonly got: number
+    readonly shown: number
+    readonly forged: number
+    readonly caught: number
+  }
   hushed: Readonly<Record<string, number>>
   secretLog: {
     readonly made: number
@@ -9899,6 +9932,8 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    proofs: state.proofs ?? [],
+    proofLog: state.proofLog ?? { got: 0, shown: 0, forged: 0, caught: 0 },
     hushed: state.hushed ?? {},
     secretLog: state.secretLog ?? { made: 0, leaked: 0, hushed: 0, caught: 0 },
     learned: state.learned ?? {},
@@ -10382,6 +10417,8 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    proofs: draft.proofs,
+    proofLog: draft.proofLog,
     hushed: draft.hushed,
     secretLog: draft.secretLog,
     learned: draft.learned,
@@ -12187,6 +12224,118 @@ function handMatter(state: GameState, matterId: string): CommandResult {
     `${matter.says} ${AUDIENCE_WORDS.handed} Взял ${who.name} (${who.temper}, умение ${who.worth}): выйдет на ${Math.round(worth * 100)} из ста от твоего.`,
     'people',
   )
+  return close(draft)
+}
+
+/**
+ * Добыть доказательство (этап 116, Чд1 и Чд2).
+ *
+ * Знать мало: мир верит не тому, кто прав, а тому, у кого бумага. Что именно
+ * можно добыть, зависит от того, что у тебя есть, — свой человек при их дворе,
+ * дружественная третья корона или только писец и немного совести.
+ */
+function getProof(
+  state: GameState,
+  kind: ProofKind,
+  a: string,
+  b: string,
+  against: string,
+): CommandResult {
+  const day = dayOf(state.time)
+  const can = proofsAvailable(state, state.world, a, b, day).find((one) => one.kind === kind)
+  if (!can) return fail('invalid', 'Такого доказательства не бывает.')
+  if (!can.can) return fail('requirements', can.why)
+  const def = PROOF_DEFS[kind]
+  if (state.character.money < def.cost) {
+    return fail('noMoney', `На это нужно ${def.cost} серебра.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(10))
+  addMoney(draft, -def.cost)
+  const proof: Proof = {
+    id: `proof:${kind}:${a}:${b}:${day}`,
+    kind,
+    about: `${a}:${b}`,
+    against,
+    gotDay: day,
+  }
+  draft.proofs = [...draft.proofs, proof]
+  draft.proofLog = {
+    ...draft.proofLog,
+    got: draft.proofLog.got + 1,
+    forged: draft.proofLog.forged + (kind === 'forged' ? 1 : 0),
+  }
+  notice(
+    draft,
+    `${kind === 'forged' ? PROOF_WORDS.forged : PROOF_WORDS.got} ${def.label}: ${def.about} Вес ${def.weight}.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Предъявить миру (этап 116, Чд3 и Чд4).
+ *
+ * Третьи поворачиваются ровно на вес бумаги. Подделку могут сличить — и тогда
+ * врун ты, а гнев приходит от всех, кто поверил.
+ */
+function showProof(state: GameState, proofId: string): CommandResult {
+  const proof = (state.proofs ?? []).find((one) => one.id === proofId)
+  if (!proof) return fail('invalid', 'Такой бумаги у тебя нет.')
+  if (proof.shown) return fail('invalid', 'Это ты уже предъявлял.')
+  const day = dayOf(state.time)
+  const [a, b] = proof.about.split(':')
+
+  const draft = open(state)
+  advance(draft, hours(6))
+  const caught = forgerySeen(state, state.world, proof, day)
+  if (caught.seen) {
+    draft.proofs = draft.proofs.map((one) =>
+      one.id === proofId ? { ...one, shown: true, exposed: true } : one,
+    )
+    draft.proofLog = {
+      ...draft.proofLog,
+      shown: draft.proofLog.shown + 1,
+      caught: draft.proofLog.caught + 1,
+    }
+    for (const side of Object.keys(draft.base.world.kingdoms)) {
+      draft.politics = withRelation(draft.politics, PLAYER, side, PROOF.forgeryCost / 2)
+    }
+    notice(draft, caught.says, 'world')
+    return close(draft)
+  }
+  const worth = showWorth(proof, day)
+  draft.proofs = draft.proofs.map((one) => (one.id === proofId ? { ...one, shown: true } : one))
+  draft.proofLog = { ...draft.proofLog, shown: draft.proofLog.shown + 1 }
+  // Третьи поворачиваются к тебе, а те, о ком бумага, — от тебя.
+  for (const side of Object.keys(draft.base.world.kingdoms)) {
+    if (side === a || side === b) {
+      draft.politics = withRelation(draft.politics, PLAYER, side, -worth.turn)
+      continue
+    }
+    draft.politics = withRelation(draft.politics, PLAYER, side, worth.turn)
+  }
+  notice(draft, `${worth.says} Третьи повернулись на ${worth.turn}.`, 'world')
+  return close(draft)
+}
+
+/**
+ * Обвинить без бумаги (этап 116, Чд2).
+ *
+ * Можно и так — и мир пожмёт плечами: слово против слова весит шестую часть
+ * доказательства. Это и есть та разница, ради которой бумагу добывают.
+ */
+function accuse(state: GameState, a: string, b: string): CommandResult {
+  const day = dayOf(state.time)
+  const worth = showWorth(null, day)
+  const draft = open(state)
+  advance(draft, hours(3))
+  for (const side of Object.keys(draft.base.world.kingdoms)) {
+    if (side === a || side === b) continue
+    draft.politics = withRelation(draft.politics, PLAYER, side, worth.turn)
+  }
+  notice(draft, `${worth.says} Третьи повернулись на ${worth.turn}.`, 'world')
   return close(draft)
 }
 

@@ -51,6 +51,7 @@ import type { Party } from './party'
 import { EMPTY_PARTY } from './party'
 import type { Grievance, PeaceRecord, Talks } from './peace'
 import type { Plague } from './plague'
+import type { Proof } from './proof'
 import { arrivalQuarter } from './quarter'
 import type { Quest } from './quest'
 import type { Charters } from './realm'
@@ -412,6 +413,14 @@ export interface GameState {
   }
   /** Дела, которые ты уже разобрал или передал: чтобы не звали дважды. */
   readonly settled?: Readonly<Record<string, number>>
+  /** Доказательства чужих сговоров, что у тебя на руках (этап 116). */
+  readonly proofs?: readonly Proof[]
+  readonly proofLog?: {
+    readonly got: number
+    readonly shown: number
+    readonly forged: number
+    readonly caught: number
+  }
   /** За чьё молчание заплачено и до какого дня (этап 115). */
   readonly hushed?: Readonly<Record<string, number>>
   /** Что стало с тайными статьями. */
@@ -590,6 +599,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     favours: {},
     ruleLog: { heard: 0, handed: 0, missed: 0 },
     settled: {},
+    proofs: [],
+    proofLog: { got: 0, shown: 0, forged: 0, caught: 0 },
     hushed: {},
     secretLog: { made: 0, leaked: 0, hushed: 0, caught: 0 },
     learned: {},
