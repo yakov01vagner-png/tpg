@@ -16,7 +16,15 @@ export interface EquippedItem {
    * Клеймо: чья это работа, откуда и какова (этап 50). Есть только у вещей,
    * сделанных руками, — купленная в лавке вещь ничья.
    */
-  readonly mark?: { readonly maker: string; readonly place: string; readonly quality: number }
+  readonly mark?: {
+    readonly maker: string
+    readonly place: string
+    readonly quality: number
+    /** В какой день сделана (этап 179): год работы виден на клейме. */
+    readonly day?: number
+    /** Сколько раз чинена: починка видна и в цене, и в разговоре. */
+    readonly repairs?: number
+  }
 }
 
 export type Equipment = Readonly<Partial<Record<SlotId, EquippedItem>>>

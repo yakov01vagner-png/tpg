@@ -5833,6 +5833,10 @@ function craftItem(state: GameState, itemId: string): CommandResult {
     maker: state.character.name,
     place: here.name,
     quality,
+    // Клеймо помнит год (этап 179, Рм1): вещь со своей историей начинается с
+    // дня, когда её сделали.
+    day: dayOf(draft.time),
+    repairs: 0,
   }
   notice(draft, `Выковано: ${item.label.toLowerCase()} — ${qualityLabel(quality)}.`)
   advance(draft, hours(10))
@@ -5864,8 +5868,15 @@ function repairItem(state: GameState, slot: SlotId): CommandResult {
   notice(draft, `Починено: ${item.label.toLowerCase()} за ${cost}.`)
   advance(draft, hours(3))
   addMoney(draft, -cost)
+  // Починка не стирает клеймо (этап 179, Рм2): до 1.0 чинёная вещь становилась
+  // ничьей — работа мастера пропадала вместе с его именем. Теперь она помнит и
+  // мастера, и то, сколько раз её чинили.
   patch(draft, {
-    equipment: withItem(draft.character.equipment, slot, { id: worn.id, condition: 100 }),
+    equipment: withItem(draft.character.equipment, slot, {
+      id: worn.id,
+      condition: 100,
+      ...(worn.mark ? { mark: { ...worn.mark, repairs: (worn.mark.repairs ?? 0) + 1 } } : {}),
+    }),
   })
   return close(draft)
 }
