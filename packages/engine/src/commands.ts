@@ -1005,6 +1005,7 @@ import {
   priestAt,
   templeAccepts,
 } from './temple'
+import { THEIRWAY, crownWay, theirWay, theirWaySays, wouldChange } from './theirway'
 import { DAYS_PER_YEAR, timeOfDay } from './time'
 import type { GameTime } from './time'
 import type { TimeWindow } from './time'
@@ -10071,6 +10072,9 @@ interface Draft {
     readonly day: number
     readonly shown?: number
   }[]
+  crownWays: Readonly<
+    Record<string, { readonly way: string; readonly sinceDay: number; readonly places: number }>
+  >
   usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
@@ -10270,6 +10274,7 @@ function open(state: GameState): Draft {
     recalls: state.recalls ?? [],
     quiet: state.quiet ?? null,
     wrongCalls: state.wrongCalls ?? [],
+    crownWays: state.crownWays ?? {},
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
@@ -10625,6 +10630,8 @@ function close(draft: Draft): CommandResult {
     tickAcclaim(draft, daysPassed)
     // Двор считает твоё продвижение по-своему, а чужая ошибка вскрывается (этап 139).
     tickPrimacy(draft, daysPassed)
+    // А короны идут каждая своим путём — и меняют его, проиграв (этап 140).
+    tickTheirWay(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10813,6 +10820,7 @@ function close(draft: Draft): CommandResult {
     recalls: draft.recalls,
     quiet: draft.quiet,
     wrongCalls: draft.wrongCalls,
+    crownWays: draft.crownWays,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
@@ -13690,6 +13698,48 @@ function tickPrimacy(draft: Draft, days: number): void {
       'world',
     )
     return
+  }
+}
+
+/**
+ * Короны идут своим путём (этап 140, Кп1 и Кп3).
+ *
+ * Путь выводится из короны, а здесь только помнится земля, по убыли которой
+ * считается поражение, и записывается смена: тем, чем не вышло, второй раз не
+ * идут, и это событие, а не тихая правка.
+ */
+function tickTheirWay(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % THEIRWAY.beat !== 0) return
+  const ways: Record<string, { way: string; sinceDay: number; places: number }> = {
+    ...draft.crownWays,
+  }
+  for (const id of Object.keys(draft.base.world.kingdoms)) {
+    const now = crownWay(draft.base, draft.world, id, day)
+    const places =
+      theirWay(draft.base, draft.world, id, day).steps.find((one) => one.step.measure === 'places')
+        ?.have ?? 0
+    const was = ways[id]
+    if (!was) {
+      ways[id] = { way: now, sinceDay: day, places }
+      continue
+    }
+    const change = wouldChange(draft.base, draft.world, id, day)
+    if (change.changes) {
+      ways[id] = { way: change.to, sinceDay: day, places }
+      notice(draft, change.says, 'world')
+      continue
+    }
+    // Земля помнится по лучшему: путь меняют от потери, а не от прироста.
+    ways[id] = { ...was, places: Math.max(was.places, places) }
+  }
+  draft.crownWays = ways
+  // Раз в год мир напоминает, кто куда идёт, — но только о том, о ком ты слышал.
+  if (day % (THEIRWAY.beat * 12) !== 0) return
+  const first = firstOf(draft.base, draft.world, day)
+  if (first.who !== PLAYER) {
+    notice(draft, theirWaySays(draft.base, draft.world, first.who, day), 'world')
   }
 }
 

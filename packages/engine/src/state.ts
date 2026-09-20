@@ -529,6 +529,15 @@ export interface GameState {
    * Пока оно в силе, громкие дела закрыты, а молва о тебе идёт хуже.
    */
   readonly quiet?: { readonly sinceDay: number } | null
+  /**
+   * Пути корон (этап 140): выбранный путь, день и земля на тот день.
+   *
+   * Выводится путь из нрава и уклада; хранится только то, что нельзя вывести, —
+   * смена пути и земля, по убыли которой она считается.
+   */
+  readonly crownWays?: Readonly<
+    Record<string, { readonly way: string; readonly sinceDay: number; readonly places: number }>
+  >
   /** Коалиции, собранные не против того (этап 139): день и имя. Это помнят. */
   readonly wrongCalls?: readonly {
     readonly against: string
@@ -781,6 +790,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     recalls: [],
     quiet: null,
     wrongCalls: [],
+    crownWays: {},
     usedDay: {},
     pathLog: { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: {},
