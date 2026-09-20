@@ -1185,6 +1185,7 @@ import { fordShut } from './world/rivers'
 import type { World } from './world/types'
 import { TERRAIN_LABELS, isSettlement, isSite } from './world/types'
 import { bedridden, defeatOutcome, healWound } from './wounds'
+import { changeCost, obeyedAll } from './writ'
 import { riversFrozen } from './yearland'
 
 /**
@@ -4560,6 +4561,9 @@ function setLaw(
   }
 
   const draft = open(state)
+  // Перемена закона — событие (этап 181, Зк3): у неё есть те, кто за, и те, кто
+  // против, и она ложится в память мест.
+  const cost = changeCost(state, state.world, before, law)
   draft.law = law
   advance(draft, hours(2))
   const words: string[] = []
@@ -4568,6 +4572,10 @@ function setLaw(
   if (law.levy !== before.levy) words.push(LEVY_DEFS[law.levy].label)
   if (law.justice !== before.justice) words.push(JUSTICE_DEFS[law.justice].label)
   notice(draft, `Объявлено по всей твоей земле: ${words.join(', ')}.`, 'world')
+  notice(draft, cost.says, 'world')
+  // И исполняют его не везде одинаково (Зк2, Зк4).
+  const obeyed = obeyedAll(draft.base, draft.world, 'tax')
+  if (obeyed.share < 1) notice(draft, obeyed.says, 'world')
   // Решение слышат сразу, а платят за него потом: настроение ложится в память
   // мест по суткам (`estateLife`), а не одним ударом.
   return close(draft)

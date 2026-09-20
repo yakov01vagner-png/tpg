@@ -22,6 +22,7 @@ import type { GameState } from './state'
 import { pietyOf } from './temple'
 import { oathOf, shareOf } from './vassal'
 import type { World } from './world/types'
+import { obeyedAt } from './writ'
 
 /**
  * Казна державы (этап 77).
@@ -64,7 +65,11 @@ export function ledger(state: GameState, world: World, day: number): Ledger {
     tax +=
       dailyTax(settlement, foodSecurity(settlement)) *
       takeAt(state, settlement.locationId, day) *
-      arrearsFactor(state, settlement.locationId, day)
+      arrearsFactor(state, settlement.locationId, day) *
+      // Указ исполняют не везде одинаково (этап 181, Зк2): грамота города, сход,
+      // цех и обиженный вассал дают меньше, чем сказано. До 1.0 закон собирался
+      // сам собой, и сопротивления в казне не было видно вовсе.
+      obeyedAt(state, world, settlement.locationId, 'tax').share
     garrison += garrisonWages(settlement)
   }
   const tolls = dailyTolls(world, state.settlements, PLAYER)
