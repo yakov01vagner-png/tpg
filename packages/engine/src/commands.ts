@@ -768,6 +768,7 @@ import {
 } from './quarter'
 import { describeQuest, isComplete, offersAt } from './quest'
 import type { Quest } from './quest'
+import { RACE, RACE_WORDS, dragsOn, risking, whoLeads } from './race'
 import {
   type ArrearsAnswer,
   type Charters,
@@ -10075,6 +10076,11 @@ interface Draft {
   crownWays: Readonly<
     Record<string, { readonly way: string; readonly sinceDay: number; readonly places: number }>
   >
+  raceLog: {
+    readonly steps: number
+    readonly done: readonly string[]
+    readonly shares?: Readonly<Record<string, number>>
+  }
   usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
@@ -10275,6 +10281,7 @@ function open(state: GameState): Draft {
     quiet: state.quiet ?? null,
     wrongCalls: state.wrongCalls ?? [],
     crownWays: state.crownWays ?? {},
+    raceLog: state.raceLog ?? { steps: 0, done: [], shares: {} },
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
@@ -10632,6 +10639,8 @@ function close(draft: Draft): CommandResult {
     tickPrimacy(draft, daysPassed)
     // А короны идут каждая своим путём — и меняют его, проиграв (этап 140).
     tickTheirWay(draft, daysPassed)
+    // И гонка между ними идёт: шаги, спешка у конца и откат (этап 141).
+    tickRace(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10821,6 +10830,7 @@ function close(draft: Draft): CommandResult {
     quiet: draft.quiet,
     wrongCalls: draft.wrongCalls,
     crownWays: draft.crownWays,
+    raceLog: draft.raceLog,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
@@ -13741,6 +13751,52 @@ function tickTheirWay(draft: Draft, days: number): void {
   if (first.who !== PLAYER) {
     notice(draft, theirWaySays(draft.base, draft.world, first.who, day), 'world')
   }
+}
+
+/**
+ * Гонка (этап 141, Гн1, Гн3 и Гн6).
+ *
+ * Шаг вперёд — событие: доля пути растёт, и мир это замечает. Близко к концу
+ * идущий рискует, и риск виден там, где он и должен быть виден, — в верности
+ * своих и в холоде чужих.
+ */
+function tickRace(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % RACE.beat !== 0) return
+  const shares: Record<string, number> = { ...(draft.raceLog.shares ?? {}) }
+  const done = [...draft.raceLog.done]
+  let steps = draft.raceLog.steps
+  for (const id of Object.keys(draft.base.world.kingdoms)) {
+    const way = theirWay(draft.base, draft.world, id, day)
+    const was = shares[id] ?? way.share
+    if (way.share - was >= RACE.step) {
+      steps += 1
+      notice(
+        draft,
+        `${RACE_WORDS.step} ${kingdomName(draft.base, id)}: ${Math.round(was * 100)} → ${Math.round(way.share * 100)} из ста.`,
+        'world',
+      )
+    }
+    if (way.finished && !done.includes(id)) done.push(id)
+    shares[id] = way.share
+    // Рискующий платит за спешку своими и чужими (Гн3).
+    const risks = risking(draft.base, draft.world, id, day)
+    if (!risks.risks) continue
+    draft.politics = {
+      ...draft.politics,
+      lords: draft.politics.lords.map((lord) =>
+        lord.kingdomId === id
+          ? { ...lord, loyalty: Math.max(0, lord.loyalty + RACE.risksLoyalty) }
+          : lord,
+      ),
+    }
+    for (const other of Object.keys(draft.base.world.kingdoms)) {
+      if (other === id) continue
+      draft.politics = withRelation(draft.politics, id, other, RACE.risksWord)
+    }
+  }
+  draft.raceLog = { steps, done, shares }
 }
 
 /**

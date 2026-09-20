@@ -538,6 +538,12 @@ export interface GameState {
   readonly crownWays?: Readonly<
     Record<string, { readonly way: string; readonly sinceDay: number; readonly places: number }>
   >
+  /** Гонка (этап 141): чья доля где была, сколько шагов замечено и кто дошёл. */
+  readonly raceLog?: {
+    readonly steps: number
+    readonly done: readonly string[]
+    readonly shares?: Readonly<Record<string, number>>
+  }
   /** Коалиции, собранные не против того (этап 139): день и имя. Это помнят. */
   readonly wrongCalls?: readonly {
     readonly against: string
@@ -791,6 +797,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     quiet: null,
     wrongCalls: [],
     crownWays: {},
+    raceLog: { steps: 0, done: [], shares: {} },
     usedDay: {},
     pathLog: { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: {},
