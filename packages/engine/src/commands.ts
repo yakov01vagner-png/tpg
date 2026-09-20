@@ -346,6 +346,7 @@ import {
   holdOut,
   mouthsOf,
   offersFor,
+  storeDays,
   stormCost,
 } from './fort'
 import { goalDef, goalOf, goalStepDone, milestoneKey } from './goal'
@@ -695,6 +696,17 @@ import {
   surrenderChance,
   wallsUnderSiege,
 } from './siege'
+import {
+  type Look,
+  SIGHT,
+  SIGHT_WORDS,
+  blindShare,
+  knowMap,
+  lookCost,
+  looksOf,
+  seeAt,
+  tourPlan,
+} from './sight'
 import type { SkillId } from './skills'
 import { SKILLS } from './skills'
 import { battlePower, bestSpell, castChance } from './spell'
@@ -1083,6 +1095,9 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Свои глаза (этап 102): объехать державу, послать человека смотреть. */
+  | { readonly type: 'rideOut' }
+  | { readonly type: 'sendLook'; readonly locationId: string }
   /** Молва (этап 101): пустить свою, проверить услышанную. */
   | {
       readonly type: 'startTalk'
@@ -1589,6 +1604,10 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'rideOut':
+      return rideOut(state)
+    case 'sendLook':
+      return sendLook(state, command.locationId)
     case 'startTalk':
       return startTalk(state, command.kind, command.about, command.value)
     case 'checkTalk':
@@ -9516,6 +9535,7 @@ interface Draft {
   words: readonly Word[]
   audits: Readonly<Record<string, number>>
   gossip: readonly Talk[]
+  looks: readonly Look[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9622,6 +9642,7 @@ function open(state: GameState): Draft {
     words: state.words ?? [],
     audits: state.audits ?? {},
     gossip: state.gossip ?? [],
+    looks: state.looks ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9912,6 +9933,8 @@ function close(draft: Draft): CommandResult {
 
     // Войско ест каждый день, а донесения идут своим ходом (этап 84, Ка3 и Ка5).
     tickCampaign(draft, daysPassed)
+    // Посланные смотреть возвращаются (этап 102).
+    tickLooks(draft, daysPassed)
     // Молва ходит по местам и стихает сама (этап 101).
     tickGossip(draft, daysPassed)
     // Свои места отчитываются раз в месяц, и отчёт идёт своей дорогой (этап 100).
@@ -10064,6 +10087,7 @@ function close(draft: Draft): CommandResult {
     words: draft.words,
     audits: draft.audits,
     gossip: draft.gossip,
+    looks: draft.looks,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -11736,6 +11760,111 @@ function shutOwnHarbours(draft: Draft, days: number): void {
   if (shut > 0 && day % 10 === 0) {
     notice(draft, `Чужие суда держат твои гавани: заперто ${shut}. Пошлина не идёт.`, 'war')
   }
+}
+
+/**
+ * Объехать державу (этап 102, Г1–Г3).
+ *
+ * Едут туда, где давно не были. Увиденное самому точно и без вилки, а места
+ * помнят, что хозяин приезжал: объезд стоит суток и возвращает то, чего не
+ * купишь ни за какие деньги, — правду.
+ */
+function rideOut(state: GameState): CommandResult {
+  const day = dayOf(state.time)
+  const plan = tourPlan(state, state.world, day)
+  if (plan.stops.length === 0) return fail('invalid', 'Объезжать нечего.')
+
+  const draft = open(state)
+  advance(draft, hours(24 * plan.days))
+  addFatigue(draft, plan.days * 3)
+  const today = dayOf(draft.time)
+  let words = draft.words
+  for (const stop of plan.stops) {
+    const place = draft.settlements[stop.locationId]
+    if (!place) continue
+    words = seeAt(words, stop.locationId, storeDays(place), garrisonSize(place), today)
+    draft.visits = { ...draft.visits, [stop.locationId]: today }
+    draft.reputation = withPlaceRep(draft.reputation, stop.locationId, SIGHT.visitMood)
+  }
+  draft.words = words
+  notice(
+    draft,
+    `${SIGHT_WORDS.rode} Объехано ${plan.stops.length} мест за ${plan.days} сут.: ${plan.stops.map((one) => one.name).join(', ')}.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Послать человека смотреть (этап 102, Г4).
+ *
+ * Дешевле временем, дороже точностью: вернётся не «видел сам», а «донесли
+ * свои» — со своей вилкой и своим интересом.
+ */
+function sendLook(state: GameState, locationId: string): CommandResult {
+  const place = state.settlements[locationId]
+  if (!place) return fail('invalid', 'Такого места нет.')
+  const day = dayOf(state.time)
+  if (looksOf(state).some((one) => one.locationId === locationId)) {
+    return fail('invalid', 'Туда уже послан человек.')
+  }
+  const cost = lookCost(state.world, state.locationId, locationId)
+  if (state.character.money < cost.silver) {
+    return fail('noMoney', `Послать человека — ${cost.silver}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -cost.silver)
+  advance(draft, hours(4))
+  draft.looks = [...looksOf(draft), { locationId, sentDay: day, comesDay: day + cost.days }]
+  notice(
+    draft,
+    `${SIGHT_WORDS.sent} ${state.world.locations[locationId]?.name}: вернётся через ${cost.days} сут., ${cost.silver} серебром.`,
+    'world',
+  )
+  return close(draft)
+}
+
+/** Посланные возвращаются: их весть — «донесли свои» (этап 102, Г4). */
+function tickLooks(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  const waiting = looksOf(draft)
+  if (waiting.length === 0) return
+  const back = waiting.filter((one) => one.comesDay <= day)
+  if (back.length === 0) return
+  let words = draft.words
+  for (const look of back) {
+    const place = draft.settlements[look.locationId]
+    if (!place) continue
+    words = bring(words, {
+      id: `word:look:stores:${look.locationId}`,
+      to: PLAYER,
+      kind: 'stores',
+      about: look.locationId,
+      value: storeDays(place),
+      source: 'own',
+      from: 'посланный',
+      day,
+    })
+    words = bring(words, {
+      id: `word:look:garrison:${look.locationId}`,
+      to: PLAYER,
+      kind: 'garrison',
+      about: look.locationId,
+      value: garrisonSize(place),
+      source: 'own',
+      from: 'посланный',
+      day,
+    })
+    notice(
+      draft,
+      `${SIGHT_WORDS.came} ${draft.base.world.locations[look.locationId]?.name}: запас на ${storeDays(place)} сут., под ружьём ${garrisonSize(place)}.`,
+      'world',
+    )
+  }
+  draft.words = words
+  draft.looks = waiting.filter((one) => one.comesDay > day)
 }
 
 /**

@@ -57,6 +57,7 @@ import { createRng } from './rng'
 import type { RoyalMarriage } from './royal'
 import type { Ship } from './ship'
 import type { Siege } from './siege'
+import type { Look } from './sight'
 import type { Spy } from './spy'
 import type { GameTime } from './time'
 import { WORLD_START } from './time'
@@ -389,6 +390,8 @@ export interface GameState {
   readonly audits?: Readonly<Record<string, number>>
   /** Молва, которая ходит по миру (этап 101). */
   readonly gossip?: readonly Talk[]
+  /** Посланные смотреть: ещё не вернулись (этап 102). */
+  readonly looks?: readonly Look[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -509,6 +512,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     words: [],
     audits: {},
     gossip: [],
+    looks: [],
     factions: {},
     spellcraft: {},
     weather: [],
