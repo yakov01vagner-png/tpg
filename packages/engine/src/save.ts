@@ -597,6 +597,12 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
     ...data,
     homeTalk: data.homeTalk ?? {},
   }),
+  /** v31 → v32: лазарет и выплаты за павших (этап 174). Пусто — старые раны давно зажили. */
+  31: (data) => ({
+    ...data,
+    hurt: data.hurt ?? [],
+    bloodPaid: data.bloodPaid ?? 0,
+  }),
 }
 
 export type LoadResult =

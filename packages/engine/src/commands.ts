@@ -303,6 +303,7 @@ import {
   SAILOR_HIRE,
   SAILOR_WAGE,
 } from './content/road'
+import { SCARS, SCARS_WORDS } from './content/scars'
 import type { ShipKind } from './content/ships'
 import { SHIPS, SHIP_NAMES } from './content/ships'
 import { SITES } from './content/sites'
@@ -474,9 +475,16 @@ import {
   singerAt,
   withDeed,
 } from './fame'
-import { groundFor, orderNeeds, veteranShare, woundedOf } from './field'
+import { groundFor, orderNeeds, veteranShare } from './field'
 import { FOG, sightingsNow, surpriseOf, withSightings } from './fog'
-import { type Enlist, type Remembered, rememberNames, syncRoll, whoLeaves } from './folk'
+import {
+  type Enlist,
+  type Remembered,
+  rememberNames,
+  soldiersOf,
+  syncRoll,
+  whoLeaves,
+} from './folk'
 import {
   type EngineId,
   SIEGE,
@@ -902,6 +910,7 @@ import {
   theirRuses,
   walkedInto,
 } from './ruse'
+import { type Hurt, bloodDue, healDays, hospitalAt, toHospital, woundedFrom } from './scars'
 import {
   SELF_TAUGHT_FEE,
   canGrantHere,
@@ -1224,6 +1233,8 @@ export type Command =
   | { readonly type: 'talk'; readonly speakerId: string; readonly topicId: string }
   /** Помочь спутнику с его делом (этап 54). */
   | { readonly type: 'grantWish'; readonly companionId: string }
+  /** Заплатить семьям павших (этап 174, Пт4). */
+  | { readonly type: 'payBlood' }
   /** Поговорить дома (этап 170, Сем3): с женой или с ребёнком. */
   | { readonly type: 'speakHome'; readonly with: string; readonly talk: HomeTalk }
   /** Ответить вассалу на письмо (этап 169, Вл2): исполнить или отказать. */
@@ -1778,6 +1789,8 @@ export function applyCommand(
       return talk(state, command.speakerId, command.topicId)
     case 'grantWish':
       return grantWish(state, command.companionId)
+    case 'payBlood':
+      return payBlood(state)
     case 'speakHome':
       return speakHome(state, command.with, command.talk)
     case 'answerLord':
@@ -3515,15 +3528,23 @@ function battleEnd(state: GameState, prisoners: 'ransom' | 'recruit' | 'release'
   // Раненые (этап 58, Б3): не всякий упавший убит. Кто держит поле — подбирает
   // своих; кто бежал — оставил их там, где они легли.
   const held = battle.outcome === 'won'
-  const wounded = woundedOf(battle.fallen ?? {}, held)
-  let healed = 0
-  for (const [troop, count] of Object.entries(wounded)) {
-    if (!count) continue
-    draft.party = withUnits(draft.party, troop as TroopId, count)
-    healed += count
-  }
+  // Раненый — не убитый, но и не строевой (этап 174, Пт1): он идёт в обоз и
+  // встанет не завтра. До 1.0 он вставал в строй в тот же день, и война не
+  // оставляла следа.
+  const wounded = woundedFrom(battle.fallen ?? {}, held)
+  const healed = unitsSize(wounded)
   if (healed > 0) {
-    notice(draft, `Своих подобрали с поля: ${healed} раненых встанут в строй.`, 'war')
+    const day = dayOf(draft.time)
+    const where = healerNear(draft) ? 'healer' : 'field'
+    const names = soldiersOf(draft.base, draft.world, day)
+      .slice(0, healed)
+      .map((one) => one.name)
+    draft.hurt = toHospital(draft.hurt, wounded, names, day, where)
+    notice(
+      draft,
+      `${SCARS_WORDS.wounded} В обозе ${healed}; встанут через ${healDays(where)} сут.`,
+      'war',
+    )
   } else if (!held && unitsSize(battle.fallen ?? {}) > 0) {
     notice(draft, 'Раненых пришлось оставить на поле. Их там и добьют.', 'war')
   }
@@ -8801,6 +8822,30 @@ function grantWish(state: GameState, companionId: string): CommandResult {
 }
 
 /**
+ * Заплатить семьям павших (этап 174, Пт4).
+ *
+ * Павшие — не число в журнале: у каждого есть дом, из которого его взяли. За
+ * него платят, и земля это помнит; не платят — помнит тоже, и тогда из этих
+ * мест хуже идут в отряд.
+ */
+function payBlood(state: GameState): CommandResult {
+  const day = dayOf(state.time)
+  const due = bloodDue(state, day)
+  const owed = due.due - (state.bloodPaid ?? 0)
+  if (owed <= 0) return fail('invalid', 'За павших заплачено сполна.')
+  if (state.character.money < owed) {
+    return fail('noMoney', `Нужно ${owed}, а у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -owed)
+  draft.bloodPaid = due.due
+  advance(draft, hours(4))
+  notice(draft, `${SCARS_WORDS.paid} Заплачено ${owed} за ${due.fallen} павших.`, 'people')
+  return close(draft)
+}
+
+/**
  * Поговорить дома (этап 170, Сем3).
  *
  * Разговор — не текст, а дело: он стоит времени и меняет то, что в доме и так
@@ -10362,6 +10407,9 @@ interface Draft {
   lordAsks: Readonly<Record<string, { readonly kind: string; readonly day: number }>>
   /** Разговоры в доме (этап 170). */
   homeTalk: Readonly<Record<string, number>>
+  /** Лазарет и выплаты за павших (этап 174). */
+  hurt: readonly Hurt[]
+  bloodPaid: number
   anointed: { readonly sinceDay: number } | null
   deeds: Readonly<Record<string, number>>
   dreadLog: Readonly<Record<string, { readonly score: number; readonly sinceDay: number }>>
@@ -10635,6 +10683,8 @@ function open(state: GameState): Draft {
     hallLog: state.hallLog ?? { through: 0, lost: 0 },
     lordAsks: state.lordAsks ?? {},
     homeTalk: state.homeTalk ?? {},
+    hurt: (state.hurt ?? []) as readonly Hurt[],
+    bloodPaid: state.bloodPaid ?? 0,
     anointed: state.anointed ?? null,
     deeds: state.deeds ?? {},
     dreadLog: state.dreadLog ?? {},
@@ -11067,6 +11117,8 @@ function close(draft: Draft): CommandResult {
     tickFolk(draft, daysPassed)
     // А спутники считают обещанное и годы (этап 167).
     tickKith(draft, daysPassed)
+    // Лазарет считает своё: кто встал, кто не встал (этап 174).
+    tickHurt(draft, daysPassed)
     // Двор считает своё: вражду, выслугу и тех, кто смотрит на сторону (этап 168).
     tickHall(draft, daysPassed)
     // А вассалы пишут о своём и ждут ответа (этап 169).
@@ -11281,6 +11333,8 @@ function close(draft: Draft): CommandResult {
     hallLog: draft.hallLog,
     lordAsks: draft.lordAsks,
     homeTalk: draft.homeTalk,
+    hurt: draft.hurt,
+    bloodPaid: draft.bloodPaid,
     anointed: draft.anointed,
     deeds: draft.deeds,
     dreadLog: draft.dreadLog,
@@ -13712,6 +13766,54 @@ function tickLiege(draft: Draft, days: number): void {
     notice(draft, `${LIEGE_WORDS.wrote} ${letter.says}`, 'people')
   }
   draft.lordAsks = asks
+}
+
+/**
+ * Лазарет (этап 174, Пт1 и Пт2).
+ *
+ * Раз в десять суток смотрится, кто встал на ноги. Вставший возвращается в
+ * строй тем же родом войск, каким лёг; не вставший уходит в память отряда —
+ * туда же, куда павшие (этап 166).
+ */
+function tickHurt(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % SCARS.beat !== 0) return
+  const rows = hospitalAt(draft.hurt, day)
+  if (rows.back.length === 0 && rows.died.length === 0) return
+  for (const one of rows.back) {
+    draft.party = withUnits(draft.party, one.troop as TroopId, 1)
+  }
+  if (rows.died.length > 0) {
+    draft.graves = rememberNames(
+      draft.graves,
+      rows.died.map((one) => ({
+        name: one.name,
+        troop: one.troop,
+        day,
+        where: null,
+        how: 'fell' as const,
+      })),
+    )
+  }
+  draft.hurt = rows.lying
+  if (rows.back.length > 0) {
+    notice(draft, `${SCARS_WORDS.healed} Вернулось ${rows.back.length}.`, 'war')
+  }
+  if (rows.died.length > 0) {
+    notice(
+      draft,
+      `${SCARS_WORDS.died} Не встало ${rows.died.length}: ${rows.died.map((one) => one.name).join(', ')}.`,
+      'war',
+    )
+  }
+}
+
+/** Есть ли при тебе лекарь: от этого зависит срок (этап 174, Пт2). */
+function healerNear(draft: Draft): boolean {
+  return draft.companions.some(
+    (one) => (one.skills.healing ?? 0) >= 4 && !one.captive && one.role.type === 'party',
+  )
 }
 
 /**
