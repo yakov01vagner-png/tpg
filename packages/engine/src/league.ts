@@ -44,6 +44,16 @@ export function boundTo(
     return { bound: true, why: 'данник' }
   }
   if (allied(state.politics, target, who)) return { bound: true, why: 'союзник' }
+  // Под чьей рукой стоишь, против того не идёшь — и рука не идёт против своих
+  // (этап 137, Га2).
+  if (
+    (state.hands ?? []).some(
+      (one) =>
+        (one.ward === who && one.patron === target) || (one.ward === target && one.patron === who),
+    )
+  ) {
+    return { bound: true, why: 'под рукой' }
+  }
   if ((state.leagueBought?.[who] ?? 0) > 0) return { bound: true, why: 'куплен' }
   return { bound: false, why: '' }
 }

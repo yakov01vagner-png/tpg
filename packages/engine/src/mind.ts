@@ -364,6 +364,11 @@ export function aimedAtPlayer(state: GameState, world: World, day: number): read
   // целью не выбирает. Это не запрет воевать — это то, что война в родне дороже
   // и потому в замысел не попадает.
   const kin = new Set((state.marriages ?? []).map((one) => one.kingdomId))
+  // И те, кто под твоей рукой (этап 137, Га2): за них отвечаешь ты, и на того,
+  // кто за них отвечает, они не идут.
+  for (const one of state.hands ?? []) {
+    if (one.patron === PLAYER) kin.add(one.ward)
+  }
   return Object.keys(world.kingdoms)
     .filter((one) => !kin.has(one))
     .map((one) => crownGame(state, world, one, day))

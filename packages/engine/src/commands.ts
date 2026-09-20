@@ -1072,6 +1072,19 @@ import { allied, pairOf, relationOf } from './war'
 import type { Politics } from './war'
 import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
+import {
+  BOND_DEFS,
+  TIED_DEFS,
+  WARD,
+  WARD_WORDS,
+  breakingWord,
+  calledOn,
+  canGuarantee,
+  guarantorOf,
+  handOver,
+  tiedTo,
+  wantsHand,
+} from './ward'
 import { WAY, recognisedBySides } from './way'
 import type { WildMemory } from './wild'
 import {
@@ -1346,6 +1359,10 @@ export type Command =
   /** Коалиция (этап 136): разобрать чужую по одному и собрать свою против первого. */
   | { readonly type: 'breakLeague'; readonly member: string }
   | { readonly type: 'callLeague'; readonly against: string }
+  /** Поручительство и рука (этап 137). */
+  | { readonly type: 'giveGuarantee'; readonly of: string }
+  | { readonly type: 'takeUnderHand'; readonly of: string }
+  | { readonly type: 'seekHand'; readonly patron: string }
   /** Испытание (этап 124): выйти на турнир, охоту, диспут, смотр, мост, ярмарку. */
   | { readonly type: 'takeTrial'; readonly trialId: string }
   /** Чужое слово (этап 121): сдержит ли он обещанное. */
@@ -1927,6 +1944,12 @@ export function applyCommand(
       return breakLeague(state, command.member)
     case 'callLeague':
       return callLeague(state, command.against)
+    case 'giveGuarantee':
+      return giveGuarantee(state, command.of)
+    case 'takeUnderHand':
+      return takeUnderHand(state, command.of)
+    case 'seekHand':
+      return seekHand(state, command.patron)
     case 'takeTrial':
       return takeTrial(state, command.trialId)
     case 'weighPledge':
@@ -5150,6 +5173,10 @@ function declareWar(state: GameState, kingdomId: string): CommandResult {
     return fail('requirements', 'Войну объявляет тот, у кого есть своё имя на карте.')
   if (!state.world.kingdoms[kingdomId]) return fail('unknownAction', 'Такой короны нет.')
   if (atWar(state.politics, PLAYER, kingdomId)) return fail('invalid', 'Вы и так воюете.')
+  // За кого поручился, на того не ходят (этап 137, Га3).
+  if (tiedTo(state, PLAYER, kingdomId)) {
+    return fail('requirements', TIED_DEFS.war.says)
+  }
 
   const draft = open(state)
   // Война против того, с кем у тебя бумага, — это и есть разрыв (этап 80, Г3).
@@ -6527,6 +6554,10 @@ function sendEnvoy(
 ): CommandResult {
   const possible = embassyPossible(state, to, errand)
   if (!possible.can) return fail('requirements', possible.why)
+  // С того, за кого ручаешься, дани не просят (этап 137, Га3).
+  if ((errand === 'tribute' || errand === 'threat') && tiedTo(state, PLAYER, to)) {
+    return fail('requirements', TIED_DEFS.tribute.says)
+  }
   const letter = byLetter === true
   const day = dayOf(state.time)
   const envoy = letter
@@ -9982,6 +10013,15 @@ interface Draft {
     readonly bought: number
     readonly against: readonly string[]
   }
+  guarantees: readonly {
+    readonly by: string
+    readonly of: string
+    readonly sinceDay: number
+    readonly brokenDay?: number
+    readonly calledDay?: number
+    readonly against?: string
+  }[]
+  hands: readonly { readonly patron: string; readonly ward: string; readonly sinceDay: number }[]
   usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
@@ -10175,6 +10215,8 @@ function open(state: GameState): Draft {
     league: state.league ?? null,
     leagueBought: state.leagueBought ?? {},
     leagueLog: state.leagueLog ?? { formed: 0, bought: 0, against: [] },
+    guarantees: state.guarantees ?? [],
+    hands: state.hands ?? [],
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
@@ -10524,6 +10566,8 @@ function close(draft: Draft): CommandResult {
     tickDread(draft, daysPassed)
     // И сходятся против того, кто ближе всех к концу (этап 136).
     tickLeague(draft, daysPassed)
+    // За слабых ручаются, и на зов приходят или не приходят (этап 137).
+    tickWard(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10706,6 +10750,8 @@ function close(draft: Draft): CommandResult {
     league: draft.league,
     leagueBought: draft.leagueBought,
     leagueLog: draft.leagueLog,
+    guarantees: draft.guarantees,
+    hands: draft.hands,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
@@ -13281,6 +13327,150 @@ function callLeague(state: GameState, against: string): CommandResult {
   draft.politics = withRelation(draft.politics, PLAYER, against, LEAGUE.chills)
   notice(draft, `${LEAGUE_WORDS.called} ${call.says}`, 'war')
   return close(draft)
+}
+
+/**
+ * Поручиться за слабого (этап 137, Га1).
+ *
+ * Слабый не обещает взамен ничего, кроме того, что он слабый. Сильный получает
+ * слово, которое видят все, — и связанные этим словом руки.
+ */
+function giveGuarantee(state: GameState, of: string): CommandResult {
+  if (!state.world.kingdoms[of]) return fail('invalid', 'Такой короны нет.')
+  const day = dayOf(state.time)
+  const can = canGuarantee(state, state.world, PLAYER, of, day)
+  if (!can.can) return fail('requirements', can.says)
+
+  const draft = open(state)
+  advance(draft, hours(8))
+  draft.guarantees = [...draft.guarantees, { by: PLAYER, of, sinceDay: day }]
+  draft.politics = withRelation(draft.politics, PLAYER, of, 20)
+  draft.renown += 2
+  notice(draft, `${WARD_WORDS.given} ${kingdomName(draft.base, of)}. ${WARD_WORDS.bound}`, 'world')
+  return close(draft)
+}
+
+/**
+ * Взять под руку (этап 137, Га2).
+ *
+ * Не дань и не вассалитет, а третье: земля остаётся его, войско остаётся его, а
+ * отвечаешь за него ты. Взамен под рукой не признают за себя — признание идёт
+ * руке, и потому рука ближе к концу своего пути (этап 131).
+ */
+function takeUnderHand(state: GameState, of: string): CommandResult {
+  if (!state.world.kingdoms[of]) return fail('invalid', 'Такой короны нет.')
+  const day = dayOf(state.time)
+  if (handOver(state, of)) return fail('invalid', 'Эта корона уже под рукой.')
+  const wants = wantsHand(state, state.world, of, day)
+  if (wants.patron !== PLAYER) return fail('requirements', wants.says)
+
+  const draft = open(state)
+  advance(draft, hours(16))
+  draft.hands = [...draft.hands, { patron: PLAYER, ward: of, sinceDay: day }]
+  if (!guarantorOf(draft.base, of)) {
+    draft.guarantees = [...draft.guarantees, { by: PLAYER, of, sinceDay: day }]
+  }
+  // Признание идёт руке: под рукой корона не признаёт за себя.
+  draft.recognitions = { ...draft.recognitions, [of]: day }
+  draft.politics = withRelation(draft.politics, PLAYER, of, 25)
+  notice(
+    draft,
+    `${kingdomName(draft.base, of)}: ${WARD_WORDS.hand} ${BOND_DEFS.hand.after}`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Самому пойти под руку (этап 137, Га2 и Га5).
+ *
+ * Слабому это тоже ход: пока ты под рукой, на тебя не ходят — но и ты не
+ * ходишь ни на кого, и твоё признание считается не за тебя.
+ */
+function seekHand(state: GameState, patron: string): CommandResult {
+  if (!state.world.kingdoms[patron]) return fail('invalid', 'Такой короны нет.')
+  const day = dayOf(state.time)
+  if (handOver(state, PLAYER)) return fail('invalid', 'Ты уже под чьей-то рукой.')
+  const wants = wantsHand(state, state.world, PLAYER, day)
+  if (wants.patron !== patron) return fail('requirements', wants.says)
+
+  const draft = open(state)
+  advance(draft, hours(24))
+  draft.hands = [...draft.hands, { patron, ward: PLAYER, sinceDay: day }]
+  draft.guarantees = [...draft.guarantees, { by: patron, of: PLAYER, sinceDay: day }]
+  draft.politics = withRelation(draft.politics, PLAYER, patron, 30)
+  notice(
+    draft,
+    `Ты под рукой ${kingdomName(draft.base, patron)}: на тебя не ходят, и ты не ходишь. ${BOND_DEFS.hand.after}`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Зов и слово (этап 137, Га4 и Га5).
+ *
+ * За того, за кого поручился, взялись — значит, зовут тебя. Не пришёл в срок —
+ * потерял слово, и потерял дороже, чем нарушив грамоту: бумагу рвут многие, не
+ * приходят на зов немногие. Короны делают то же самое между собой.
+ */
+function tickWard(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % WARD.beat !== 0) return
+  // Сперва зовут: за того, за кого ты поручился, взялись.
+  for (const call of calledOn(draft.base, draft.world, PLAYER, day)) {
+    const row = draft.guarantees.find(
+      (one) => one.by === PLAYER && one.of === call.of && one.brokenDay === undefined,
+    )
+    if (!row || row.calledDay !== undefined) continue
+    draft.guarantees = draft.guarantees.map((one) =>
+      one === row ? { ...one, calledDay: day, against: call.against } : one,
+    )
+    notice(draft, call.says, 'war')
+  }
+  // А потом смотрят, пришёл ли. Кончилась ли та война сама — дела не меняет:
+  // звали тебя, а не войну.
+  for (const row of draft.guarantees) {
+    if (row.by !== PLAYER || row.brokenDay !== undefined) continue
+    if (row.calledDay === undefined || row.against === undefined) continue
+    if (atWar(draft.politics, PLAYER, row.against)) {
+      draft.guarantees = draft.guarantees.map((one) =>
+        one === row ? { by: one.by, of: one.of, sinceDay: one.sinceDay } : one,
+      )
+      draft.renown += 3
+      notice(draft, `${WARD_WORDS.kept} ${kingdomName(draft.base, row.of)}.`, 'war')
+      continue
+    }
+    if (day - row.calledDay < WARD.comeDays) continue
+    // Срок вышел, а тебя нет: слово потеряно.
+    const cost = breakingWord()
+    draft.guarantees = draft.guarantees.map((one) =>
+      one === row ? { ...one, brokenDay: day } : one,
+    )
+    for (const id of Object.keys(draft.base.world.kingdoms)) {
+      draft.politics = withRelation(draft.politics, PLAYER, id, cost.world)
+    }
+    shameOn(draft, 'broke')
+    notice(draft, `${cost.says} Речь о ${kingdomName(draft.base, row.of)}.`, 'world')
+  }
+  // Короны берут слабых под руку и ручаются друг за друга (Га5).
+  if (day % (WARD.beat * 4) !== 0) return
+  for (const ward of Object.keys(draft.base.world.kingdoms)) {
+    if (handOver(draft.base, ward)) continue
+    const wants = wantsHand(draft.base, draft.world, ward, day)
+    if (!wants.patron || wants.patron === PLAYER) continue
+    draft.hands = [...draft.hands, { patron: wants.patron, ward, sinceDay: day }]
+    if (!guarantorOf(draft.base, ward)) {
+      draft.guarantees = [...draft.guarantees, { by: wants.patron, of: ward, sinceDay: day }]
+    }
+    notice(
+      draft,
+      `${kingdomName(draft.base, ward)} идёт под руку ${kingdomName(draft.base, wants.patron)}. ${WARD_WORDS.theirs}`,
+      'world',
+    )
+    return
+  }
 }
 
 /**

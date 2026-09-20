@@ -106,7 +106,7 @@ export function dreadOf(
  * Сосед — не тот, чья столица рядом, а тот, чья земля рядом: считается по
  * ближайшему его месту от твоего стола.
  */
-function nearTo(state: GameState, world: World, who: Walker, of: Walker): number {
+export function nearTo(state: GameState, world: World, who: Walker, of: Walker): number {
   // Соседство — свойство пары, а не направления: считается с обеих сторон и
   // берётся ближайшее. Иначе тот, у кого земли больше, оказывался бы соседом
   // всем, а ему — никто.

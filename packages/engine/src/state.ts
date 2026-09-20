@@ -490,6 +490,26 @@ export interface GameState {
     readonly bought: number
     readonly against: readonly string[]
   }
+  /**
+   * Поручительства (этап 137): кто за кого поручился, с какого дня и кто не пришёл.
+   *
+   * Слово — история: из состояния мира не вывести, ручался ли ты за Хладь.
+   */
+  readonly guarantees?: readonly {
+    readonly by: string
+    readonly of: string
+    readonly sinceDay: number
+    readonly brokenDay?: number
+    readonly calledDay?: number
+    /** Кто пошёл на того, за кого ты поручился: по нему и считается, пришёл ли ты. */
+    readonly against?: string
+  }[]
+  /** Кто под чьей рукой (этап 137): не дань и не вассалитет, а третье. */
+  readonly hands?: readonly {
+    readonly patron: string
+    readonly ward: string
+    readonly sinceDay: number
+  }[]
   /** Когда каждый навык трогали в последний раз (этап 125): он ржавеет. */
   readonly usedDay?: Readonly<Record<string, number>>
   /** Чем ты рос на самом деле (этап 124) и какие испытания уже брал. */
@@ -730,6 +750,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     league: null,
     leagueBought: {},
     leagueLog: { formed: 0, bought: 0, against: [] },
+    guarantees: [],
+    hands: [],
     usedDay: {},
     pathLog: { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: {},
