@@ -384,6 +384,8 @@ export interface GameState {
    * выводится вместе с правдой. Поэтому знание нельзя рассогласовать с миром.
    */
   readonly words?: readonly Word[]
+  /** Когда какое своё место проверяли ревизией (этап 100). */
+  readonly audits?: Readonly<Record<string, number>>
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -502,6 +504,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     churchAnger: 0,
     censure: null,
     words: [],
+    audits: {},
     factions: {},
     spellcraft: {},
     weather: [],

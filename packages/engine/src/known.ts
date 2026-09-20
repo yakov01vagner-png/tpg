@@ -151,16 +151,15 @@ export function spreadOf(source: SourceKind, age: number, hops: number): number 
 export function seesNow(state: GameState, world: World, who: string, question: Question): boolean {
   const where = placeOfQuestion(state, question)
   if (!where) return false
+  // Своими глазами — значит своими: владение местом не заменяет присутствия.
+  // Именно здесь версия 0.8 расходится с прежними: о своей дальней земле
+  // государь знает по донесениям (этап 100), а не по праву собственности.
   if (who === PLAYER) {
     if (state.locationId === where) return true
-    const mine = state.settlements[where]
-    if (mine?.owner === PLAYER) return true
     return state.bands.some((one) => one.lordId === PLAYER && one.locationId === where)
   }
-  const place = state.settlements[where]
-  if (!place?.owner) return false
-  if (place.owner === `crown:${who}`) return true
-  return state.politics.lords.some((lord) => lord.id === place.owner && lord.kingdomId === who)
+  if (seatOf(state, who) === where) return true
+  return state.bands.some((one) => one.kingdomId === who && one.locationId === where)
 }
 
 /** О каком месте этот вопрос, если он о месте. */

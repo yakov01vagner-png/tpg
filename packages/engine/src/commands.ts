@@ -417,7 +417,7 @@ import {
   rumourAt,
   seenFrom,
 } from './knowledge'
-import type { Word } from './known'
+import { type Word, bring, forgetOld } from './known'
 import type { HarvestEvent, LifeEvent } from './life'
 import { LIFE, foodSecurity, rollHarvest, tickDays } from './life'
 import { crownOf, factionDef, factionKey, factionMood, heirRegard, withLordDeed } from './lordlife'
@@ -584,6 +584,7 @@ import {
   realmYear,
   takeAt,
 } from './realm'
+import { REPORT, auditOf, purseAsReported, reportFrom, reporterAt, skimAt } from './report'
 import { isShunned, lordRep, placeRep, priceFactor, withLordRep, withPlaceRep } from './reputation'
 import type { Reputation } from './reputation'
 import {
@@ -1068,6 +1069,8 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Донесения своих (этап 100): проверить место ревизией. */
+  | { readonly type: 'orderAudit'; readonly locationId: string }
   /** Мир и его цена (этап 88): сесть за стол, предложить условия, встать. */
   | { readonly type: 'openTalks'; readonly against: string; readonly mediator?: MediatorKind }
   | { readonly type: 'tableTerms'; readonly terms: readonly PeaceTerm[] }
@@ -1564,6 +1567,8 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'orderAudit':
+      return orderAudit(state, command.locationId)
     case 'openTalks':
       return openTalks(state, command.against, command.mediator)
     case 'tableTerms':
@@ -9483,6 +9488,7 @@ interface Draft {
   churchAnger: number
   censure: Censure | null
   words: readonly Word[]
+  audits: Readonly<Record<string, number>>
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9587,6 +9593,7 @@ function open(state: GameState): Draft {
     churchAnger: state.churchAnger ?? 0,
     censure: state.censure ?? null,
     words: state.words ?? [],
+    audits: state.audits ?? {},
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9877,6 +9884,8 @@ function close(draft: Draft): CommandResult {
 
     // Войско ест каждый день, а донесения идут своим ходом (этап 84, Ка3 и Ка5).
     tickCampaign(draft, daysPassed)
+    // Свои места отчитываются раз в месяц, и отчёт идёт своей дорогой (этап 100).
+    tickReports(draft, daysPassed)
     // Чужие послы приезжают сами и уезжают, не дождавшись (этап 91).
     tickOvertures(draft, daysPassed)
     // Обиды зреют в поводы, а нарушенные миры уходят в летопись (этап 88).
@@ -10023,6 +10032,7 @@ function close(draft: Draft): CommandResult {
     churchAnger: draft.churchAnger,
     censure: draft.censure,
     words: draft.words,
+    audits: draft.audits,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -11694,6 +11704,93 @@ function shutOwnHarbours(draft: Draft, days: number): void {
   draft.settlements = places
   if (shut > 0 && day % 10 === 0) {
     notice(draft, `Чужие суда держат твои гавани: заперто ${shut}. Пошлина не идёт.`, 'war')
+  }
+}
+
+/**
+ * Ревизия своего места (этап 100, Д4).
+ *
+ * Узнать, что на самом деле даёт твоя земля, можно — но не бесплатно: серебро,
+ * сутки и обида того, кого проверили. Зато после ревизии он пишет как есть, и
+ * рука убирается из подати — на несколько лет, не навсегда.
+ */
+function orderAudit(state: GameState, locationId: string): CommandResult {
+  const settlement = state.settlements[locationId]
+  if (!settlement || settlement.owner !== PLAYER) return fail('invalid', 'Это не твоё место.')
+  const day = dayOf(state.time)
+  const audit = auditOf(state, state.world, locationId, day)
+  if (!audit) return fail('invalid', 'Проверять некого.')
+  if (state.character.money < audit.silver) {
+    return fail('noMoney', `Ревизия стоит ${audit.silver}, у тебя ${state.character.money}.`)
+  }
+  const reporter = reporterAt(state, state.world, locationId, day)
+
+  const draft = open(state)
+  addMoney(draft, -audit.silver)
+  advance(draft, hours(24 * audit.days))
+  practice(draft, 'scholarship', 30)
+  draft.audits = { ...(draft.audits ?? {}), [locationId]: day }
+  // Проверенный помнит проверку: честный — с обидой поменьше, вор — с обидой.
+  draft.reputation = withPlaceRep(
+    draft.reputation,
+    locationId,
+    audit.clean ? REPORT.auditTrust : REPORT.auditAnger,
+  )
+  // Ревизия — это знание своими глазами: после неё числа точны (этап 99).
+  const today = dayOf(draft.time)
+  draft.words = bring(draft.words, {
+    id: `word:report:${locationId}`,
+    to: PLAYER,
+    kind: 'garrison',
+    about: locationId,
+    value: garrisonSize(settlement),
+    source: 'eyes',
+    from: reporter?.name ?? null,
+    day: today,
+  })
+  notice(draft, `${audit.says} Стоило ${audit.silver} и ${audit.days} сут.`, 'world')
+  return close(draft)
+}
+
+/**
+ * Сутки донесений (этап 100, Д1 и Д6).
+ *
+ * Свои места отчитываются раз в месяц, и отчёт идёт столько, сколько идёт гонец.
+ * Дошедший отчёт становится вестью (этап 99) с источником «донесли свои»: дальше
+ * он стареет, как всякая весть, и его можно сверить с другой.
+ */
+function tickReports(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % REPORT.everyDays !== 0) return
+  const mine = holdingsOf(draft.settlements, PLAYER)
+  if (mine.length === 0) return
+  let words = draft.words
+  let skimmed = 0
+  for (const one of mine) {
+    const report = reportFrom(draft.base, draft.base.world, one.locationId, day)
+    if (!report) continue
+    skimmed += skimAt(draft.base, draft.base.world, one.locationId, day)
+    for (const line of report.lines) {
+      if (line.kind !== 'grain' && line.kind !== 'people') continue
+      words = bring(words, {
+        id: `word:${line.kind}:${one.locationId}`,
+        to: PLAYER,
+        kind: line.kind === 'grain' ? 'stores' : 'garrison',
+        about: one.locationId,
+        value: line.said,
+        source: 'own',
+        from: report.reporter.name,
+        // Отчёт пишут сегодня, а доходит он позже: возраст вести — его дорога.
+        day: day - report.reporter.days,
+      })
+    }
+  }
+  draft.words = forgetOld(words, day)
+  // Чужая рука видна не по надписи, а по расхождению: раз в год об этом говорят.
+  if (skimmed > 0 && day % (REPORT.everyDays * 12) === 0) {
+    const purse = purseAsReported(draft.base, draft.base.world, day)
+    notice(draft, purse.says, 'world')
   }
 }
 
