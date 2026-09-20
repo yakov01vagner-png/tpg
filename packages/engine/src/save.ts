@@ -582,6 +582,11 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
     ...data,
     vows: data.vows ?? [],
   }),
+  /** v28 → v29: счёт двора (этап 168). Нули — верный старт: прежний двор себя не считал. */
+  28: (data) => ({
+    ...data,
+    hallLog: data.hallLog ?? { through: 0, lost: 0 },
+  }),
 }
 
 export type LoadResult =

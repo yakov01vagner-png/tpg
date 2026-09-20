@@ -263,6 +263,7 @@ import { GOAL_CHANGE_FAME, MILESTONE_RENOWN } from './content/goals'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
 import { GOSSIP_WORDS, type TalkKind } from './content/gossip'
+import { HALL, HALL_WORDS } from './content/hall'
 import { AILMENT_DEFS, type Ailment, HERB_GOOD, POTIONS, POTIONS_BY_ID } from './content/heal'
 import { KIN_ASK, KIN_GIFT, UPBRINGING_MINUTES } from './content/home'
 import { KITH, KITH_ASK_DEFS, KITH_WORDS } from './content/kith'
@@ -511,6 +512,7 @@ import {
   tellsOf,
   trueAim,
 } from './guess'
+import { slipping } from './hall'
 import {
   type SickWhere,
   ailmentDef,
@@ -10186,6 +10188,8 @@ interface Draft {
   graves: readonly Remembered[]
   /** Обещания спутникам (этап 167). */
   vows: readonly Vow[]
+  /** Счёт двора (этап 168). */
+  hallLog: { readonly through: number; readonly lost: number }
   anointed: { readonly sinceDay: number } | null
   deeds: Readonly<Record<string, number>>
   dreadLog: Readonly<Record<string, { readonly score: number; readonly sinceDay: number }>>
@@ -10456,6 +10460,7 @@ function open(state: GameState): Draft {
     roll: (state.roll ?? []) as readonly Enlist[],
     graves: (state.graves ?? []) as readonly Remembered[],
     vows: (state.vows ?? []) as readonly Vow[],
+    hallLog: state.hallLog ?? { through: 0, lost: 0 },
     anointed: state.anointed ?? null,
     deeds: state.deeds ?? {},
     dreadLog: state.dreadLog ?? {},
@@ -10888,6 +10893,8 @@ function close(draft: Draft): CommandResult {
     tickFolk(draft, daysPassed)
     // А спутники считают обещанное и годы (этап 167).
     tickKith(draft, daysPassed)
+    // Двор считает своё: вражду, выслугу и тех, кто смотрит на сторону (этап 168).
+    tickHall(draft, daysPassed)
     // И сходятся против того, кто ближе всех к концу (этап 136).
     tickLeague(draft, daysPassed)
     // За слабых ручаются, и на зов приходят или не приходят (этап 137).
@@ -11095,6 +11102,7 @@ function close(draft: Draft): CommandResult {
     roll: draft.roll,
     graves: draft.graves,
     vows: draft.vows,
+    hallLog: draft.hallLog,
     anointed: draft.anointed,
     deeds: draft.deeds,
     dreadLog: draft.dreadLog,
@@ -13492,6 +13500,33 @@ function tickAnoint(draft: Draft, days: number): void {
   }
   shiftVassals(draft, world.unrest, null)
   if (day % (FAITH.beat * 18) === 0) notice(draft, world.says, 'world')
+}
+
+/**
+ * Двор считает своё (этап 168, Дв2 и Дв4).
+ *
+ * Вражда при дворе стоит верности обоим, дружба её держит. Кто досчитался до
+ * дна — уходит, и уходит не пустым: место пустеет, а держава это чувствует.
+ * Счёт двора ведётся здесь же: сколько людей прошло и сколько потеряно.
+ */
+function tickHall(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % HALL.beat !== 0) return
+  const seated = Object.keys(draft.offices ?? {}).length
+  const log = draft.hallLog ?? { through: 0, lost: 0 }
+  const through = Math.max(log.through, seated)
+  let lost = log.lost
+  for (const row of slipping(draft.base, day)) {
+    if (!row.breaks) continue
+    // Место освобождается: человек ушёл, и с ним ушло то, что он знал.
+    const offices = { ...(draft.offices ?? {}) }
+    delete offices[row.who.office]
+    draft.offices = offices
+    lost += 1
+    notice(draft, `${row.who.name}: ${row.why} ${HALL_WORDS.betrayed}`, 'people')
+  }
+  if (through !== log.through || lost !== log.lost) draft.hallLog = { through, lost }
 }
 
 /**

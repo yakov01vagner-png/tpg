@@ -13,6 +13,7 @@ import { nearestEnding } from './ending'
 import { lawOf } from './estate'
 import { blindToShare, fogMap } from './fog'
 import { ageSays, skillCeiling } from './growth'
+import { hallNow } from './hall'
 import { PLAYER, holdingsOf } from './holding'
 import { claimantsOf, heirLawOf, heirUnder, partitionOf, regencyFor, strifeOf } from './inherit'
 import { type Known, askedDef, knownTo, sourceDef, wordsTo } from './known'
@@ -267,6 +268,7 @@ export function courtScreen(state: GameState, world: World): Screen {
   const vassals = vassalsOf(state)
   const plot = plotAgainst(state, world, day)
   const seats = OFFICES.map((id: OfficeId) => ({ id, officer: officerAt(state, id) }))
+  const hall = hallNow(state, world, day)
   const lines: Line[] = [
     {
       label: 'Вассалы',
@@ -285,6 +287,24 @@ export function courtScreen(state: GameState, world: World): Screen {
       label: 'Настроение двора',
       value: plot ? 'заговор' : 'спокойно',
       hint: courtMood(state, world, day),
+    },
+    // Двор одним взглядом (этап 168, Дв5): кто с кем, кто чего просит и кто
+    // смотрит на сторону — без таблиц и без второго экрана.
+    {
+      label: 'Кто с кем',
+      value: `${hall.ties.length} связей`,
+      hint:
+        hall.ties.map((one) => one.says).join(' ') || 'Люди двора друг о друге ничего не думают.',
+    },
+    {
+      label: 'Просят и предлагают',
+      value: `${hall.asks.length} / ${hall.offers.length}`,
+      hint: [...hall.asks, ...hall.offers].join(' ') || 'Сегодня к тебе никто не идёт.',
+    },
+    {
+      label: 'Смотрят на сторону',
+      value: `${hall.risky.length}`,
+      hint: hall.risky.join(' ') || 'Пока никто.',
     },
   ]
   const deeds: Deed[] = []

@@ -80,7 +80,7 @@ import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 28
+export const SCHEMA_VERSION = 29
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -453,6 +453,12 @@ export interface GameState {
   readonly crownDebts?: Readonly<
     Record<string, { readonly owed: number; readonly sinceDay: number }>
   >
+  /**
+   * Счёт двора (этап 168, Дв6): сколько человек через него прошло и сколько
+   * потеряно. История, которой из мира не вывести: нынешний двор помнит только
+   * себя.
+   */
+  readonly hallLog?: { readonly through: number; readonly lost: number }
   /**
    * Обещания спутникам (этап 167): что обещано, кому и к какому дню.
    *
@@ -919,6 +925,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     roll: [],
     graves: [],
     vows: [],
+    hallLog: { through: 0, lost: 0 },
     anointed: null,
     deeds: {},
     dreadLog: {},
