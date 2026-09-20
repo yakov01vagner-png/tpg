@@ -103,6 +103,7 @@ import {
   moodWord,
   mutinous,
   nextStepWords,
+  nudgesNow,
   offeringFor,
   offersAt,
   orderById,
@@ -335,6 +336,11 @@ export function HomeScreen({ game }: { game: GameState }) {
         {settlement && people > 0 ? (
           <Dim>{faceOf(game, game.world, game.locationId, dayOf(game.time)).says}</Dim>
         ) : null}
+        {/* Что делать дальше (этап 202): совет выводится из состояния и молчит
+            там, где для него нет повода. Экран только показывает. */}
+        {nudgesNow(game, game.world, dayOf(game.time)).map((one) => (
+          <Dim key={one.id}>{one.says}</Dim>
+        ))}
         <StateLine game={game} />
         {settlement && settlement.buildings.length > 0 ? (
           <View style={styles.built}>
