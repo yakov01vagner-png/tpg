@@ -10,9 +10,10 @@ import {
   TONE_DEFS,
   type ToneId,
 } from './content/mind'
-import { PLAYER } from './holding'
+import { PLAYER, garrisonSize } from './holding'
 import { crownWarlust } from './lordlife'
 import { crownFleet, fleetForce } from './navy'
+import { partySize } from './party'
 import { seenBy } from './picture'
 import type { GameState } from './state'
 import { allied, atWar, warsOf } from './war'
@@ -37,8 +38,14 @@ import type { World } from './world/types'
 
 export interface Strength {
   readonly side: string
+  /** Мест в руках — живых: пустое пепелище силы не даёт. */
   readonly places: number
+  /** Из них обнесённых стенами. */
+  readonly walls: number
+  /** Людей в поле: дружины стороны и свой отряд, если это игрок. */
   readonly men: number
+  /** Людей за стенами: гарнизоны своих мест. */
+  readonly guards: number
   readonly ships: number
   readonly allies: number
   /** Общий счёт силы. */
@@ -47,42 +54,113 @@ export interface Strength {
 }
 
 /**
- * Чем располагает эта сила (И2).
+ * Чем располагает эта сила (И2, этап 161).
  *
- * Считается одним правилом для всех: земля, люди в поле, суда на плаву и
- * союзники. Держава игрока считается так же, как чужая (И5), — иначе ИИ не
- * может играть против неё всерьёз.
+ * Одно правило на всех: земля, стены, люди в поле, люди за стенами, суда на
+ * плаву и союзники. Держава игрока считается тем же кодом, что чужая (И5), —
+ * иначе ИИ не может играть против неё всерьёз.
+ *
+ * До 1.0 мерок было полторы: у игрока считались только его дружины и не
+ * считались ни свой отряд, ни гарнизоны, а у корон — наоборот. Числа выходили
+ * несравнимыми, и всё, что их сравнивало, приходилось подпирать надбавками.
+ * Теперь считается одно и то же с обеих сторон, а подпорки убраны.
  */
 export function strengthOf(state: GameState, world: World, side: string, day: number): Strength {
-  const places =
-    side === PLAYER
-      ? Object.values(state.settlements).filter((one) => one.owner === PLAYER && one.population > 0)
-          .length
-      : crownPlaces(state, side)
-  const men = state.bands
-    .filter((band) => (side === PLAYER ? band.lordId === PLAYER : band.kingdomId === side))
+  // Чьи места считать: свои — игроку, корона и её лорды — короне.
+  const owners = new Set<string>()
+  if (side === PLAYER) owners.add(PLAYER)
+  else {
+    owners.add(`crown:${side}`)
+    for (const lord of state.politics.lords) {
+      if (lord.kingdomId === side) owners.add(lord.id)
+    }
+  }
+  let places = 0
+  let walls = 0
+  let guards = 0
+  for (const one of Object.values(state.settlements)) {
+    if (!one.owner || one.population <= 0) continue
+    if (!owners.has(one.owner)) continue
+    places += 1
+    guards += garrisonSize(one)
+    if (one.buildings.includes('walls')) walls += 1
+  }
+  // Отряд без хозяина (мятежник) не считается никому: `lordId` смотрится
+  // первым, иначе дружина игрока попадала бы ещё и в счёт короны, на чьей
+  // земле она стоит.
+  const field = state.bands
+    .filter((band) => (band.lordId === PLAYER ? PLAYER : band.kingdomId) === side)
     .reduce((sum, band) => sum + bandSize(band), 0)
-  const ships =
+  // Свой отряд — такие же люди в поле, как чужая дружина (этап 161).
+  const men = field + (side === PLAYER ? partySize(state.party) : 0)
+  const hulls =
     side === PLAYER
-      ? (state.navy ?? []).filter((one) => one.readyDay <= day).length
-      : crownFleet(state, world, side, day).length
-  const fleet =
-    side === PLAYER
-      ? fleetForce((state.navy ?? []).filter((one) => one.readyDay <= day))
-      : fleetForce(crownFleet(state, world, side, day))
+      ? (state.navy ?? []).filter((one) => one.readyDay <= day)
+      : crownFleet(state, world, side, day)
+  const ships = hulls.length
+  const fleet = fleetForce(hulls)
   const allies = Object.keys(world.kingdoms).filter(
     (one) => one !== side && allied(state.politics, side, one),
   ).length
-  const base = places * MIND.placeWeight + men * MIND.manWeight + (fleet / 10) * MIND.shipWeight
+  const base =
+    places * MIND.placeWeight +
+    walls * MIND.wallWeight +
+    men * MIND.manWeight +
+    guards * MIND.guardWeight +
+    (fleet / 10) * MIND.shipWeight
   const score = Math.round(base * (1 + allies * MIND.allyWeight))
   return {
     side,
     places,
+    walls,
     men,
+    guards,
     ships,
     allies,
     score,
-    says: `${side}: мест ${places}, людей в поле ${men}, судов ${ships}, союзников ${allies} — сила ${score}.`,
+    says: `${side}: мест ${places} (со стенами ${walls}), в поле ${men}, за стенами ${guards}, судов ${ships}, союзников ${allies} — сила ${score}.`,
+  }
+}
+
+/** Строка доски силы: своё видно как есть, чужое — со слов (этап 161, См5). */
+export interface StrengthRow {
+  readonly side: string
+  readonly score: number
+  /** Своё ли это число. Чужое — вести, и оно может врать. */
+  readonly sure: boolean
+  readonly says: string
+}
+
+/**
+ * Доска силы: своя держава и все короны на одной шкале (См5).
+ *
+ * Игрок видит своё точно, а чужое — так же криво, как корона видит чужое:
+ * через вести и через то, во что он уже поверил. Числа сравнимы, потому что
+ * считаны одним `strengthOf`.
+ */
+export function strengthBoard(
+  state: GameState,
+  world: World,
+  day: number,
+): {
+  readonly mine: Strength
+  readonly rows: readonly StrengthRow[]
+  readonly place: number
+  readonly says: string
+} {
+  const mine = strengthOf(state, world, PLAYER, day)
+  const rows: StrengthRow[] = [{ side: PLAYER, score: mine.score, sure: true, says: mine.says }]
+  for (const side of Object.keys(world.kingdoms)) {
+    const seen = seenStrength(state, world, PLAYER, side, day)
+    rows.push({ side, score: seen.score, sure: false, says: seen.says })
+  }
+  rows.sort((a, b) => b.score - a.score)
+  const place = rows.findIndex((row) => row.side === PLAYER) + 1
+  return {
+    mine,
+    rows,
+    place,
+    says: `Твоя сила ${mine.score} — ${place}-я из ${rows.length}. Чужие числа — вести, а не правда.`,
   }
 }
 

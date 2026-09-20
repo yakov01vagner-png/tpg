@@ -18,6 +18,7 @@ import { claimantsOf, heirLawOf, heirUnder, partitionOf, regencyFor, strifeOf } 
 import { type Known, askedDef, knownTo, sourceDef, wordsTo } from './known'
 import { leagueNow, whoToCall } from './league'
 import { playStyle, worldOpinion } from './memory'
+import { strengthBoard } from './mind'
 import { mouldOf, paysWith } from './mould'
 import { seaLedger } from './navy'
 import { officerAt } from './office'
@@ -190,7 +191,19 @@ export function warScreen(state: GameState, world: World): Screen {
   const campaign = campaignOf(state)
   const fronts = frontsOf(state, world)
   const hosts = hostsOf(state)
+  const board = strengthBoard(state, world, day)
   const lines: Line[] = [
+    {
+      label: 'Сила',
+      value: `${board.mine.score} — ${board.place}-я из ${board.rows.length}`,
+      hint: `${board.mine.says} Впереди: ${
+        board.rows
+          .filter((row) => row.score > board.mine.score)
+          .slice(0, 3)
+          .map((row) => `${row.side} ${row.score} (со слов)`)
+          .join(', ') || 'никого'
+      }.`,
+    },
     {
       label: 'Кампания',
       value: campaign ? campaign.aim : 'нет',

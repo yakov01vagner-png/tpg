@@ -1,6 +1,7 @@
 import { skillLevel } from './character'
 import { houseOf } from './chronicle'
 import { crownPlaces } from './company'
+import { MIND } from './content/mind'
 import {
   WAY,
   WAYS,
@@ -12,7 +13,7 @@ import {
 } from './content/way'
 import { vassalsOf } from './court'
 import { PLAYER, holdingsOf } from './holding'
-import { MIGHT, crownDebtsOf, mightOf } from './lever'
+import { crownDebtsOf, mightOf } from './lever'
 import { rankTier } from './magic'
 import { strengthOf } from './mind'
 import { reignOf } from './royal'
@@ -81,14 +82,17 @@ export function recognises(
   if (who === PLAYER && state.anointed && relationOf(state.politics, who, other) >= -20) {
     return true
   }
-  // Пятая дверь — сила без войска (этап 133, Тс3). Ранг, с которым считаются,
-  // стоит войска: его считают в чужую силу и спорят с ним вровень, а не в
-  // полтора раза сверху. На сильнейших это не действует — на слабых да.
-  const reckoned = who === PLAYER && mightOf(state, day).reckoned
-  const mine = strengthOf(state, world, who, day).score + (reckoned ? MIGHT.fearWorth : 0)
-  const theirs = strengthOf(state, world, other, day).score
   const warm = relationOf(state.politics, who, other) >= -20
-  return warm && mine >= theirs * (reckoned ? 1 : 1.5)
+  // Шестая дверь — сила без войска (этап 133, Тс3), и с 1.0 это дверь, а не
+  // прибавка к счёту. Прежде ранг, с которым короны считаются, оценивался в
+  // 1200 силы и молча вливался в мерку: числа переставали значить вещи. Ранг
+  // открывает дверь сам, если между вами не вражда, — а мерка силы меряет
+  // землю, людей и суда, и только их (этап 161).
+  if (who === PLAYER && mightOf(state, day).reckoned) return warm
+  // Последняя дверь — просто быть сильнее. На одной мерке для всех.
+  const mine = strengthOf(state, world, who, day).score
+  const theirs = strengthOf(state, world, other, day).score
+  return warm && mine >= theirs * MIND.recogniseBy
 }
 
 /** Сколько сторон признало того, кто идёт, и кто не признал (Пт3). */
