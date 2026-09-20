@@ -413,6 +413,7 @@ import {
   showTo,
 } from './envoy'
 import { gearBonus, horseCarry, repairCost, withItem } from './equipment'
+import { ERA, ERA_DEFS, ERA_WORDS, type EraId, eraFor, eraNow, eraSigns, eraTweaks } from './era'
 import { errandKindOf, errandsAt } from './errand'
 import {
   type Law,
@@ -1386,6 +1387,8 @@ export type Command =
   /** Коалиция (этап 136): разобрать чужую по одному и собрать свою против первого. */
   | { readonly type: 'breakLeague'; readonly member: string }
   | { readonly type: 'callLeague'; readonly against: string }
+  /** Эпоха (этап 146): чем держава её встречает. */
+  | { readonly type: 'meetEra'; readonly answer: string }
   /** Чужой конец (этап 142): принять исход и стать первым человеком победителя. */
   | { readonly type: 'serveWinner' }
   /** Цена первенства (этап 139): идти тихо или громко. */
@@ -1979,6 +1982,8 @@ export function applyCommand(
       return breakLeague(state, command.member)
     case 'callLeague':
       return callLeague(state, command.against)
+    case 'meetEra':
+      return meetEra(state, command.answer)
     case 'serveWinner':
       return serveWinner(state)
     case 'goQuiet':
@@ -10095,6 +10100,18 @@ interface Draft {
   balanceLog: { readonly betrayals: number; readonly wars: number }
   reigns: Readonly<Record<string, number>>
   curves: Readonly<Record<string, readonly number[]>>
+  era: {
+    readonly id: string
+    readonly sinceDay: number
+    readonly untilDay: number
+    readonly answer?: string
+  } | null
+  eraLog: readonly {
+    readonly id: string
+    readonly from: number
+    readonly to: number
+    readonly answer?: string
+  }[]
   heirLog: { readonly kept: number; readonly changed: number }
   usedDay: Readonly<Record<string, number>>
   pathLog: {
@@ -10301,6 +10318,8 @@ function open(state: GameState): Draft {
     balanceLog: state.balanceLog ?? { betrayals: 0, wars: 0 },
     reigns: state.reigns ?? {},
     curves: state.curves ?? {},
+    era: state.era ?? null,
+    eraLog: state.eraLog ?? [],
     heirLog: state.heirLog ?? { kept: 0, changed: 0 },
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
@@ -10671,6 +10690,8 @@ function close(draft: Draft): CommandResult {
     tickHeirs(draft, daysPassed)
     // Раз в год мир берёт замер: из замеров складываются долгие кривые (этап 145).
     tickCurves(draft, daysPassed)
+    // И эпохи приходят и уходят, меняя правила для всех (этап 146).
+    tickEra(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10865,6 +10886,8 @@ function close(draft: Draft): CommandResult {
     balanceLog: draft.balanceLog,
     reigns: draft.reigns,
     curves: draft.curves,
+    era: draft.era,
+    eraLog: draft.eraLog,
     heirLog: draft.heirLog,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
@@ -14009,6 +14032,103 @@ function tickCurves(draft: Draft, days: number): void {
     .map((id) => ({ id, curve: curveOf(draft.base, draft.world, id, day) }))
     .find((one) => one.curve.trend !== 'still')
   if (worst) notice(draft, curveSays(draft.base, draft.world, worst.id, day), 'world')
+}
+
+/**
+ * Эпохи приходят и уходят (этап 146, Эп1, Эп3 и Эп4).
+ *
+ * Какая эпоха и когда — выводится из зерна мира и дня, а не бросается кубиком:
+ * одна и та же игра даёт одну и ту же историю. Пока эпоха идёт, её правило
+ * применяется ко всем.
+ */
+function tickEra(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % ERA.beat !== 0) return
+  const row = draft.era
+  if (row) {
+    if (day >= row.untilDay) {
+      draft.eraLog = [
+        ...draft.eraLog,
+        {
+          id: row.id,
+          from: row.sinceDay,
+          to: day,
+          ...(row.answer ? { answer: row.answer } : {}),
+        },
+      ]
+      draft.era = null
+      notice(
+        draft,
+        `${ERA_WORDS.ended} ${ERA_DEFS[row.id as EraId].label}: ${ERA_DEFS[row.id as EraId].after}`,
+        'world',
+      )
+      return
+    }
+    // Правило эпохи: то, чем она меняет мир, применяется тактом.
+    const tweak = eraTweaks(draft.base, draft.world, day)
+    if (tweak.churchAnger !== 0) {
+      draft.churchAnger = Math.max(0, (draft.churchAnger ?? 0) + tweak.churchAnger)
+    }
+    if (tweak.loyalty !== 0) shiftVassals(draft, tweak.loyalty, null)
+    if (tweak.people !== 0) {
+      const places: Record<string, (typeof draft.settlements)[string]> = { ...draft.settlements }
+      for (const [id, one] of Object.entries(places)) {
+        if (one.population <= 0) continue
+        places[id] = { ...one, population: Math.round(one.population * (1 + tweak.people)) }
+      }
+      draft.settlements = places
+    }
+    return
+  }
+  // Эпохи нет: смотрим, не пора ли, и показываем приметы.
+  const window = Math.floor(day / (ERA.apartYears * 365))
+  for (const one of [window - 1, window]) {
+    if (one < 0) continue
+    const next = eraFor(draft.world, one)
+    if (day < next.day || day - next.day > ERA.beat) continue
+    if (draft.eraLog.some((past) => past.from === next.day)) continue
+    draft.era = {
+      id: next.id,
+      sinceDay: next.day,
+      untilDay: next.day + ERA_DEFS[next.id].years * 365,
+    }
+    notice(
+      draft,
+      `${ERA_WORDS.began} ${ERA_DEFS[next.id].label}. ${ERA_DEFS[next.id].rule}`,
+      'world',
+    )
+    return
+  }
+  const signs = eraSigns(draft.base, draft.world, day)
+  if (signs.id && day % (ERA.beat * 4) === 0) notice(draft, signs.says, 'world')
+}
+
+/**
+ * Встретить эпоху (этап 146, Эп5).
+ *
+ * Не кнопка: у каждого ответа своя цена, и платится она тем же, чем платятся
+ * прочие решения державы, — серебром, верностью своих и счётом церкви.
+ */
+function meetEra(state: GameState, answer: string): CommandResult {
+  const day = dayOf(state.time)
+  const now = eraNow(state, state.world, day)
+  if (!now.id) return fail('requirements', 'Эпохи сейчас нет: встречать нечего.')
+  if (state.era?.answer) return fail('invalid', 'Эта эпоха уже встречена.')
+  const def = ERA_DEFS[now.id]
+  const chosen = def.answers.find((one) => one.id === answer)
+  if (!chosen) return fail('invalid', 'Такого ответа у этой эпохи нет.')
+
+  const draft = open(state)
+  advance(draft, hours(12))
+  draft.era = draft.era ? { ...draft.era, answer } : null
+  // Цена ответа: первый платит казной, второй — своими, третий — ничем и потом.
+  const index = def.answers.indexOf(chosen)
+  if (index === 0) addMoney(draft, -Math.min(draft.character.money, 4000))
+  if (index === 1) shiftVassals(draft, -4, null)
+  if (index === 2) draft.renown = Math.max(0, draft.renown - 2)
+  notice(draft, `${ERA_WORDS.answer} ${def.label}: ${chosen.says}`, 'world')
+  return close(draft)
 }
 
 /**

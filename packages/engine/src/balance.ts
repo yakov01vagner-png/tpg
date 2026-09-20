@@ -1,5 +1,6 @@
 import { BALANCE, BALANCE_WORDS } from './content/balance'
 import { dreadSeen, sideName } from './dread'
+import { eraTweaks } from './era'
 import { boundTo } from './league'
 import { crownWarlust } from './lordlife'
 import type { GameState } from './state'
@@ -63,7 +64,10 @@ export function warPressure(
   // Нрав входит и сюда (этап 66): иначе расчётливая корона, которую часто
   // задевают, проводит в войне больше лет, чем воинственная, — а это было
   // правилом мира с 0.6.
-  return Math.max(BALANCE.least, Math.min(1, balance * crownWarlust(a)))
+  // Эпоха меняет правило для всех (этап 146): при порохе воюют охотнее, при
+  // море — неохотнее.
+  const era = eraTweaks(state, world, day).warPressure
+  return Math.max(BALANCE.least, Math.min(1, balance * crownWarlust(a) * era))
 }
 
 /** Кто против кого и почему — сводка равновесия (Рв5). */

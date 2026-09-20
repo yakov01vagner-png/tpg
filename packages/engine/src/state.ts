@@ -556,6 +556,20 @@ export interface GameState {
    * Всё остальное — направление, длительность, причины — считается из замеров.
    */
   readonly curves?: Readonly<Record<string, readonly number[]>>
+  /** Эпоха, которая идёт сейчас (этап 146), и как державa её встретила. */
+  readonly era?: {
+    readonly id: string
+    readonly sinceDay: number
+    readonly untilDay: number
+    readonly answer?: string
+  } | null
+  /** Эпохи, которые прошли (этап 146): что, когда и чем кончилось. */
+  readonly eraLog?: readonly {
+    readonly id: string
+    readonly from: number
+    readonly to: number
+    readonly answer?: string
+  }[]
   /** Колена корон (этап 144): какое колено правило в последний раз, когда смотрели. */
   readonly reigns?: Readonly<Record<string, number>>
   /** Наследство путей (этап 144): сколько путей пережило государя, сколько переменилось. */
@@ -826,6 +840,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     balanceLog: { betrayals: 0, wars: 0 },
     reigns: {},
     curves: {},
+    era: null,
+    eraLog: [],
     heirLog: { kept: 0, changed: 0 },
     usedDay: {},
     pathLog: { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
