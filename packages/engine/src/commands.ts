@@ -703,6 +703,21 @@ import {
   yearsToSuccession,
 } from './royal'
 import {
+  RUSE,
+  RUSE_DEFS,
+  RUSE_WORDS,
+  type Ruse,
+  type RuseKind,
+  aliveRuses,
+  pulledBy,
+  ruseFrom,
+  ruseLedger,
+  ruseWord,
+  seesThrough,
+  theirRuses,
+  walkedInto,
+} from './ruse'
+import {
   SELF_TAUGHT_FEE,
   canGrantHere,
   isSelfTaught,
@@ -1160,6 +1175,14 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Обман (этап 112): завести ложный лагерь, демонстрацию, слух или засаду. */
+  | {
+      readonly type: 'makeRuse'
+      readonly kind: RuseKind
+      readonly locationId: string
+      readonly hostId?: string
+    }
+  | { readonly type: 'dropRuse'; readonly ruseId: string }
   /** Поле (этап 111): дать части замысел и спросить с неё донесение. */
   | { readonly type: 'setIntent'; readonly hostId: string; readonly intent: IntentId | null }
   | { readonly type: 'askHost'; readonly hostId: string }
@@ -1686,6 +1709,10 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'makeRuse':
+      return makeRuse(state, command.kind, command.locationId, command.hostId ?? null)
+    case 'dropRuse':
+      return dropRuse(state, command.ruseId)
     case 'setIntent':
       return setIntent(state, command.hostId, command.intent)
     case 'askHost':
@@ -9661,6 +9688,8 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  ruses: readonly Ruse[]
+  ruseLog: { readonly made: number; readonly worked: number; readonly seen: number }
   fieldOrders: readonly FieldOrder[]
   intents: Readonly<Record<string, IntentId>>
   orderLog: {
@@ -9789,6 +9818,8 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    ruses: state.ruses ?? [],
+    ruseLog: state.ruseLog ?? { made: 0, worked: 0, seen: 0 },
     fieldOrders: state.fieldOrders ?? [],
     intents: state.intents ?? {},
     orderLog: state.orderLog ?? { sent: 0, onTime: 0, stale: 0, ownWay: 0 },
@@ -10097,6 +10128,8 @@ function close(draft: Draft): CommandResult {
     tickEyes(draft, daysPassed)
     // Приказы доезжают до частей — и застают другую войну (этап 111).
     tickFieldOrders(draft, daysPassed)
+    // Обманы живут, срабатывают и раскусываются (этап 112).
+    tickRuses(draft, daysPassed)
     // Двор просит, стареет и уходит (этап 104).
     tickCourtiers(draft, daysPassed)
     // Посланные смотреть возвращаются (этап 102).
@@ -10258,6 +10291,8 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    ruses: draft.ruses,
+    ruseLog: draft.ruseLog,
     fieldOrders: draft.fieldOrders,
     intents: draft.intents,
     orderLog: draft.orderLog,
@@ -12034,6 +12069,145 @@ function handMatter(state: GameState, matterId: string): CommandResult {
     'people',
   )
   return close(draft)
+}
+
+/**
+ * Завести обман (этап 112, О1–О4).
+ *
+ * Ложь — такой же ход, как приказ: со своей ценой, своим сроком и своим
+ * разоблачением. Она не прибавляет силы; она кладёт весть в чужое знание тем
+ * же слоем, каким туда попадает правда.
+ */
+function makeRuse(
+  state: GameState,
+  kind: RuseKind,
+  locationId: string,
+  hostId: string | null,
+): CommandResult {
+  if (!state.world.locations[locationId]) return fail('invalid', 'Такого места нет.')
+  const def = RUSE_DEFS[kind]
+  if (state.character.money < def.cost) {
+    return fail('noMoney', `На это нужно ${def.cost} серебра.`)
+  }
+  const day = dayOf(state.time)
+  if ((state.ruses ?? []).some((one) => one.locationId === locationId && one.kind === kind)) {
+    return fail('invalid', 'Такой обман там уже заведён.')
+  }
+  const host = hostId ? hostById(state, hostId) : null
+  if (kind === 'ambush' && !host) return fail('requirements', 'Засаде нужна часть.')
+  if (kind === 'ambush' && host && host.locationId !== locationId) {
+    return fail('requirements', 'Часть должна стоять там, где ставишь засаду.')
+  }
+  if (def.men > 0 && partySize(state.party) + (host ? bandSize(host) : 0) < def.men) {
+    return fail('requirements', `На это нужно ${def.men} человек.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(6))
+  if (def.cost > 0) addMoney(draft, -def.cost)
+  const men = host ? bandSize(host) : Math.max(def.men, partySize(draft.party))
+  const ruse = ruseFrom(kind, PLAYER, locationId, men, day, host?.id ?? null)
+  draft.ruses = [...draft.ruses, ruse]
+  draft.ruseLog = { ...draft.ruseLog, made: draft.ruseLog.made + 1 }
+  const where = draft.world.locations[locationId]?.name ?? locationId
+  notice(
+    draft,
+    `${def.label} — ${where}. ${def.about} ${RUSE_WORDS.made} Держится до ${ruse.untilDay}-го дня.`,
+    'war',
+  )
+  return close(draft)
+}
+
+/** Снять обман: костры гасят, часть уходит. */
+function dropRuse(state: GameState, ruseId: string): CommandResult {
+  const ruse = (state.ruses ?? []).find((one) => one.id === ruseId)
+  if (!ruse) return fail('invalid', 'Такого обмана нет.')
+  const draft = open(state)
+  advance(draft, hours(2))
+  draft.ruses = draft.ruses.filter((one) => one.id !== ruseId)
+  notice(draft, `${RUSE_DEFS[ruse.kind].label}: снято.`, 'war')
+  return close(draft)
+}
+
+/**
+ * Обманы живут своим ходом (этап 112, О2, О4, О5 и О6).
+ *
+ * Чужие глаза смотрят на твой обман тем же кодом, каким смотрят на правду;
+ * демонстрация поворачивает тех, кто ей поверил; засада бьёт того, кто в неё
+ * вошёл; а чужая сторона врёт тебе так же — и её ложь ложится в твои вести.
+ */
+function tickRuses(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  const live: Ruse[] = []
+  for (const ruse of draft.ruses) {
+    if (day >= ruse.untilDay) {
+      notice(draft, `${RUSE_DEFS[ruse.kind].label}: ${RUSE_WORDS.gone}`, 'war')
+      continue
+    }
+    // Засада: тот, кто вошёл, узнаёт об этом последним.
+    const caught = walkedInto(draft.base, ruse)
+    if (caught.length > 0) {
+      draft.bands = draft.bands.map((band) =>
+        caught.some((one) => one.id === band.id)
+          ? { ...band, morale: Math.max(0, band.morale - RUSE.ambushMorale) }
+          : band,
+      )
+      draft.ruseLog = { ...draft.ruseLog, worked: draft.ruseLog.worked + 1 }
+      notice(
+        draft,
+        `${RUSE_WORDS.sprung} ${caught.length} отряд(ов) потеряли по ${RUSE.ambushMorale} духа.`,
+        'war',
+      )
+      continue
+    }
+    // Демонстрация: те, кто поверил, поворачивают на показанное.
+    if (ruse.kind === 'demo' && day % RUSE.beat === 0) {
+      const pulled = pulledBy(draft.base, draft.world, ruse, day)
+      if (pulled.length > 0) {
+        draft.bands = draft.bands.map((band) =>
+          pulled.some((one) => one.id === band.id)
+            ? { ...band, goal: { type: 'defend', targetId: ruse.locationId } }
+            : band,
+        )
+        draft.ruseLog = { ...draft.ruseLog, worked: draft.ruseLog.worked + 1 }
+        notice(draft, `${RUSE_WORDS.pulled} Повернуло ${pulled.length} отряд(ов).`, 'war')
+      }
+    }
+    // Раскусили ли: смотрит то же, чем смотрят на правду.
+    if (day % RUSE.beat === 0) {
+      for (const side of foesOf(draft.base)) {
+        const looked = seesThrough(draft.base, draft.world, side, ruse, day)
+        if (!looked.seen) continue
+        draft.ruseLog = { ...draft.ruseLog, seen: draft.ruseLog.seen + 1 }
+        notice(draft, `${RUSE_DEFS[ruse.kind].label}: ${looked.says}`, 'war')
+        break
+      }
+    }
+    live.push(ruse)
+  }
+  draft.ruses = live
+
+  // Чужие обманы ложатся в твои вести — и их так же можно раскусить (О5).
+  if (day % RUSE.beat !== 0) return
+  for (const theirs of theirRuses(draft.base, draft.world, day)) {
+    const looked = seesThrough(draft.base, draft.world, PLAYER, theirs, day)
+    if (looked.seen) {
+      notice(draft, `${RUSE_WORDS.theirs} ${RUSE_DEFS[theirs.kind].label}: ${looked.says}`, 'war')
+      continue
+    }
+    draft.words = withSightings(draft.words, [ruseWord(theirs, PLAYER, day)])
+  }
+}
+
+/** Те короны, с кем ты воюешь: им и смотреть на твой обман. */
+function foesOf(state: GameState): readonly string[] {
+  const sides = new Set<string>()
+  for (const war of state.politics.wars) {
+    if (war.a === PLAYER) sides.add(war.b)
+    if (war.b === PLAYER) sides.add(war.a)
+  }
+  return [...sides]
 }
 
 /**

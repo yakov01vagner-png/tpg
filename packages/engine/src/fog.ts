@@ -279,7 +279,9 @@ export function lastSeen(
     sure: false,
     says: FOG_WORDS.never,
   }
-  if (!band) return blank
+  // Войска может и не быть вовсе: ложный лагерь — это весть без войска
+  // (этап 112). Туман показывает, что доложено, а не что есть.
+  if (!band) return fromWords(state, world, who, bandId, day, blank)
   // Своими глазами: то, что видно сейчас, не стареет и не расплывается.
   const eye = whoSees(state, world, who, band, day)
   if (eye && eye.eye === 'host') {
@@ -294,6 +296,18 @@ export function lastSeen(
       says: `${FOG_WORDS.here} ${world.locations[band.locationId]?.name ?? band.locationId}, ${bandSize(band)} человек.`,
     }
   }
+  return fromWords(state, world, who, bandId, day, blank)
+}
+
+/** То, что о нём доложено: работает и тогда, когда докладывать было не о чем. */
+function fromWords(
+  state: GameState,
+  world: World,
+  who: string,
+  bandId: string,
+  day: number,
+  blank: Sighting,
+): Sighting {
   const words = (state.words ?? []).filter(
     (one) => one.to === who && one.kind === 'host' && one.about === bandId && one.day <= day,
   )

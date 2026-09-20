@@ -59,6 +59,7 @@ import { NO_REPUTATION } from './reputation'
 import type { Rng } from './rng'
 import { createRng } from './rng'
 import type { RoyalMarriage } from './royal'
+import type { Ruse } from './ruse'
 import type { Ship } from './ship'
 import type { Siege } from './siege'
 import type { Look } from './sight'
@@ -411,6 +412,9 @@ export interface GameState {
   }
   /** Дела, которые ты уже разобрал или передал: чтобы не звали дважды. */
   readonly settled?: Readonly<Record<string, number>>
+  /** Обманы, которые сейчас живут на карте (этап 112). */
+  readonly ruses?: readonly Ruse[]
+  readonly ruseLog?: { readonly made: number; readonly worked: number; readonly seen: number }
   /** Приказы, которые ещё едут к своим частям в поле (этап 111). */
   readonly fieldOrders?: readonly FieldOrder[]
   /** Замысел, данный части: он не стареет в дороге. */
@@ -560,6 +564,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     favours: {},
     ruleLog: { heard: 0, handed: 0, missed: 0 },
     settled: {},
+    ruses: [],
+    ruseLog: { made: 0, worked: 0, seen: 0 },
     fieldOrders: [],
     intents: {},
     orderLog: { sent: 0, onTime: 0, stale: 0, ownWay: 0 },
