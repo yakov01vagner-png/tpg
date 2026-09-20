@@ -3,13 +3,16 @@ import { churchLedger } from './church'
 import { citiesOf, cityLedger } from './city'
 import type { Command } from './commands'
 import { companyLedger } from './company'
+import { KNOWN_WORDS } from './content/known'
 import { MOULD_WORDS } from './content/mould'
 import { OFFICES, type OfficeId } from './content/offices'
 import { vassalsOf } from './court'
 import { lawOf } from './estate'
+import { blindToShare, fogMap } from './fog'
 import { ageSays, skillCeiling } from './growth'
 import { PLAYER, holdingsOf } from './holding'
 import { claimantsOf, heirLawOf, heirUnder, partitionOf, regencyFor, strifeOf } from './inherit'
+import { type Known, askedDef, knownTo, sourceDef, wordsTo } from './known'
 import { playStyle, worldOpinion } from './memory'
 import { mouldOf, paysWith } from './mould'
 import { seaLedger } from './navy'
@@ -19,7 +22,9 @@ import { TRIALS, trialOdds } from './paths'
 import { peaceChronicle, talksOf } from './peace'
 import { skillXpToNext } from './progression'
 import { courtMood, plotAgainst } from './revolt'
+import { SCOUT } from './scout'
 import { sheetOf } from './sheet'
+import { knowMap, tourPlan } from './sight'
 import { SKILLS, type SkillId } from './skills'
 import type { GameState } from './state'
 import { dayOf } from './time'
@@ -56,7 +61,7 @@ export interface Deed {
 }
 
 export interface Screen {
-  readonly id: 'realm' | 'talks' | 'war' | 'court' | 'house' | 'growth'
+  readonly id: 'realm' | 'talks' | 'war' | 'court' | 'house' | 'growth' | 'news'
   readonly title: string
   readonly lines: readonly Line[]
   readonly deeds: readonly Deed[]
@@ -323,6 +328,111 @@ export function houseScreen(state: GameState, world: World): Screen {
 
 /** Все пять экранов власти разом: порядок тот же, что и в жизни державы. */
 /**
+ * Откуда и когда (этап 128, И1 и И2).
+ *
+ * Одна строка на всякое число: кто принёс, сколько ему суток и насколько ему
+ * верить. Там, где вилка шире полезного, честнее сказать «не знаю», чем
+ * показать выдуманную точность.
+ */
+export function sourceLine(known: Known): string {
+  if (known.value === null) return KNOWN_WORDS.unknown
+  const def = sourceDef(known.source ?? 'rumour')
+  const spread = Math.round(known.spread * 100)
+  return `${def.label}${known.from ? ` (${known.from})` : ''}, ${known.age} сут.; ${spread === 0 ? 'точно' : `вилка ${spread} из ста`}${known.clash ? '; источники расходятся' : ''}`
+}
+
+/** Число вилкой, а не точкой (И2). */
+export function spreadValue(known: Known): string {
+  if (known.value === null) return 'неизвестно'
+  if (typeof known.value === 'string') return known.value
+  const off = Math.round(known.value * known.spread)
+  return off <= 0 ? String(known.value) : `${known.value - off}–${known.value + off}`
+}
+
+/**
+ * Экран вестей (этап 128, И3–И5).
+ *
+ * Всё, что тебе принесли, в одном месте: кто принёс, когда, чему верить — и
+ * что можно сделать, чтобы узнать вернее. Незнание здесь названо вслух: пустой
+ * экран означает, что ты не знаешь ничего, а не что всё спокойно.
+ */
+export function newsScreen(state: GameState, world: World): Screen {
+  const day = dayOf(state.time)
+  const lines: Line[] = []
+  const asked = new Set<string>()
+  for (const word of wordsTo(state, PLAYER)) {
+    const key = `${word.kind}:${word.about}`
+    if (asked.has(key)) continue
+    asked.add(key)
+    const known = knownTo(state, world, PLAYER, { kind: word.kind, about: word.about }, day)
+    const about =
+      world.kingdoms[word.about]?.name ?? world.locations[word.about]?.name ?? word.about
+    lines.push({
+      label: `${askedDef(word.kind).label}: ${about}`,
+      value: spreadValue(known),
+      hint: sourceLine(known),
+    })
+  }
+  // И3: незнание названо. Своя земля, о которой ты давно не слышал, — это
+  // первое, чего не знает всякий государь, и потому она стоит в начале списка.
+  for (const row of knowMap(state, world, day).slice(0, 6)) {
+    lines.push({
+      label: `своё место: ${row.name}`,
+      value: row.age >= 999 ? 'не знаешь ничего' : `вестям ${row.age} сут.`,
+      hint:
+        row.age >= 999
+          ? 'Оттуда не приходило ни отчёта, ни слова. Послать человека или объехать самому.'
+          : `Последнее известие: ${row.source}${row.fresh ? ', свежее' : ', уже старое'}.`,
+    })
+  }
+  const blind = blindToShare(state, world, day)
+  const fog = fogMap(state, world, day)
+  for (const row of fog.slice(0, 5)) {
+    lines.push({
+      label: `войско: ${row.name}`,
+      value: row.seenAt ? (world.locations[row.seenAt]?.name ?? row.seenAt) : 'неизвестно',
+      hint: row.says,
+    })
+  }
+
+  const deeds: Deed[] = [
+    {
+      label: 'Объехать державу самому',
+      command: { type: 'rideOut' },
+      can: holdingsOf(state.settlements, PLAYER).length > 1,
+      why: tourPlan(state, world, day).says,
+    },
+    {
+      label: 'Спросить местных',
+      command: { type: 'askLocals' },
+      can: (state.settlements[state.locationId]?.population ?? 0) > 0,
+      why: `Угощение стоит ${SCOUT.askCost} серебра: что расскажут, зависит от того, как тебя здесь помнят.`,
+    },
+  ]
+  const oldest = knowMap(state, world, day)[0]
+  if (oldest) {
+    deeds.push({
+      label: `Послать человека: ${oldest.name}`,
+      command: { type: 'sendLook', locationId: oldest.locationId },
+      can: true,
+      why: `${oldest.name}: ${oldest.fresh ? `вести свежие (${oldest.source})` : oldest.age >= 999 ? 'о нём ты не знаешь ничего' : `вестям ${oldest.age} сут. (${oldest.source})`}. Поедет и посмотрит сам.`,
+    })
+  }
+
+  const brought = asked.size
+  return {
+    id: 'news',
+    title: 'Вести',
+    lines,
+    deeds,
+    says:
+      brought === 0
+        ? `${KNOWN_WORDS.unknown} Вестей к тебе не приходило: ты не знаешь ничего, и это не то же самое, что «всё спокойно».`
+        : `Вестей ${brought}.${fog.length > 0 ? ` О ${Math.round(blind * 100)} из ста чужих войск ты не знаешь ничего.` : ''} ${KNOWN_WORDS.stale}`,
+  }
+}
+
+/**
  * Экран роста (этап 127).
  *
  * Лист героя перестаёт быть списком чисел: против каждой строки её дело, под
@@ -390,5 +500,6 @@ export function powerScreens(state: GameState, world: World): readonly Screen[] 
     courtScreen(state, world),
     houseScreen(state, world),
     growthScreen(state, world),
+    newsScreen(state, world),
   ]
 }
