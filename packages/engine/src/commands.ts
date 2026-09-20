@@ -831,6 +831,7 @@ import {
   plotAgainst,
   reprisalCost,
 } from './revolt'
+import { HOLD_DEFS, type HoldId, RISK, RISK_WORDS, otherFight, siegeOnMe } from './risk'
 import type { Rng } from './rng'
 import { nextFloat, nextInt, rollChance } from './rng'
 import {
@@ -1405,6 +1406,9 @@ export type Command =
   /** Коалиция (этап 136): разобрать чужую по одному и собрать свою против первого. */
   | { readonly type: 'breakLeague'; readonly member: string }
   | { readonly type: 'callLeague'; readonly against: string }
+  /** Оборона своего (этап 153, Рс0) и чужой бой (Рс0б). */
+  | { readonly type: 'holdWalls'; readonly move: HoldId }
+  | { readonly type: 'joinFight'; readonly side: string }
   /** Путь обратно (этап 152): вернуть своё одной из четырёх дорог. */
   | { readonly type: 'claimBack'; readonly road: RoadId }
   /** Изгнание (этап 151): пойти к чужому двору, когда своего нет. */
@@ -2009,6 +2013,10 @@ export function applyCommand(
       return breakLeague(state, command.member)
     case 'callLeague':
       return callLeague(state, command.against)
+    case 'holdWalls':
+      return holdWalls(state, command.move)
+    case 'joinFight':
+      return joinFight(state, command.side)
     case 'claimBack':
       return claimBack(state, command.road)
     case 'goIntoExile':
@@ -14420,6 +14428,122 @@ function claimBack(state: GameState, road: RoadId): CommandResult {
     'world',
   )
   return close(draft)
+}
+
+/**
+ * Оборона своего (этап 153, Рс0).
+ *
+ * Старый долг: осаждать чужое было можно, оборонять своё — нет. Три хода, и
+ * каждый чем-то платится: держаться — запасом, выйти — людьми, откупиться —
+ * казной.
+ */
+function holdWalls(state: GameState, move: HoldId): CommandResult {
+  const day = dayOf(state.time)
+  const siege = siegeOnMe(state, state.world, day)
+  if (!siege.locationId) return fail('requirements', siege.says)
+
+  const draft = open(state)
+  if (move === 'pay') {
+    const cost = siege.men * RISK.payPerMan
+    if (draft.character.money < cost) return fail('noMoney', `Осаждающие просят ${cost}.`)
+    advance(draft, hours(6))
+    addMoney(draft, -cost)
+    // Купленные уходят: не мир, а перемирие под этими стенами.
+    draft.bands = draft.bands.filter(
+      (one) => !(one.locationId === siege.locationId && one.lordId !== PLAYER),
+    )
+    notice(draft, `${HOLD_DEFS.pay.says} Заплачено ${cost}.`, 'war')
+    return close(draft)
+  }
+  if (move === 'hold') {
+    advance(draft, hours(24))
+    // Сидение стоит припаса: за сутки съедается хлеб из закромов.
+    const place = draft.settlements[siege.locationId]
+    if (place) {
+      draft.settlements = {
+        ...draft.settlements,
+        [siege.locationId]: {
+          ...place,
+          stock: {
+            ...place.stock,
+            grain: Math.max(0, place.stock.grain - Math.round(place.population * 0.02)),
+          },
+        },
+      }
+    }
+    notice(draft, `${HOLD_DEFS.hold.says} Под стенами ${siege.men}.`, 'war')
+    return close(draft)
+  }
+  // Вылазка: за стенами свои сильнее, но выходят они из-за стен.
+  advance(draft, hours(8))
+  const mine = Math.round(partySize(draft.party) * RISK.wallsWorth)
+  const [roll, afterRoll] = nextFloat(draft.rng)
+  draft.rng = afterRoll
+  const wins = mine * (0.6 + roll * 0.8) > siege.men
+  if (wins) {
+    draft.bands = draft.bands.filter(
+      (one) => !(one.locationId === siege.locationId && one.lordId !== PLAYER),
+    )
+    draft.renown += 4
+    notice(draft, `Вылазка удалась: осаду сняли. Твоих ${mine} против ${siege.men}.`, 'war')
+    return close(draft)
+  }
+  hurtParty(draft, RISK.sallyLoss)
+  notice(
+    draft,
+    `Вылазка не удалась: твоих ${mine} против ${siege.men}, отряд потерял треть.`,
+    'war',
+  )
+  return close(draft)
+}
+
+/**
+ * Прийти в чужой бой (этап 153, Рс0б).
+ *
+ * Долг с этапа 7: чужая битва была зрелищем. Теперь в неё можно войти — на
+ * любой стороне, и другая сторона это запомнит войной.
+ */
+function joinFight(state: GameState, side: string): CommandResult {
+  const day = dayOf(state.time)
+  const fight = otherFight(state, state.world, day)
+  if (!fight.sides.includes(side)) return fail('requirements', fight.says)
+  const against = fight.sides.find((one) => one !== side)
+  if (!against) return fail('requirements', fight.says)
+
+  const draft = open(state)
+  advance(draft, hours(12))
+  draft.politics = withRelation(draft.politics, PLAYER, side, 25)
+  draft.politics = withRelation(draft.politics, PLAYER, against, -40)
+  if (!atWar(draft.politics, PLAYER, against)) {
+    draft.politics = {
+      ...draft.politics,
+      wars: [
+        ...draft.politics.wars,
+        { a: PLAYER, b: against, since: day, reason: 'пришёл в чужой бой' },
+      ],
+    }
+  }
+  hurtParty(draft, 0.1)
+  draft.renown += 2
+  notice(
+    draft,
+    `Ты вошёл в бой на стороне ${kingdomName(draft.base, side)} против ${kingdomName(draft.base, against)}. ${RISK_WORDS.other}`,
+    'war',
+  )
+  return close(draft)
+}
+
+/** Потери отряда: доля людей из каждого рода. */
+function hurtParty(draft: Draft, share: number): void {
+  const units: Record<string, number> = {}
+  for (const [id, count] of Object.entries(draft.party.units)) {
+    units[id] = Math.max(0, Math.round((count ?? 0) * (1 - share)))
+  }
+  draft.party = {
+    ...draft.party,
+    units: units as typeof draft.party.units,
+    morale: Math.max(10, draft.party.morale - 10),
+  }
 }
 
 /**
