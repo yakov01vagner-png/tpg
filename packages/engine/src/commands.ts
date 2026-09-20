@@ -1,3 +1,14 @@
+import {
+  BIND_DEFS,
+  FAITH,
+  FAITH_WORDS,
+  HOLY_DEED_DEFS,
+  type HolyDeedId,
+  anointedOf,
+  boundBy,
+  deedCost,
+  faithWorld,
+} from './anoint'
 import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
 import type { Band, BandEvent, GarrisonOrder } from './band'
@@ -1320,6 +1331,8 @@ export type Command =
   /** Путь торга (этап 133): заём короне и откуп от войны. */
   | { readonly type: 'lendToCrown'; readonly to: string }
   | { readonly type: 'buyPeaceWith'; readonly against: string }
+  /** Путь веры (этап 134): дар, собор, поход по призыву, кара еретиков. */
+  | { readonly type: 'churchDeed'; readonly deed: HolyDeedId }
   /** Испытание (этап 124): выйти на турнир, охоту, диспут, смотр, мост, ярмарку. */
   | { readonly type: 'takeTrial'; readonly trialId: string }
   /** Чужое слово (этап 121): сдержит ли он обещанное. */
@@ -1895,6 +1908,8 @@ export function applyCommand(
       return lendToCrown(state, command.to)
     case 'buyPeaceWith':
       return buyPeaceWith(state, command.against)
+    case 'churchDeed':
+      return churchDeed(state, command.deed)
     case 'takeTrial':
       return takeTrial(state, command.trialId)
     case 'weighPledge':
@@ -5161,6 +5176,11 @@ function declareWar(state: GameState, kingdomId: string): CommandResult {
     ],
   }
   draft.politics = withRelation(draft.politics, PLAYER, kingdomId, -30)
+  // Помазаннику война без права не прощается (этап 134, Вр4).
+  if (casus.kind === 'ambition' && boundBy(draft.base, draft.base.world, 'war', day)) {
+    draft.churchAnger = Math.max(0, (draft.churchAnger ?? 0) + FAITH.warAnger)
+    notice(draft, BIND_DEFS.war.says, 'world')
+  }
   advance(draft, hours(4))
   notice(
     draft,
@@ -9931,6 +9951,8 @@ interface Draft {
   recognitions: Readonly<Record<string, number>>
   union: { readonly sinceDay: number } | null
   crownDebts: Readonly<Record<string, { readonly owed: number; readonly sinceDay: number }>>
+  anointed: { readonly sinceDay: number } | null
+  deeds: Readonly<Record<string, number>>
   usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
@@ -10118,6 +10140,8 @@ function open(state: GameState): Draft {
     recognitions: state.recognitions ?? {},
     union: state.union ?? null,
     crownDebts: state.crownDebts ?? {},
+    anointed: state.anointed ?? null,
+    deeds: state.deeds ?? {},
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
@@ -10461,6 +10485,8 @@ function close(draft: Draft): CommandResult {
     tickHouse(draft, daysPassed)
     // Долги корон растут и отдаются, а высокий ранг берёт своё (этап 133).
     tickLevers(draft, daysPassed)
+    // Церковь смотрит, свой ты ей государь или ещё нет (этап 134).
+    tickAnoint(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10637,6 +10663,8 @@ function close(draft: Draft): CommandResult {
     recognitions: draft.recognitions,
     union: draft.union,
     crownDebts: draft.crownDebts,
+    anointed: draft.anointed,
+    deeds: draft.deeds,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
@@ -12840,6 +12868,9 @@ function lendToCrown(state: GameState, to: string): CommandResult {
   if (atWar(state.politics, PLAYER, to)) {
     return fail('requirements', 'Тому, с кем воюешь, в долг не дают.')
   }
+  if (boundBy(state, state.world, 'usury', day)) {
+    return fail('requirements', BIND_DEFS.usury.says)
+  }
   const want = loanWanted(state, state.world, to, day)
   if (!want.can) return fail('requirements', want.says)
   if (state.character.money < want.wants) {
@@ -12924,6 +12955,78 @@ function tickLevers(draft: Draft, days: number): void {
   if (cost.churchAnger === 0) return
   draft.churchAnger = Math.max(0, (draft.churchAnger ?? 0) + cost.churchAnger)
   shiftVassals(draft, cost.apart, null)
+}
+
+/**
+ * Дело веры (этап 134, Вр2).
+ *
+ * Четыре двери к признанию церкви: дар, собор, поход по призыву и кара
+ * еретиков. Каждая прибавляет благочестия и сбивает её счёт, и у каждой своя
+ * цена перед прочими коронами: собор они считают твоим судом над ними, а поход
+ * — войной, в которую ты пошёл не за себя.
+ */
+function churchDeed(state: GameState, deed: HolyDeedId): CommandResult {
+  const day = dayOf(state.time)
+  const def = HOLY_DEED_DEFS[deed]
+  const cost = deedCost(state, deed, day)
+  if (cost.waitDays > 0) return fail('requirements', cost.says)
+  if (state.character.money < cost.money) {
+    return fail('noMoney', `${def.label}: нужно ${cost.money} серебра.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(def.hours))
+  addMoney(draft, -cost.money)
+  draft.piety = (draft.piety ?? 0) + def.piety
+  draft.churchAnger = Math.max(0, (draft.churchAnger ?? 0) + def.anger)
+  draft.deeds = { ...draft.deeds, [deed]: day }
+  if (def.others < 0) {
+    for (const id of Object.keys(draft.base.world.kingdoms)) {
+      draft.politics = withRelation(draft.politics, PLAYER, id, def.others)
+    }
+  }
+  notice(
+    draft,
+    `${def.label}: ${cost.money} серебра. Благочестия ${draft.piety}, счёт церкви ${draft.churchAnger}. ${def.after}`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Помазание и то, что из него следует (этап 134, Вр1 и Вр5).
+ *
+ * Церковь называет своим государем не за обряд, а за пройденный путь, и
+ * перестаёт называть, когда путь перестал быть пройденным. Пока называет, мир
+ * вокруг холодеет, а своя земля шатается изнутри.
+ */
+function tickAnoint(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % FAITH.beat !== 0) return
+  // Благочестие само уходит: вера держится делами, а не памятью о них.
+  if (day % 360 === 0) {
+    draft.piety = (draft.piety ?? 0) + FAITH.fade
+  }
+  const now = anointedOf(draft.base, draft.world, day)
+  if (!now.is) {
+    if (draft.anointed) {
+      draft.anointed = null
+      notice(draft, FAITH_WORDS.lost, 'world')
+    }
+    return
+  }
+  if (!draft.anointed) {
+    draft.anointed = { sinceDay: day }
+    notice(draft, `${FAITH_WORDS.anointed} ${FAITH_WORDS.bound}`, 'world')
+    return
+  }
+  const world = faithWorld(draft.base, draft.world, day)
+  for (const id of Object.keys(draft.base.world.kingdoms)) {
+    draft.politics = withRelation(draft.politics, PLAYER, id, world.fear)
+  }
+  shiftVassals(draft, world.unrest, null)
+  if (day % (FAITH.beat * 18) === 0) notice(draft, world.says, 'world')
 }
 
 /**
@@ -15746,9 +15849,16 @@ function breakTreaty(state: GameState, treatyId: string): CommandResult {
     one.id === treatyId ? { ...one, brokenBy: PLAYER } : one,
   )
   draft.politics = withRelation(draft.politics, PLAYER, other, cost.other)
+  // Помазаннику слово дороже (этап 134, Вр4): порванная грамота стоит вдвое.
+  const holy = boundBy(state, state.world, 'word', day)
+  const worldCost = holy ? cost.world * FAITH.wordCosts : cost.world
   for (const kingdomId of Object.keys(state.world.kingdoms)) {
     if (kingdomId === other) continue
-    draft.politics = withRelation(draft.politics, PLAYER, kingdomId, cost.world)
+    draft.politics = withRelation(draft.politics, PLAYER, kingdomId, worldCost)
+  }
+  if (holy) {
+    draft.churchAnger = Math.max(0, (draft.churchAnger ?? 0) + FAITH.wordAnger)
+    notice(draft, BIND_DEFS.word.says, 'world')
   }
   // Союз и дань живут не только на бумаге: порвал — значит порвал и их.
   if (treaty.kind === 'alliance') {
