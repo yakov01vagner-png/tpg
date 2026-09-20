@@ -510,6 +510,7 @@ import {
   woundKindDef,
   woundKindOf,
 } from './heal'
+import { HEIRS, HEIRS_WORDS, heirWay, reignChanged, troubled } from './heirs'
 import { HIDDEN, HIDDEN_WORDS, denounceOffer, denounceWord, lossLedger, shading } from './hidden'
 import {
   PLAYER,
@@ -843,6 +844,7 @@ import {
   dowryFor,
   marriagesOf,
   marriedTo,
+  reignOf,
   royalHouse,
   yearsToSuccession,
 } from './royal'
@@ -10090,6 +10092,8 @@ interface Draft {
   }
   theirEnd: { readonly who: string; readonly sinceDay: number; readonly served?: number } | null
   balanceLog: { readonly betrayals: number; readonly wars: number }
+  reigns: Readonly<Record<string, number>>
+  heirLog: { readonly kept: number; readonly changed: number }
   usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
@@ -10293,6 +10297,8 @@ function open(state: GameState): Draft {
     raceLog: state.raceLog ?? { steps: 0, done: [], shares: {} },
     theirEnd: state.theirEnd ?? null,
     balanceLog: state.balanceLog ?? { betrayals: 0, wars: 0 },
+    reigns: state.reigns ?? {},
+    heirLog: state.heirLog ?? { kept: 0, changed: 0 },
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
@@ -10658,6 +10664,8 @@ function close(draft: Draft): CommandResult {
     tickTheirEnd(draft, daysPassed)
     // Равновесие рвёт союзы с тем, кто вырвался вперёд (этап 143).
     tickBalance(draft, daysPassed)
+    // А государи сменяются, и путь либо переходит, либо переменяется (этап 144).
+    tickHeirs(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10850,6 +10858,8 @@ function close(draft: Draft): CommandResult {
     raceLog: draft.raceLog,
     theirEnd: draft.theirEnd,
     balanceLog: draft.balanceLog,
+    reigns: draft.reigns,
+    heirLog: draft.heirLog,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
@@ -13906,6 +13916,67 @@ function tickBalance(draft: Draft, days: number): void {
     betrayals: draft.balanceLog.betrayals + 1,
   }
   notice(draft, first.says, 'world')
+}
+
+/**
+ * Государи сменяются (этап 144, Нс1, Нс3 и Нс6).
+ *
+ * Колено выводится из дня (`reignOf`), нрав нового — из короны и колена. Путь
+ * при этом либо переходит по наследству, либо переменяется, и то и другое —
+ * событие. Смерть ведущего гонку мир замечает отдельно: равновесие считается
+ * заново.
+ */
+function tickHeirs(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % HEIRS.beat !== 0) return
+  const reigns: Record<string, number> = { ...draft.reigns }
+  let kept = draft.heirLog.kept
+  let changed = draft.heirLog.changed
+  const leader = firstOf(draft.base, draft.world, day).who
+  for (const id of Object.keys(draft.base.world.kingdoms)) {
+    const now = reignOf(id, day)
+    if (reigns[id] === undefined) {
+      reigns[id] = now
+      continue
+    }
+    if (!reignChanged(draft.base, id, day)) continue
+    reigns[id] = now
+    const was = crownWay(draft.base, draft.world, id, day)
+    const next = heirWay(draft.base, draft.world, id, day)
+    if (next === was) {
+      kept += 1
+      notice(draft, `${HEIRS_WORDS.kept} ${kingdomName(draft.base, id)}: ${was}.`, 'world')
+    } else {
+      changed += 1
+      draft.crownWays = {
+        ...draft.crownWays,
+        [id]: { way: next, sinceDay: day, places: crownPlaces(draft.base, id) },
+      }
+      notice(
+        draft,
+        `${HEIRS_WORDS.changed} ${kingdomName(draft.base, id)}: ${was} → ${next}.`,
+        'world',
+      )
+    }
+    if (id === leader) {
+      // Гибель ведущего переворачивает равновесие: страх к нему падает вдвое.
+      const log: Record<string, { score: number; sinceDay: number }> = {}
+      for (const [who, row] of Object.entries(draft.dreadLog)) {
+        log[who] = { ...row, score: Math.round(row.score * HEIRS.deathCalms) }
+      }
+      draft.dreadLog = log
+      notice(draft, `${HEIRS_WORDS.died} ${kingdomName(draft.base, id)}.`, 'world')
+    }
+  }
+  draft.reigns = reigns
+  draft.heirLog = { kept, changed }
+  // Смута — тот же откат, что война (Нс4): о ней говорят раз в год.
+  if (day % (HEIRS.beat * 12) !== 0) return
+  const sick = Object.keys(draft.base.world.kingdoms).find(
+    (id) => troubled(draft.base, draft.world, id, day).troubled,
+  )
+  if (sick) notice(draft, troubled(draft.base, draft.world, sick, day).says, 'world')
 }
 
 /**
@@ -17638,6 +17709,10 @@ function succeed(draft: Draft, day: number): void {
   draft.character = heirCharacter(draft.character, heir, day)
   draft.renown = Math.round(draft.renown / 4)
   draft.quests = []
+  // Мир считает равновесие заново — уже относительно наследника (этап 144, Нс5).
+  draft.dreadLog = {}
+  draft.raceLog = { ...draft.raceLog, shares: { ...draft.raceLog.shares, [PLAYER]: 0 } }
+  notice(draft, HEIRS_WORDS.yours, 'world')
   draft.party = { ...draft.party, morale: Math.max(30, draft.party.morale - 20) }
   notice(
     draft,

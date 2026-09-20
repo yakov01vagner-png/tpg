@@ -1,6 +1,7 @@
 import { BALANCE, BALANCE_WORDS } from './content/balance'
 import { dreadSeen, sideName } from './dread'
 import { boundTo } from './league'
+import { crownWarlust } from './lordlife'
 import type { GameState } from './state'
 import { theirWay } from './theirway'
 import type { World } from './world/types'
@@ -58,7 +59,11 @@ export function warPressure(
   // Берётся то, что уже посчитано тактом гонки (этап 141), а не считается
   // заново: давление спрашивают каждые сутки, и своих путей тут не осилить.
   const share = state.raceLog?.shares?.[b] ?? 0
-  return Math.max(BALANCE.least, Math.min(1, BALANCE.least + share * BALANCE.perShare))
+  const balance = BALANCE.least + share * BALANCE.perShare
+  // Нрав входит и сюда (этап 66): иначе расчётливая корона, которую часто
+  // задевают, проводит в войне больше лет, чем воинственная, — а это было
+  // правилом мира с 0.6.
+  return Math.max(BALANCE.least, Math.min(1, balance * crownWarlust(a)))
 }
 
 /** Кто против кого и почему — сводка равновесия (Рв5). */

@@ -375,9 +375,14 @@ export function tickPolitics(
     // Связанный с целью не пойдёт на неё и по кубику, а опасающийся пойдёт
     // охотнее — и то и другое считается, а не выпадает.
     const weight = a && b ? pressure(a, b) : 1
-    const [balanced, afterBalance] = rollChance(generator, Math.max(0, Math.min(1, weight)))
-    generator = afterBalance
-    if (!balanced) continue
+    // Лишний бросок берётся только там, где он что-то решает: при давлении в
+    // единицу случайность остаётся ровно той же, какой была до этапа 143, и
+    // старые прогоны (этап 66, этап 40) повторяются день в день.
+    if (weight < 1) {
+      const [balanced, afterBalance] = rollChance(generator, Math.max(0, weight))
+      generator = afterBalance
+      if (!balanced) continue
+    }
     // Воюющая корона не открывает второй войны, если не воинственна настолько,
     // что ей всё равно: до этого этого правила не было, и мелкая корона могла
     // получить три войны за месяц.

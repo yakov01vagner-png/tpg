@@ -19,12 +19,17 @@ import type { World } from './world/types'
 export function crownWay(state: GameState, world: World, id: string, day: number): WayId {
   const chosen = state.crownWays?.[id]?.way
   if (chosen) return chosen as WayId
+  return flavourWay(world, id) ?? TEMPER_WAY[crownOf(id).temper] ?? 'crown'
+}
+
+/** Путь, который диктует уклад земли, — он переживает государей (этап 144). */
+export function flavourWay(world: World, id: string): WayId | null {
   const flavour = (world.kingdoms[id]?.flavor ?? '').toLowerCase()
   const name = (world.kingdoms[id]?.name ?? '').toLowerCase()
   for (const one of FLAVOUR_WAY) {
     if (flavour.includes(one.word) || name.includes(one.word)) return one.way
   }
-  return TEMPER_WAY[crownOf(id).temper] ?? 'crown'
+  return null
 }
 
 /** Где она на своём пути — той же меркой, что игрок (Кп2). */
