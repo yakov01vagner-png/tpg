@@ -13,6 +13,16 @@ import {
   unformUp,
   unitsSize,
 } from './battle'
+import {
+  BEHEST_DEFS,
+  BEHEST_WORDS,
+  type Behest,
+  type BehestKind,
+  behestPlan,
+  handFor,
+  outcomeOf,
+  recallable,
+} from './behest'
 import { type OrderSway, brothersAt, startSway, swayOf, tickOrders } from './brother'
 import { type Brotherhood, canFound, charterById, ownCharterFeels } from './brotherhood'
 import {
@@ -155,7 +165,7 @@ import {
   SEND_STANDING,
 } from './content/brothers'
 import type { BuildingId } from './content/buildings'
-import { BUILDINGS } from './content/buildings'
+import { BUILDINGS, BUILDING_IDS } from './content/buildings'
 import { TOURNEY_FEE, TOURNEY_PURSE } from './content/castle'
 import { ENVOY_FAVOUR } from './content/casus'
 import type { ChainDef } from './content/chains'
@@ -164,6 +174,7 @@ import type { CityAsk } from './content/city'
 import { COMPANY_WORDS, TEMPER_DEFS } from './content/companies'
 import type { CompanionDef, DeedId } from './content/companions'
 import { COMPANIONS, DEED_LABELS, TEMPERS } from './content/companions'
+import { COURT_TEMPER_DEFS } from './content/courtier'
 import { CRAFT_MASTERS } from './content/craft'
 import type { SlotId } from './content/equipment'
 import { ITEMS_BY_ID, SLOT_IDS } from './content/equipment'
@@ -1123,6 +1134,9 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Приказ (этап 108): послать велённое в своё место и отозвать с дороги. */
+  | { readonly type: 'sendBehest'; readonly kind: BehestKind; readonly locationId: string }
+  | { readonly type: 'recallBehest'; readonly behestId: string }
   /** День государя (этап 107): разобрать дело самому или передать своему. */
   | { readonly type: 'hearMatter'; readonly matterId: string }
   | { readonly type: 'handMatter'; readonly matterId: string }
@@ -1639,6 +1653,10 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'sendBehest':
+      return sendBehest(state, command.kind, command.locationId)
+    case 'recallBehest':
+      return recallBehest(state, command.behestId)
     case 'hearMatter':
       return hearMatter(state, command.matterId)
     case 'handMatter':
@@ -9583,6 +9601,13 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  behests: readonly Behest[]
+  behestLog: {
+    readonly sent: number
+    readonly full: number
+    readonly twisted: number
+    readonly none: number
+  }
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9694,6 +9719,8 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    behests: state.behests ?? [],
+    behestLog: state.behestLog ?? { sent: 0, full: 0, twisted: 0, none: 0 },
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9986,6 +10013,8 @@ function close(draft: Draft): CommandResult {
     tickCampaign(draft, daysPassed)
     // То, на что не хватило внимания, решается без тебя (этап 107).
     tickDoorway(draft, daysPassed)
+    // Приказы идут дорогой, исполняются чужими руками и возвращаются отчётом (этап 108).
+    tickBehests(draft, daysPassed)
     // Двор просит, стареет и уходит (этап 104).
     tickCourtiers(draft, daysPassed)
     // Посланные смотреть возвращаются (этап 102).
@@ -10147,6 +10176,8 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    behests: draft.behests,
+    behestLog: draft.behestLog,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -11285,7 +11316,7 @@ function leaveCommission(state: GameState): CommandResult {
     draft.renown = Math.max(0, draft.renown - 2)
     notice(
       draft,
-      `Ты ушёл со службы раньше срока. Такое помнят: наёмник, бросивший войну, дорожает только для дураков.`,
+      'Ты ушёл со службы раньше срока. Такое помнят: наёмник, бросивший войну, дорожает только для дураков.',
       'war',
     )
   } else {
@@ -11890,6 +11921,161 @@ function handMatter(state: GameState, matterId: string): CommandResult {
     'people',
   )
   return close(draft)
+}
+
+/**
+ * Послать приказ (этап 108, Пр1).
+ *
+ * Между твоим словом и делом на земле есть дорога и есть человек. Приказ
+ * уходит сегодня, доходит через столько суток, сколько переходов до места, и
+ * возвращается отчётом ещё столько же. Пока он в дороге, ты не знаешь о нём
+ * ничего — только день, на который его ждут.
+ */
+function sendBehest(state: GameState, kind: BehestKind, locationId: string): CommandResult {
+  const settlement = state.settlements[locationId]
+  if (!settlement) return fail('invalid', 'Такого места нет.')
+  if (settlement.owner !== PLAYER) return fail('requirements', 'Велеть можно только в своём месте.')
+  const day = dayOf(state.time)
+  const already = (state.behests ?? []).find(
+    (one) => one.locationId === locationId && one.kind === kind,
+  )
+  if (already) return fail('invalid', 'Такой приказ туда уже послан.')
+
+  const draft = open(state)
+  advance(draft, hours(1))
+  const plan = behestPlan(draft.world, state.locationId, locationId, kind, day)
+  const hand = handFor(state, kind, day)
+  const behest: Behest = { ...plan, byOffice: hand?.office ?? null }
+  draft.behests = [...draft.behests, behest]
+  draft.behestLog = { ...draft.behestLog, sent: draft.behestLog.sent + 1 }
+  const where = draft.world.locations[locationId]?.name ?? locationId
+  const by = hand
+    ? `Повезут ${hand.name}у (${COURT_TEMPER_DEFS[hand.temper].label}).`
+    : 'Поручить некому: повезёт гонец.'
+  notice(
+    draft,
+    `${BEHEST_WORDS.sent} ${BEHEST_DEFS[kind].label} в ${where}: дойдёт на ${behest.arrivesDay}-й день, отчёт ждать к ${behest.backDay}-му. ${by}`,
+    'people',
+  )
+  return close(draft)
+}
+
+/**
+ * Отозвать приказ (этап 108, Пр5).
+ *
+ * Пока гонец в дороге, слово можно вернуть. Как только приказ на месте,
+ * поздно: дело уже идёт чужими руками.
+ */
+function recallBehest(state: GameState, behestId: string): CommandResult {
+  const behest = (state.behests ?? []).find((one) => one.id === behestId)
+  if (!behest) return fail('invalid', 'Такого приказа нет.')
+  const day = dayOf(state.time)
+  if (!recallable(behest, day)) return fail('requirements', BEHEST_WORDS.late)
+
+  const draft = open(state)
+  advance(draft, hours(1))
+  draft.behests = draft.behests.filter((one) => one.id !== behestId)
+  notice(draft, `${BEHEST_DEFS[behest.kind].label}: ${BEHEST_WORDS.recalled}`, 'people')
+  return close(draft)
+}
+
+/** Что вышло на земле: приказ исполняют чужие руки, и доля решает всё. */
+function doBehest(draft: Draft, behest: Behest, share: number): string {
+  const settlement = draft.settlements[behest.locationId]
+  if (!settlement) return 'Места уже нет: приказ пропал.'
+  const where = draft.world.locations[behest.locationId]?.name ?? behest.locationId
+  if (behest.kind === 'collect') {
+    const take = Math.round(dailyTax(settlement, foodSecurity(settlement)) * 120 * share)
+    patch(draft, { money: draft.character.money + take })
+    // Взятое вперёд берут не из воздуха: округа беднеет людьми и злеет.
+    draft.settlements = {
+      ...draft.settlements,
+      [behest.locationId]: {
+        ...settlement,
+        recruits: Math.round(settlement.recruits * 0.8),
+        banditry: Math.min(1, settlement.banditry + 0.05 * share),
+      },
+    }
+    draft.reputation = withPlaceRep(draft.reputation, behest.locationId, -8)
+    return `${where}: взято ${take} серебра вперёд, и это там запомнили.`
+  }
+  if (behest.kind === 'muster') {
+    const men = Math.max(0, Math.round(settlement.recruits * 0.3 * share))
+    draft.settlements = {
+      ...draft.settlements,
+      [behest.locationId]: {
+        ...settlement,
+        recruits: Math.max(0, settlement.recruits - men),
+        garrison: {
+          ...settlement.garrison,
+          militia: (settlement.garrison.militia ?? 0) + men,
+        },
+      },
+    }
+    return `${where}: под ружьё поставлено ${men} человек.`
+  }
+  if (behest.kind === 'build') {
+    if (settlement.building) return `${where}: там и так строят, приказ лёг сверху.`
+    const kind = String(draft.world.locations[behest.locationId]?.archetype ?? 'village')
+    const want = BUILDING_IDS.find(
+      (id) =>
+        !settlement.buildings.includes(id) &&
+        ((BUILDINGS[id].where as readonly string[] | undefined)?.includes(kind) ?? true),
+    )
+    if (!want || freeSlots(draft.world, settlement) <= 0) return `${where}: строить негде.`
+    const days = Math.round(BUILDINGS[want].days / Math.max(0.4, share))
+    draft.settlements = {
+      ...draft.settlements,
+      [behest.locationId]: { ...settlement, building: { id: want, daysLeft: days } },
+    }
+    return `${where}: заложено — ${BUILDINGS[want].label.toLowerCase()}, работы на ${days} суток.`
+  }
+  if (behest.kind === 'relieve') {
+    const gain = Math.round(12 * share)
+    draft.reputation = withPlaceRep(draft.reputation, behest.locationId, gain)
+    return `${where}: недоимку простили, память места выросла на ${gain}.`
+  }
+  const was = settlement.banditry
+  draft.settlements = {
+    ...draft.settlements,
+    [behest.locationId]: {
+      ...settlement,
+      banditry: Math.max(0, was - 0.3 * share),
+    },
+  }
+  draft.reputation = withPlaceRep(draft.reputation, behest.locationId, -4)
+  return `${where}: разбой ${was.toFixed(2)} → ${Math.max(0, was - 0.3 * share).toFixed(2)}, и там это запомнили.`
+}
+
+/**
+ * Приказы в дороге (этап 108, Пр2, Пр3, Пр4 и Пр6).
+ *
+ * Дело делается в свой день, а знаешь ты о нём только когда вернётся отчёт.
+ * Что выйдет — решает нрав того, чьими руками: ревностный сделает больше
+ * велённого, дошлый оставит себе, усталый сделает вполовину, гордый — по-своему.
+ */
+function tickBehests(draft: Draft, days: number): void {
+  if (days <= 0 || draft.behests.length === 0) return
+  const day = dayOf(draft.time)
+  const kept: Behest[] = []
+  for (const behest of draft.behests) {
+    // Дело сделано в свой день, но узнаёшь ты о нём, когда дойдёт отчёт.
+    if (day < behest.backDay) {
+      kept.push(behest)
+      continue
+    }
+    const hand = handFor(draft.base, behest.kind, behest.doneDay)
+    const out = outcomeOf(hand)
+    const what = doBehest(draft, behest, out.share)
+    draft.behestLog = {
+      ...draft.behestLog,
+      full: draft.behestLog.full + (out.outcome === 'full' ? 1 : 0),
+      twisted: draft.behestLog.twisted + (out.outcome === 'own' || out.outcome === 'short' ? 1 : 0),
+      none: draft.behestLog.none + (out.outcome === 'none' ? 1 : 0),
+    }
+    notice(draft, `${out.says} ${what}`, 'people')
+  }
+  draft.behests = kept
 }
 
 /**

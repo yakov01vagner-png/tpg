@@ -1,6 +1,7 @@
 import type { Band, GarrisonOrder } from './band'
 import { musterBands } from './band'
 import type { Battle } from './battle'
+import type { Behest } from './behest'
 import { startSway } from './brother'
 import type { OrderSway } from './brother'
 import type { Brotherhood } from './brotherhood'
@@ -407,6 +408,15 @@ export interface GameState {
   }
   /** Дела, которые ты уже разобрал или передал: чтобы не звали дважды. */
   readonly settled?: Readonly<Record<string, number>>
+  /** Приказы, которые сейчас в дороге или в работе (этап 108). */
+  readonly behests?: readonly Behest[]
+  /** Чем кончались прежние приказы: исполнением, своеволием или ничем. */
+  readonly behestLog?: {
+    readonly sent: number
+    readonly full: number
+    readonly twisted: number
+    readonly none: number
+  }
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -532,6 +542,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     favours: {},
     ruleLog: { heard: 0, handed: 0, missed: 0 },
     settled: {},
+    behests: [],
+    behestLog: { sent: 0, full: 0, twisted: 0, none: 0 },
     factions: {},
     spellcraft: {},
     weather: [],
