@@ -19,6 +19,7 @@ import type { BuildingId } from './content/buildings'
 import { COMPANIES } from './content/companies'
 import type { IntentId } from './content/dispatch'
 import { PLAIN_LAW } from './content/estate'
+import type { PlayerAim } from './content/guess'
 import type { Ailment } from './content/heal'
 import type { LordDeedId } from './content/lords'
 import type { QuarterId } from './content/quarters'
@@ -414,6 +415,18 @@ export interface GameState {
   }
   /** Дела, которые ты уже разобрал или передал: чтобы не звали дважды. */
   readonly settled?: Readonly<Record<string, number>>
+  /** К какому выводу о твоём замысле пришла каждая корона (этап 119). */
+  readonly guesses?: Readonly<
+    Record<string, { readonly aim: PlayerAim; readonly sinceDay: number; readonly right: boolean }>
+  >
+  /** Сколько раз она уже видела свои приметы: она учится на повторяющемся. */
+  readonly tellSeen?: Readonly<Record<string, number>>
+  readonly guessLog?: {
+    readonly made: number
+    readonly right: number
+    readonly wrong: number
+    readonly confused: number
+  }
   /** Постоянные послы при чужих дворах (этап 117). */
   readonly residents?: readonly Resident[]
   readonly residentLog?: {
@@ -607,6 +620,9 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     favours: {},
     ruleLog: { heard: 0, handed: 0, missed: 0 },
     settled: {},
+    guesses: {},
+    tellSeen: {},
+    guessLog: { made: 0, right: 0, wrong: 0, confused: 0 },
     residents: [],
     residentLog: { seated: 0, words: 0, lost: 0 },
     proofs: [],

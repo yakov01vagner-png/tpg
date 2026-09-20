@@ -435,6 +435,15 @@ import {
   talkWords,
 } from './gossip'
 import {
+  GUESS,
+  GUESS_WORDS,
+  PLAYER_AIM_DEFS,
+  type PlayerAim,
+  guessAim,
+  tellsOf,
+  trueAim,
+} from './guess'
+import {
   type SickWhere,
   ailmentDef,
   ailmentHolds,
@@ -9799,6 +9808,16 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  guesses: Readonly<
+    Record<string, { readonly aim: PlayerAim; readonly sinceDay: number; readonly right: boolean }>
+  >
+  tellSeen: Readonly<Record<string, number>>
+  guessLog: {
+    readonly made: number
+    readonly right: number
+    readonly wrong: number
+    readonly confused: number
+  }
   residents: readonly Resident[]
   residentLog: { readonly seated: number; readonly words: number; readonly lost: number }
   proofs: readonly Proof[]
@@ -9959,6 +9978,9 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    guesses: state.guesses ?? {},
+    tellSeen: state.tellSeen ?? {},
+    guessLog: state.guessLog ?? { made: 0, right: 0, wrong: 0, confused: 0 },
     residents: state.residents ?? [],
     residentLog: state.residentLog ?? { seated: 0, words: 0, lost: 0 },
     proofs: state.proofs ?? [],
@@ -10287,6 +10309,8 @@ function close(draft: Draft): CommandResult {
     tickGuests(draft, daysPassed)
     // Постоянные послы пишут, дорожают и попадаются (этап 117).
     tickResidents(draft, daysPassed)
+    // Короны читают твои ходы и делают выводы (этап 119).
+    tickGuesses(draft, daysPassed)
     // Двор просит, стареет и уходит (этап 104).
     tickCourtiers(draft, daysPassed)
     // Посланные смотреть возвращаются (этап 102).
@@ -10448,6 +10472,9 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    guesses: draft.guesses,
+    tellSeen: draft.tellSeen,
+    guessLog: draft.guessLog,
     residents: draft.residents,
     residentLog: draft.residentLog,
     proofs: draft.proofs,
@@ -12258,6 +12285,80 @@ function handMatter(state: GameState, matterId: string): CommandResult {
     'people',
   )
   return close(draft)
+}
+
+/**
+ * Короны делают выводы (этап 119, Вы1–Вы5).
+ *
+ * Раз в две недели каждая корона, которой ты вообще интересен, смотрит на твои
+ * приметы и называет твой замысел. Вывод хранится: по нему она готовится
+ * заранее, а повторяющиеся приметы она замечает быстрее случайных.
+ */
+function tickGuesses(draft: Draft, days: number): void {
+  if (days <= 0 || !draft.realm) return
+  const day = dayOf(draft.time)
+  if (day % GUESS.beat !== 0) return
+  for (const side of Object.keys(draft.base.world.kingdoms)) {
+    const interested =
+      atWar(draft.politics, PLAYER, side) ||
+      Math.abs(relationOf(draft.politics, PLAYER, side)) >= 15
+    if (!interested) continue
+    const guessed = guessAim(draft.base, draft.world, side, day)
+    const tells = tellsOf(draft.base, draft.world, side, day).filter((one) => one.kind !== 'noise')
+    // Он учится на повторяющемся: те же приметы в следующий раз видны быстрее.
+    if (tells.length > 0) {
+      draft.tellSeen = {
+        ...draft.tellSeen,
+        [side]: Math.min(6, (draft.tellSeen[side] ?? 0) + 1),
+      }
+    } else {
+      draft.tellSeen = { ...draft.tellSeen, [side]: Math.max(0, (draft.tellSeen[side] ?? 0) - 1) }
+    }
+    const had = draft.guesses[side]
+    if (had?.aim === guessed.aim) continue
+    draft.guesses = {
+      ...draft.guesses,
+      [side]: { aim: guessed.aim, sinceDay: day, right: guessed.right },
+    }
+    draft.guessLog = {
+      ...draft.guessLog,
+      made: draft.guessLog.made + 1,
+      right: draft.guessLog.right + (guessed.right ? 1 : 0),
+      wrong: draft.guessLog.wrong + (guessed.right ? 0 : 1),
+      confused: draft.guessLog.confused + (guessed.aim === 'none' ? 1 : 0),
+    }
+    // Он готовится заранее (Вы3): гарнизоны по границе усиливают, хлеб свозят
+    // за стены. Это настоящая подготовка, а не надпись: брать станет дороже.
+    if (guessed.aim === 'takeLand' && guessed.confidence >= GUESS.acts) {
+      const theirs = Object.values(draft.settlements).filter((one) => {
+        if (!one.owner) return false
+        if (one.owner === `crown:${side}`) return true
+        return draft.politics.lords.some((lord) => lord.id === one.owner && lord.kingdomId === side)
+      })
+      let places = draft.settlements
+      for (const place of theirs.slice(0, 6)) {
+        const now = garrisonSize(place)
+        const want = Math.round(now * GUESS.readyGarrison)
+        const add = Math.max(0, Math.min(want - now, garrisonLimit(draft.world, place) - now))
+        if (add <= 0) continue
+        places = {
+          ...places,
+          [place.locationId]: {
+            ...place,
+            garrison: { ...place.garrison, militia: (place.garrison.militia ?? 0) + add },
+          },
+        }
+      }
+      draft.settlements = places
+    }
+    // О выводе узнаёшь, если у тебя есть там глаза: иначе он просто есть.
+    if (!canSeePicture(draft.base, side).can) continue
+    notice(
+      draft,
+      `${kingdomName(draft.base, side)}: ${guessed.says} ${PLAYER_AIM_DEFS[guessed.aim].prepares}`,
+      'world',
+    )
+  }
 }
 
 /**
