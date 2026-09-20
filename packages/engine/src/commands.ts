@@ -250,6 +250,18 @@ import {
 import { JESTER_MORALE, RECRUITER_PRICE, THIEF_SHARE } from './content/year'
 import type { CourtChoice } from './court'
 import { courtCase, vassalsOf } from './court'
+import {
+  COURTIER,
+  askWords,
+  asksNow,
+  careerWords,
+  courtWantDef,
+  courtierAt,
+  courtiersOf,
+  endsNow,
+  leavesSoon,
+  voiceOf,
+} from './courtier'
 import type { CechMembership } from './craft'
 import {
   CECH_DUES,
@@ -1096,6 +1108,8 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Люди двора (этап 104): исполнить просьбу своего или отказать. */
+  | { readonly type: 'answerCourtier'; readonly office: OfficeId; readonly grant: boolean }
   /** Свои глаза (этап 102): объехать державу, послать человека смотреть. */
   | { readonly type: 'rideOut' }
   | { readonly type: 'sendLook'; readonly locationId: string }
@@ -1605,6 +1619,8 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'answerCourtier':
+      return answerCourtier(state, command.office, command.grant)
     case 'rideOut':
       return rideOut(state)
     case 'sendLook':
@@ -9538,6 +9554,7 @@ interface Draft {
   gossip: readonly Talk[]
   looks: readonly Look[]
   trust: Readonly<Record<string, { readonly said: number; readonly lied: number }>>
+  favours: Readonly<Record<string, number>>
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9646,6 +9663,7 @@ function open(state: GameState): Draft {
     gossip: state.gossip ?? [],
     looks: state.looks ?? [],
     trust: state.trust ?? {},
+    favours: state.favours ?? {},
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9936,6 +9954,8 @@ function close(draft: Draft): CommandResult {
 
     // Войско ест каждый день, а донесения идут своим ходом (этап 84, Ка3 и Ка5).
     tickCampaign(draft, daysPassed)
+    // Двор просит, стареет и уходит (этап 104).
+    tickCourtiers(draft, daysPassed)
     // Посланные смотреть возвращаются (этап 102).
     tickLooks(draft, daysPassed)
     // Молва ходит по местам и стихает сама (этап 101).
@@ -10092,6 +10112,7 @@ function close(draft: Draft): CommandResult {
     gossip: draft.gossip,
     looks: draft.looks,
     trust: draft.trust,
+    favours: draft.favours,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -11765,6 +11786,84 @@ function shutOwnHarbours(draft: Draft, days: number): void {
     notice(draft, `Чужие суда держат твои гавани: заперто ${shut}. Пошлина не идёт.`, 'war')
   }
 }
+
+/**
+ * Ответить своему (этап 104, Дв2 и Дв5).
+ *
+ * У каждого при дворе есть своё желание, и оно стоит того, чего стоит: серебра,
+ * лена, слова при всех или места для его родни. Исполненное помнится годами —
+ * и отказ тоже.
+ */
+function answerCourtier(state: GameState, office: OfficeId, grant: boolean): CommandResult {
+  const day = dayOf(state.time)
+  const courtier = courtierAt(state, office, day)
+  if (!courtier) return fail('invalid', 'Эта должность пуста.')
+  const def = courtWantDef(courtier.wants)
+
+  const draft = open(state)
+  advance(draft, hours(3))
+  const had = draft.favours?.[courtier.id] ?? 0
+  if (!grant) {
+    draft.favours = { ...(draft.favours ?? {}), [courtier.id]: had - 1 }
+    notice(draft, `${voiceOf(courtier, def.says)} — отказано. Такое помнят.`, 'people')
+    return close(draft)
+  }
+  // Исполнить стоит того, что просят: серебром, землёй или словом.
+  if (courtier.wants === 'coin') {
+    const price = 1200
+    if (draft.character.money < price) {
+      return fail('noMoney', `Прибавка стоит ${price}, у тебя ${draft.character.money}.`)
+    }
+    addMoney(draft, -price)
+  }
+  if (courtier.wants === 'land') {
+    const mine = [...holdingsOf(draft.settlements, PLAYER)].sort(
+      (a, b) => a.population - b.population,
+    )[0]
+    if (!mine) return fail('requirements', 'Земли, которую можно дать, нет.')
+    draft.settlements = {
+      ...draft.settlements,
+      [mine.locationId]: { ...mine, owner: courtier.id },
+    }
+  }
+  if (courtier.wants === 'name') draft.renown = Math.max(0, draft.renown - 1)
+  draft.favours = { ...(draft.favours ?? {}), [courtier.id]: had + 1 }
+  notice(
+    draft,
+    `${voiceOf(courtier, def.says)} — исполнено (${def.costs}). Верность ${courtier.loyalty} → ${Math.min(100, courtier.loyalty + COURTIER.granted)}.`,
+    'people',
+  )
+  return close(draft)
+}
+
+/**
+ * Сутки двора (этап 104, Дв2 и Дв3).
+ *
+ * Люди двора просят, стареют и уходят: раз в полгода кто-нибудь заговаривает о
+ * своём, а годы делают своё дело — место освобождается не по твоей воле.
+ */
+function tickCourtiers(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % COURT_BEAT !== 0) return
+  for (const courtier of courtiersOf(draft.base, day)) {
+    if (endsNow(courtier)) {
+      const offices = { ...(draft.offices ?? {}) }
+      delete offices[courtier.office]
+      draft.offices = offices
+      notice(draft, careerWords(courtier), 'people')
+      continue
+    }
+    if (leavesSoon(courtier) && day % (COURT_BEAT * 12) === 0) {
+      notice(draft, careerWords(courtier), 'people')
+      continue
+    }
+    if (asksNow(courtier, day)) notice(draft, askWords(courtier), 'people')
+  }
+}
+
+/** Как часто двор подаёт голос. */
+const COURT_BEAT = 30
 
 /**
  * Объехать державу (этап 102, Г1–Г3).
