@@ -354,6 +354,16 @@ import {
 } from './embassy'
 import type { Enterprise } from './enterprise'
 import { CARAVAN_COST, SHIPPING_COST, WORKSHOP_COST, tickEnterprises } from './enterprise'
+import {
+  ENVOY,
+  ENVOY_WORDS,
+  SHOW_DEFS,
+  type ShowKind,
+  envoySight,
+  envoyWords,
+  guestNow,
+  showTo,
+} from './envoy'
 import { gearBonus, horseCarry, repairCost, withItem } from './equipment'
 import { errandKindOf, errandsAt } from './errand'
 import {
@@ -1186,6 +1196,8 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Чужой посол (этап 114): решить, что ему показать. */
+  | { readonly type: 'showGuest'; readonly show: ShowKind }
   /** Осада вслепую (этап 113): что видно из-под стен, блеф, перебежчик, знамёна. */
   | { readonly type: 'weighSiege' }
   | { readonly type: 'bluffParley' }
@@ -1725,6 +1737,8 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'showGuest':
+      return showGuest(state, command.show)
     case 'weighSiege':
       return weighSiege(state)
     case 'bluffParley':
@@ -9716,6 +9730,13 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  showing: Readonly<Record<string, 'plain' | 'strong' | 'poor'>>
+  envoyLog: {
+    readonly sent: number
+    readonly brought: number
+    readonly offSum: number
+    readonly guests: number
+  }
   siegeLog: {
     readonly byKnowing: number
     readonly byWalls: number
@@ -9852,6 +9873,8 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    showing: state.showing ?? {},
+    envoyLog: state.envoyLog ?? { sent: 0, brought: 0, offSum: 0, guests: 0 },
     siegeLog: state.siegeLog ?? { byKnowing: 0, byWalls: 0, bluffs: 0, defectors: 0 },
     ruses: state.ruses ?? [],
     ruseLog: state.ruseLog ?? { made: 0, worked: 0, seen: 0 },
@@ -10167,6 +10190,8 @@ function close(draft: Draft): CommandResult {
     tickRuses(draft, daysPassed)
     // Из осаждённого города по ночам кто-нибудь да перелезет (этап 113).
     tickDefectors(draft, daysPassed)
+    // Чужие послы приезжают смотреть и уезжают с тем, что увидели (этап 114).
+    tickGuests(draft, daysPassed)
     // Двор просит, стареет и уходит (этап 104).
     tickCourtiers(draft, daysPassed)
     // Посланные смотреть возвращаются (этап 102).
@@ -10328,6 +10353,8 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    showing: draft.showing,
+    envoyLog: draft.envoyLog,
     siegeLog: draft.siegeLog,
     ruses: draft.ruses,
     ruseLog: draft.ruseLog,
@@ -12107,6 +12134,68 @@ function handMatter(state: GameState, matterId: string): CommandResult {
     'people',
   )
   return close(draft)
+}
+
+/**
+ * Показать гостю то, что решил (этап 114, Пс4 и Пс5).
+ *
+ * Чужой посол приезжает смотреть, а не только говорить. Что он увезёт, решаешь
+ * ты — но приметливый видит показное, и тогда он увозит правду и своё мнение о
+ * тебе заодно.
+ */
+function showGuest(state: GameState, show: ShowKind): CommandResult {
+  const day = dayOf(state.time)
+  const guest = guestNow(state, state.world, day)
+  if (!guest || day >= guest.untilDay) return fail('invalid', 'Гостей у тебя сейчас нет.')
+  const def = SHOW_DEFS[show]
+  if (state.character.money < def.cost) {
+    return fail('noMoney', `На это нужно ${def.cost} серебра.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(6))
+  if (def.cost > 0) addMoney(draft, -def.cost)
+  draft.showing = { ...draft.showing, [guest.from]: show }
+  const seen = showTo(state, state.world, guest, show, day)
+  notice(draft, seen.says, 'world')
+  return close(draft)
+}
+
+/**
+ * Чужие послы приезжают и уезжают (этап 114, Пс4).
+ *
+ * Уезжая, гость кладёт весть о тебе в знание своей короны — то самое, из
+ * которого она потом считает, стоит ли с тобой воевать.
+ */
+function tickGuests(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  const guest = guestNow(draft.base, draft.world, day)
+  if (!guest) return
+  if (day === guest.sinceDay) {
+    draft.envoyLog = { ...draft.envoyLog, guests: draft.envoyLog.guests + 1 }
+    notice(draft, guest.says, 'world')
+    return
+  }
+  if (day !== guest.untilDay) return
+  const show = draft.showing[guest.from] ?? 'plain'
+  const seen = showTo(draft.base, draft.world, guest, show, day)
+  draft.words = withSightings(draft.words, [
+    {
+      id: `guest:${guest.from}:${day}`,
+      to: guest.from,
+      kind: 'strength',
+      about: PLAYER,
+      value: seen.sees,
+      source: 'envoy',
+      from: guest.name,
+      day,
+    },
+  ])
+  const shown = { ...draft.showing }
+  delete shown[guest.from]
+  draft.showing = shown
+  notice(draft, `${ENVOY_WORDS.saw} ${seen.says}`, 'world')
 }
 
 /**
@@ -14451,6 +14540,24 @@ function returnEmbassies(draft: Draft): void {
     draft.rng = afterRoll
     const yes = weight + roll * 0.25 >= 0.5
     const name = kingdomName(draft.base, embassy.to)
+    // Посол привозит не только ответ: он привозит картину чужого двора — свою
+    // (этап 114, Пс1 и Пс2). Письмо не привозит ничего: у письма нет глаз.
+    if (!embassy.byLetter) {
+      const sight = envoySight(draft.base, draft.world, embassy.to, envoy, day)
+      const brought = envoyWords(sight, embassy.to, day, embassy.id)
+      draft.words = withSightings(draft.words, brought)
+      draft.envoyLog = {
+        ...draft.envoyLog,
+        sent: draft.envoyLog.sent + 1,
+        brought: draft.envoyLog.brought + brought.length,
+        offSum: draft.envoyLog.offSum + Math.abs(sight.off) * brought.length,
+      }
+      notice(
+        draft,
+        `${sight.says} Говорит: сила ${sight.strength}, казна около ${sight.purse}${sight.aim === 'unclear' ? '; замысла не разобрал' : `, замысел — ${sight.aim}`}.`,
+        'world',
+      )
+    }
     if (!yes) {
       draft.politics = withRelation(draft.politics, PLAYER, embassy.to, def.chills)
       notice(

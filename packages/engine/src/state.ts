@@ -412,6 +412,14 @@ export interface GameState {
   }
   /** Дела, которые ты уже разобрал или передал: чтобы не звали дважды. */
   readonly settled?: Readonly<Record<string, number>>
+  /** Чужой посол, который сейчас гостит, и что ему решили показать (этап 114). */
+  readonly showing?: Readonly<Record<string, 'plain' | 'strong' | 'poor'>>
+  readonly envoyLog?: {
+    readonly sent: number
+    readonly brought: number
+    readonly offSum: number
+    readonly guests: number
+  }
   /** Чем решались осады: знанием или стенами (этап 113). */
   readonly siegeLog?: {
     readonly byKnowing: number
@@ -571,6 +579,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     favours: {},
     ruleLog: { heard: 0, handed: 0, missed: 0 },
     settled: {},
+    showing: {},
+    envoyLog: { sent: 0, brought: 0, offSum: 0, guests: 0 },
     siegeLog: { byKnowing: 0, byWalls: 0, bluffs: 0, defectors: 0 },
     ruses: [],
     ruseLog: { made: 0, worked: 0, seen: 0 },
