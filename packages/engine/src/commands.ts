@@ -338,6 +338,7 @@ import {
   rankOfShifts,
   shiftsOf,
 } from './craft'
+import { CURVE, curveOf, curveSays } from './curve'
 import {
   AUDIENCE,
   AUDIENCE_WORDS,
@@ -10093,6 +10094,7 @@ interface Draft {
   theirEnd: { readonly who: string; readonly sinceDay: number; readonly served?: number } | null
   balanceLog: { readonly betrayals: number; readonly wars: number }
   reigns: Readonly<Record<string, number>>
+  curves: Readonly<Record<string, readonly number[]>>
   heirLog: { readonly kept: number; readonly changed: number }
   usedDay: Readonly<Record<string, number>>
   pathLog: {
@@ -10298,6 +10300,7 @@ function open(state: GameState): Draft {
     theirEnd: state.theirEnd ?? null,
     balanceLog: state.balanceLog ?? { betrayals: 0, wars: 0 },
     reigns: state.reigns ?? {},
+    curves: state.curves ?? {},
     heirLog: state.heirLog ?? { kept: 0, changed: 0 },
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
@@ -10666,6 +10669,8 @@ function close(draft: Draft): CommandResult {
     tickBalance(draft, daysPassed)
     // А государи сменяются, и путь либо переходит, либо переменяется (этап 144).
     tickHeirs(draft, daysPassed)
+    // Раз в год мир берёт замер: из замеров складываются долгие кривые (этап 145).
+    tickCurves(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10859,6 +10864,7 @@ function close(draft: Draft): CommandResult {
     theirEnd: draft.theirEnd,
     balanceLog: draft.balanceLog,
     reigns: draft.reigns,
+    curves: draft.curves,
     heirLog: draft.heirLog,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
@@ -13977,6 +13983,32 @@ function tickHeirs(draft: Draft, days: number): void {
     (id) => troubled(draft.base, draft.world, id, day).troubled,
   )
   if (sick) notice(draft, troubled(draft.base, draft.world, sick, day).says, 'world')
+}
+
+/**
+ * Замер кривой (этап 145, Дл1 и Дл5).
+ *
+ * Раз в год у каждой державы берётся одно число — земля. Больше ничего не
+ * хранится: направление, длительность и причины считаются из этих замеров.
+ */
+function tickCurves(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % CURVE.beat !== 0) return
+  const curves: Record<string, readonly number[]> = { ...draft.curves }
+  const sides: string[] = [PLAYER, ...Object.keys(draft.base.world.kingdoms)]
+  for (const who of sides) {
+    const now =
+      who === PLAYER ? holdingsOf(draft.settlements, PLAYER).length : crownPlaces(draft.base, who)
+    curves[who] = [...(curves[who] ?? []), now].slice(-CURVE.keep)
+  }
+  draft.curves = curves
+  // Раз в пять лет мир говорит о самом заметном процессе.
+  if (day % (CURVE.beat * 5) !== 0) return
+  const worst = Object.keys(draft.base.world.kingdoms)
+    .map((id) => ({ id, curve: curveOf(draft.base, draft.world, id, day) }))
+    .find((one) => one.curve.trend !== 'still')
+  if (worst) notice(draft, curveSays(draft.base, draft.world, worst.id, day), 'world')
 }
 
 /**

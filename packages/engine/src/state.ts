@@ -549,6 +549,13 @@ export interface GameState {
     readonly sinceDay: number
     readonly served?: number
   } | null
+  /**
+   * Кривые держав (этап 145): по замеру в год, двадцать замеров назад.
+   *
+   * Единственное, что здесь нельзя вывести: прошлое не выводится из настоящего.
+   * Всё остальное — направление, длительность, причины — считается из замеров.
+   */
+  readonly curves?: Readonly<Record<string, readonly number[]>>
   /** Колена корон (этап 144): какое колено правило в последний раз, когда смотрели. */
   readonly reigns?: Readonly<Record<string, number>>
   /** Наследство путей (этап 144): сколько путей пережило государя, сколько переменилось. */
@@ -818,6 +825,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     theirEnd: null,
     balanceLog: { betrayals: 0, wars: 0 },
     reigns: {},
+    curves: {},
     heirLog: { kept: 0, changed: 0 },
     usedDay: {},
     pathLog: { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
