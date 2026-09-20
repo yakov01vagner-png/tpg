@@ -120,6 +120,11 @@ export function truthOf(
     if (question.about === PLAYER) return null
     return crownGame(state, world, question.about, day).aim
   }
+  if (question.kind === 'way') {
+    // Продвижение по пути (этап 135) глазами не видно: его только слышат.
+    // Правда о нём считается в dread.ts, а сюда доходит вестями.
+    return null
+  }
   if (question.kind === 'purse') {
     if (question.about === PLAYER) return state.character.money
     // Чужая казна не лежит в состоянии: её считают по земле — и это догадка.

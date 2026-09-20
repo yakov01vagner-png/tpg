@@ -362,6 +362,7 @@ import {
   foesNear,
   linkTo,
 } from './dispatch'
+import { DREAD, DREAD_WORDS, dreadOf, dreadSeen, firstOf, rumouredWay, wayTruth } from './dread'
 import {
   PRIME_AGE,
   ageOf,
@@ -9953,6 +9954,7 @@ interface Draft {
   crownDebts: Readonly<Record<string, { readonly owed: number; readonly sinceDay: number }>>
   anointed: { readonly sinceDay: number } | null
   deeds: Readonly<Record<string, number>>
+  dreadLog: Readonly<Record<string, { readonly score: number; readonly sinceDay: number }>>
   usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
@@ -10142,6 +10144,7 @@ function open(state: GameState): Draft {
     crownDebts: state.crownDebts ?? {},
     anointed: state.anointed ?? null,
     deeds: state.deeds ?? {},
+    dreadLog: state.dreadLog ?? {},
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
@@ -10487,6 +10490,8 @@ function close(draft: Draft): CommandResult {
     tickLevers(draft, daysPassed)
     // Церковь смотрит, свой ты ей государь или ещё нет (этап 134).
     tickAnoint(draft, daysPassed)
+    // Молва разносит чужое продвижение, а короны считают, кто им опасен (этап 135).
+    tickDread(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10665,6 +10670,7 @@ function close(draft: Draft): CommandResult {
     crownDebts: draft.crownDebts,
     anointed: draft.anointed,
     deeds: draft.deeds,
+    dreadLog: draft.dreadLog,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
@@ -13027,6 +13033,61 @@ function tickAnoint(draft: Draft, days: number): void {
   }
   shiftVassals(draft, world.unrest, null)
   if (day % (FAITH.beat * 18) === 0) notice(draft, world.says, 'world')
+}
+
+/**
+ * Чужое продвижение расходится вестями, а страх считается по вестям (этап 135).
+ *
+ * Два такта в одном: раз в месяц молва разносит, кто как далеко зашёл, — до
+ * соседей вернее, до дальних с прибавкой; раз в двадцать суток короны
+ * пересчитывают, кто им опасен. Пути считаются по разу на сторону, а не по разу
+ * на пару: иначе такт не уложится в бюджет.
+ */
+function tickDread(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  const crowns = Object.keys(draft.base.world.kingdoms)
+  if (day % DREAD.wordBeat === 0) {
+    // Первым разносят про того, кто ближе всех к концу, и про тебя.
+    const first = firstOf(draft.base, draft.world, day)
+    const about = first.who === PLAYER ? [PLAYER] : [PLAYER, first.who]
+    const said: Word[] = []
+    for (const of of about) {
+      const truth = wayTruth(draft.base, draft.world, of, day)
+      if (truth === 0) continue
+      const loud = rumouredWay(draft.base, draft.world, of, day)
+      for (const who of crowns) {
+        if (who === of) continue
+        // Сосед слышит от своих и почти без прибавки; дальний — с торга.
+        const near = dreadOf(draft.base, draft.world, who, of, day).parts.some(
+          (one) => one.fear === 'near',
+        )
+        said.push({
+          id: `word:way:${of}:${who}:${day}`,
+          to: who,
+          kind: 'way',
+          about: of,
+          value: near ? truth : loud,
+          source: near ? 'envoy' : 'rumour',
+          from: null,
+          day,
+        })
+      }
+    }
+    for (const word of said) draft.words = bring(draft.words, word)
+  }
+  if (day % DREAD.beat !== 0) return
+  const log: Record<string, { readonly score: number; readonly sinceDay: number }> = {}
+  for (const who of crowns) {
+    const seen = dreadSeen(draft.base, draft.world, who, PLAYER, day)
+    if (!seen.dread.scared) continue
+    const was = draft.dreadLog[who]
+    log[who] = { score: seen.dread.score, sinceDay: was?.sinceDay ?? day }
+    if (!was) {
+      notice(draft, `${seen.says} ${DREAD_WORDS.counted}`, 'world')
+    }
+  }
+  draft.dreadLog = log
 }
 
 /**

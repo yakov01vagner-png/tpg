@@ -224,7 +224,15 @@ export function wayOf(
     left[left.indexOf(recognition.says)] =
       `не признали ${missing.length}: ${names.join(', ')} — ${recognition.step.about}`
   }
-  const share = Math.round((done / steps.length) * 100) / 100
+  // Доля считается не вехами, а тем, сколько набрано в каждой: корона,
+  // которую признали семеро из восьми, ближе к концу той, которую не признал
+  // никто, — а по вехам обе одинаковы (этап 135 меряет страх этой долей).
+  const share =
+    Math.round(
+      (steps.reduce((sum, one) => sum + Math.min(1, one.have / Math.max(1, one.step.need)), 0) /
+        steps.length) *
+        100,
+    ) / 100
   const finished = done === steps.length
   return {
     way,

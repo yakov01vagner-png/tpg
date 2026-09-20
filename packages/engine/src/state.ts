@@ -462,6 +462,15 @@ export interface GameState {
   readonly anointed?: { readonly sinceDay: number } | null
   /** Когда за каждое дело веры брались в последний раз (этап 134): второй раз не сразу. */
   readonly deeds?: Readonly<Record<string, number>>
+  /**
+   * Кто тебя боится и с какого дня (этап 135).
+   *
+   * Само число страха считается из мира и не хранится; хранится только день, с
+   * которого эта корона боится, — история, которую из состояния не вывести.
+   */
+  readonly dreadLog?: Readonly<
+    Record<string, { readonly score: number; readonly sinceDay: number }>
+  >
   /** Когда каждый навык трогали в последний раз (этап 125): он ржавеет. */
   readonly usedDay?: Readonly<Record<string, number>>
   /** Чем ты рос на самом деле (этап 124) и какие испытания уже брал. */
@@ -698,6 +707,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     crownDebts: {},
     anointed: null,
     deeds: {},
+    dreadLog: {},
     usedDay: {},
     pathLog: { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: {},

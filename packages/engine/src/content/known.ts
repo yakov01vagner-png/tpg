@@ -54,7 +54,7 @@ export const SOURCE_DEFS: Record<
 }
 
 /** О чём вообще бывает знание (З5): закрытый список вопросов. */
-export const QUESTIONS = ['strength', 'garrison', 'stores', 'host', 'aim', 'purse'] as const
+export const QUESTIONS = ['strength', 'garrison', 'stores', 'host', 'aim', 'purse', 'way'] as const
 export type QuestionKind = (typeof QUESTIONS)[number]
 
 export const ASKED_DEFS: Record<
@@ -67,6 +67,11 @@ export const ASKED_DEFS: Record<
   host: { label: 'войско', about: 'Где видели чужую дружину.', unit: '' },
   aim: { label: 'замысел', about: 'Чего эта сторона добивается.', unit: '' },
   purse: { label: 'казна', about: 'Сколько у неё серебра.', unit: '' },
+  way: {
+    label: 'продвижение',
+    about: 'Далеко ли эта сторона по своему пути (этап 135).',
+    unit: 'из ста',
+  },
 }
 
 export const KNOWN = {
