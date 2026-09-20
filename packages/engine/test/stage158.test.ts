@@ -52,12 +52,13 @@ describe('Эк1–Эк6: экран пути', () => {
     const state = ruler(12)
     const screen = wayScreen(state, world)
     console.log(screen.says)
-    for (const line of screen.lines) console.log(`${line.label}: ${line.value} — ${line.hint}`)
+    for (const line of screen.lines)
+      console.log(`${line.label}: ${line.value} — ${line.hint ?? ''}`)
     for (const deed of screen.deeds)
       console.log(`дело: ${deed.label} (${deed.can ? 'можно' : 'нельзя'}) — ${deed.why}`)
     expect(screen.lines).toHaveLength(5)
     // Правило этапа 97: ни одного числа без пояснения.
-    for (const line of screen.lines) expect(line.hint.length).toBeGreaterThan(10)
+    for (const line of screen.lines) expect((line.hint ?? '').length).toBeGreaterThan(10)
     expect(screen.deeds.length).toBeGreaterThan(0)
 
     // И экран кончается делом, которое и правда исполняется.

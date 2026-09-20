@@ -511,6 +511,47 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
     pathLog: data.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: data.trials ?? {},
   }),
+  // 0.9 «Добыча»: пути, равновесие, век, поражение и конец (130–160).
+  24: (data) => ({
+    ...data,
+    // Пути (130–134): объединение, дом, долги корон, помазание.
+    union: data.union ?? null,
+    recognitions: data.recognitions ?? {},
+    houseBest: data.houseBest ?? { places: 0, titleTier: 0, shames: 0, day: 0 },
+    raised: data.raised ?? 0,
+    crownDebts: data.crownDebts ?? {},
+    anointed: data.anointed ?? null,
+    deeds: data.deeds ?? {},
+    // Равновесие (135–139): страх, коалиции, поручительства, признание, тишина.
+    dreadLog: data.dreadLog ?? {},
+    league: data.league ?? null,
+    leagueBought: data.leagueBought ?? {},
+    leagueLog: data.leagueLog ?? { formed: 0, bought: 0, against: [] },
+    guarantees: data.guarantees ?? [],
+    hands: data.hands ?? [],
+    given: data.given ?? {},
+    recalls: data.recalls ?? [],
+    quiet: data.quiet ?? null,
+    wrongCalls: data.wrongCalls ?? [],
+    // Короны идут к своему (140–144): пути корон, гонка, чужой конец, колена.
+    crownWays: data.crownWays ?? {},
+    raceLog: data.raceLog ?? { steps: 0, done: [], shares: {} },
+    theirEnd: data.theirEnd ?? null,
+    balanceLog: data.balanceLog ?? { betrayals: 0, wars: 0 },
+    reigns: data.reigns ?? {},
+    heirLog: data.heirLog ?? { kept: 0, changed: 0 },
+    // Век (145–149): кривые, эпохи, летопись как счёт.
+    curves: data.curves ?? {},
+    era: data.era ?? null,
+    eraLog: data.eraLog ?? [],
+    annals: data.annals ?? { added: 0, lastDay: 0 },
+    // Поражение, которое не смерть (150–153), и предания (157).
+    taken: data.taken ?? [],
+    ransomLog: data.ransomLog ?? { taken: 0, freed: 0, paid: 0 },
+    fallenLog: data.fallenLog ?? [],
+    exile: data.exile ?? null,
+    legends: data.legends ?? [],
+  }),
 }
 
 export type LoadResult =
