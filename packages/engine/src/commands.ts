@@ -153,6 +153,7 @@ import {
   riotRisk,
   sideOfAsk,
 } from './city'
+import { coinAfterBeat, poorHaste, poorPressure } from './coin'
 import {
   COMEBACK,
   COMEBACK_WORDS,
@@ -227,6 +228,7 @@ import { ENVOY_FAVOUR } from './content/casus'
 import type { ChainDef } from './content/chains'
 import { CENSURE_DEFS } from './content/church'
 import type { CityAsk } from './content/city'
+import { COIN, COIN_WORDS } from './content/coin'
 import { COMPANY_WORDS, TEMPER_DEFS } from './content/companies'
 import type { CompanionDef, DeedId } from './content/companions'
 import { COMPANIONS, DEED_LABELS, TEMPERS } from './content/companions'
@@ -300,6 +302,7 @@ import { SITES } from './content/sites'
 import type { SpellDef, SpellWhere } from './content/spells'
 import { SPELLS_BY_ID } from './content/spells'
 import { TONES, TOPICS_BY_ID } from './content/talk'
+import { TALLY } from './content/tally'
 import { TIDINGS, TIDINGS_WORDS } from './content/tidings'
 import type { TroopId } from './content/troops'
 import { TROOPS, TROOP_FOOD_PER_DAY } from './content/troops'
@@ -10105,6 +10108,9 @@ interface Draft {
   recognitions: Readonly<Record<string, number>>
   union: { readonly sinceDay: number } | null
   crownDebts: Readonly<Record<string, { readonly owed: number; readonly sinceDay: number }>>
+  /** Казна корон и счёт их разорений (этап 165). */
+  crownCoin: Readonly<Record<string, number>>
+  coinLog: Readonly<Record<string, number>>
   anointed: { readonly sinceDay: number } | null
   deeds: Readonly<Record<string, number>>
   dreadLog: Readonly<Record<string, { readonly score: number; readonly sinceDay: number }>>
@@ -10370,6 +10376,8 @@ function open(state: GameState): Draft {
     recognitions: state.recognitions ?? {},
     union: state.union ?? null,
     crownDebts: state.crownDebts ?? {},
+    crownCoin: state.crownCoin ?? {},
+    coinLog: state.coinLog ?? {},
     anointed: state.anointed ?? null,
     deeds: state.deeds ?? {},
     dreadLog: state.dreadLog ?? {},
@@ -10521,6 +10529,8 @@ function close(draft: Draft): CommandResult {
     draft.settlements = life.settlements
     draft.events.push(...worldNews(draft.base, draft.locationId, life.events))
 
+    // Счёт войны на пятидневку: один и тот же счёт на все сутки такта.
+    const reckoned = new Map<string, ReturnType<typeof warReckon>>()
     const politics = tickPolitics(
       draft.base.world,
       draft.politics,
@@ -10530,10 +10540,28 @@ function close(draft: Draft): CommandResult {
       // Своим архимагом игрок бывает только сам (этап 43).
       rankTier(draft.character.magicRank) >= MAGIC_RANKS.archmage.tier ? 'free' : 'busy',
       // Война объявляется расчётом, а не кубиком (этап 143, Рв0).
-      (a, b) => warPressure(draft.base, draft.world, a, b, dayOf(draft.time)),
+      // Пустая казна не воюет охотно (этап 165, Кз3).
+      (a, b) =>
+        warPressure(draft.base, draft.world, a, b, dayOf(draft.time)) *
+        poorPressure(draft.base, draft.world, a, dayOf(draft.time)),
       // И кончается тоже расчётом (этап 163, Вс1): сколько зим она идёт, взята
-      // ли цель, можно ли её ещё взять и давят ли со стороны.
-      (war, when) => warReckon(draft.base, draft.world, war, when),
+      // ли цель, можно ли её ещё взять и давят ли со стороны. Той, у которой
+      // пусто, мир нужнее (этап 165, Кз3).
+      (war, when) => {
+        // Счёт сводится раз в пятидневку и держится до следующей (TALLY.beat):
+        // война не меняется за сутки, а такт идёт по всем войнам мира разом.
+        const key = `${war.a}|${war.b}|${war.since}|${Math.floor(when / TALLY.beat)}`
+        const held = reckoned.get(key)
+        if (held) return held
+        const counted = warReckon(draft.base, draft.world, war, when)
+        const poor = Math.max(
+          poorHaste(draft.base, draft.world, war.a, when),
+          poorHaste(draft.base, draft.world, war.b, when),
+        )
+        const made = { ...counted, haste: counted.haste * poor }
+        reckoned.set(key, made)
+        return made
+      },
     )
     draft.rng = politics.rng
     draft.politics = politics.politics
@@ -10751,6 +10779,8 @@ function close(draft: Draft): CommandResult {
     tickDread(draft, daysPassed)
     // И вести о чужой силе ходят между коронами сами, без игрока (этап 164).
     tickTidings(draft, daysPassed)
+    // А казна корон сводится: приход, расход, заём и разорение (этап 165).
+    tickCoin(draft, daysPassed)
     // И сходятся против того, кто ближе всех к концу (этап 136).
     tickLeague(draft, daysPassed)
     // За слабых ручаются, и на зов приходят или не приходят (этап 137).
@@ -10953,6 +10983,8 @@ function close(draft: Draft): CommandResult {
     recognitions: draft.recognitions,
     union: draft.union,
     crownDebts: draft.crownDebts,
+    crownCoin: draft.crownCoin,
+    coinLog: draft.coinLog,
     anointed: draft.anointed,
     deeds: draft.deeds,
     dreadLog: draft.dreadLog,
@@ -13350,6 +13382,35 @@ function tickAnoint(draft: Draft, days: number): void {
   }
   shiftVassals(draft, world.unrest, null)
   if (day % (FAITH.beat * 18) === 0) notice(draft, world.says, 'world')
+}
+
+/**
+ * Казна корон сводится (этап 165, Кз1–Кз4).
+ *
+ * Раз в месяц каждая корона считает приход и расход: подать с жителей, пошлины
+ * с городов и портов, доход с рудников и дань — против жалованья войску,
+ * гарнизонам, двору и дани на сторону. Что не сошлось, берётся в долг, и такая
+ * корона считается разорённой: мира она ищет первой, а войну начинает неохотно.
+ */
+function tickCoin(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % COIN.beat !== 0) return
+  const coin: Record<string, number> = { ...draft.crownCoin }
+  const log: Record<string, number> = { ...draft.coinLog }
+  for (const side of Object.keys(draft.base.world.kingdoms)) {
+    const after = coinAfterBeat(draft.base, draft.world, side, day, COIN.beat)
+    coin[side] = after.coin
+    if (after.broke) {
+      log[side] = (log[side] ?? 0) + 1
+      // Разорение — событие мира, а не строка в таблице: о нём говорят.
+      if ((log[side] ?? 0) === 1) {
+        notice(draft, `${kingdomName(draft.base, side)}: ${COIN_WORDS.empty}`, 'world')
+      }
+    }
+  }
+  draft.crownCoin = coin
+  draft.coinLog = log
 }
 
 /**

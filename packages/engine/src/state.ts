@@ -80,7 +80,7 @@ import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 25
+export const SCHEMA_VERSION = 26
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -453,6 +453,16 @@ export interface GameState {
   readonly crownDebts?: Readonly<
     Record<string, { readonly owed: number; readonly sinceDay: number }>
   >
+  /**
+   * Казна короны (этап 165): сколько у неё серебра сейчас.
+   *
+   * Единственное чужое число, которое эта версия кладёт в состояние. Вывести
+   * его из мира нельзя: это история доходов и трат, а не свойство земли.
+   * Доход и расход не хранятся — они считаются из земли, войска и войн.
+   */
+  readonly crownCoin?: Readonly<Record<string, number>>
+  /** Сколько раз каждая корона разорялась (этап 165, Кз6): счёт века. */
+  readonly coinLog?: Readonly<Record<string, number>>
   /**
    * Помазание (этап 134): с какого дня церковь зовёт тебя своим государем.
    *
@@ -866,6 +876,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     recognitions: {},
     union: null,
     crownDebts: {},
+    crownCoin: {},
+    coinLog: {},
     anointed: null,
     deeds: {},
     dreadLog: {},

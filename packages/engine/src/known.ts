@@ -12,6 +12,7 @@ import { PLAYER, garrisonSize } from './holding'
 import { strengthOf } from './mind'
 import { crownGame } from './mind'
 import type { GameState } from './state'
+import { crownPurse } from './theirs'
 import { neighbourSettlements } from './world/queries'
 import type { World } from './world/types'
 
@@ -127,8 +128,10 @@ export function truthOf(
   }
   if (question.kind === 'purse') {
     if (question.about === PLAYER) return state.character.money
-    // Чужая казна не лежит в состоянии: её считают по земле — и это догадка.
-    return Math.round(strengthOf(state, world, question.about, day).places * 420)
+    // С этапа 165 чужая казна — настоящее число, и правда о ней есть. Дойти до
+    // спрашивающего она может только вестями: своими глазами чужой казны не
+    // видят (этап 165, Кз5).
+    return crownPurse(state, world, question.about, day)
   }
   return null
 }

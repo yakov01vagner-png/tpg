@@ -552,6 +552,18 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
     exile: data.exile ?? null,
     legends: data.legends ?? [],
   }),
+  /**
+   * v25 → v26: казна короны как вещь (этап 165).
+   *
+   * Одно новое поле на всю версию 1.0: чужое серебро. Пустая запись — верный
+   * старт: такт сведёт казну по земле в первый же свой день, ровно тем же
+   * счётом, каким её оценивали до 1.0, и сейв 0.9 от этого не дрогнет.
+   */
+  25: (data) => ({
+    ...data,
+    crownCoin: data.crownCoin ?? {},
+    coinLog: data.coinLog ?? {},
+  }),
 }
 
 export type LoadResult =

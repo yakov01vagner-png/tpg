@@ -65,7 +65,33 @@ export interface Strength {
  * несравнимыми, и всё, что их сравнивало, приходилось подпирать надбавками.
  * Теперь считается одно и то же с обеих сторон, а подпорки убраны.
  */
+/**
+ * Память о счёте силы (этап 165).
+ *
+ * `strengthOf` — чистая функция от состояния, мира, стороны и дня, и её
+ * спрашивают по многу раз за одни сутки: счёт войны, вести, страх, коалиции,
+ * пути. Память живёт на самом объекте состояния и умирает вместе с ним: в сейв
+ * она не попадает и попасть не может, а состояние неизменно — значит, ответ,
+ * посчитанный для него однажды, верен для него всегда.
+ */
+const strengthByState = new WeakMap<GameState, Map<string, Strength>>()
+
 export function strengthOf(state: GameState, world: World, side: string, day: number): Strength {
+  const key = `${side}|${day}`
+  let mine = strengthByState.get(state)
+  if (mine) {
+    const known = mine.get(key)
+    if (known) return known
+  } else {
+    mine = new Map()
+    strengthByState.set(state, mine)
+  }
+  const counted = countStrength(state, world, side, day)
+  mine.set(key, counted)
+  return counted
+}
+
+function countStrength(state: GameState, world: World, side: string, day: number): Strength {
   // Чьи места считать: свои — игроку, корона и её лорды — короне.
   const owners = new Set<string>()
   if (side === PLAYER) owners.add(PLAYER)

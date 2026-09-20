@@ -2,7 +2,6 @@ import { casusDef } from './casus'
 import type { PeaceTermKind } from './content/casus'
 import { TALLY, TALLY_WORDS } from './content/tally'
 import { strengthOf } from './mind'
-import { coalitionAgainst } from './overture'
 import type { GameState } from './state'
 import type { War } from './war'
 import { allied } from './war'
@@ -88,7 +87,11 @@ export function outsidePressure(state: GameState, world: World, war: War, day: n
     }
   }
   if (guarantorOf(state, war.a) || guarantorOf(state, war.b)) pressure += TALLY.guarantee
-  const giant = coalitionAgainst(state, world, day).giant
+  // Коалиция берётся из той, что уже стоит (этап 136): она записана в
+  // состоянии, и спрашивать её — О(1). Считать сегодняшнюю заново (`coalitionAgainst`)
+  // здесь нельзя: счёт войны идёт каждые сутки на каждую войну, а тот счёт
+  // меряет силу всех девяти сторон.
+  const giant = state.league?.against ?? null
   if (giant === war.a || giant === war.b) pressure += TALLY.coalition
   return Math.round(pressure * 100) / 100
 }

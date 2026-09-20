@@ -30,7 +30,32 @@ export interface CrownLand {
   readonly people: number
 }
 
+/**
+ * Память о земле стороны (этап 165).
+ *
+ * `crownLand` — чистая функция от состояния и стороны, и спрашивают её по
+ * многу раз за одни сутки: благочестие, дела, казна, приход и расход. Память
+ * живёт на самом объекте состояния и умирает вместе с ним: в сейв она не
+ * попадает, а состояние неизменно — значит, посчитанное для него однажды верно
+ * для него всегда.
+ */
+const landByState = new WeakMap<GameState, Map<string, CrownLand>>()
+
 export function crownLand(state: GameState, world: World, side: string): CrownLand {
+  let mine = landByState.get(state)
+  if (mine) {
+    const known = mine.get(side)
+    if (known) return known
+  } else {
+    mine = new Map()
+    landByState.set(state, mine)
+  }
+  const counted = countLand(state, world, side)
+  mine.set(side, counted)
+  return counted
+}
+
+function countLand(state: GameState, world: World, side: string): CrownLand {
   const owners = new Set<string>()
   if (side === PLAYER) owners.add(PLAYER)
   else {
@@ -109,11 +134,14 @@ export function crownVentures(state: GameState, world: World, side: string): num
 /**
  * Её казна (Пк2).
  *
- * Пока это не хранимое число, а счёт по земле и дани: чужого серебра никто не
- * пересчитывал. Считается в одном месте нарочно — этап 165 сделает казну вещью,
- * и менять придётся только здесь.
+ * С этапа 165 это настоящее число: сколько у неё серебра сейчас. Пока такт его
+ * не свёл (первый день игры, сейв до 1.0), считается по земле и дани — тем же
+ * счётом, каким казну оценивали до 1.0. Место одно нарочно: менять пришлось
+ * только его.
  */
 export function crownPurse(state: GameState, world: World, side: string, day: number): number {
+  const kept = state.crownCoin?.[side]
+  if (kept !== undefined) return kept
   const land = crownLand(state, world, side)
   let coin =
     land.places * THEIRS.coinPerPlace +
