@@ -541,6 +541,16 @@ import { type Word, bring, forgetOld, truthOf } from './known'
 import { LIES, lieLedger, mistakeOf, remember, trustOf, trustWords, weigh, whoGains } from './lies'
 import type { HarvestEvent, LifeEvent } from './life'
 import { LIFE, foodSecurity, rollHarvest, tickDays } from './life'
+import {
+  LINEAGE,
+  LINEAGE_WORDS,
+  LOSS_DEFS,
+  heirGets,
+  houseNow,
+  houseWay,
+  lossesOf,
+  raisedShare,
+} from './lineage'
 import { crownOf, factionDef, factionKey, factionMood, heirRegard, withLordDeed } from './lordlife'
 import {
   type Artifact,
@@ -1292,6 +1302,8 @@ export type Command =
   | { readonly type: 'askLetter'; readonly against: string }
   /** Склад (этап 126): переучиться с одного дела на другое. */
   | { readonly type: 'retrain'; readonly from: SkillId; readonly to: SkillId }
+  /** Путь дома (этап 132): растить наследника своими часами. */
+  | { readonly type: 'raiseHeir' }
   /** Путь короны (этап 131): дар за признание и смотр того, кто ещё не признал. */
   | { readonly type: 'giftRecognition'; readonly to: string }
   /** Испытание (этап 124): выйти на турнир, охоту, диспут, смотр, мост, ярмарку. */
@@ -1861,6 +1873,8 @@ export function applyCommand(
       return seaSortie(state, command.locationId)
     case 'retrain':
       return retrain(state, command.from, command.to)
+    case 'raiseHeir':
+      return raiseHeir(state)
     case 'giftRecognition':
       return giftRecognition(state, command.to)
     case 'takeTrial':
@@ -9889,6 +9903,13 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  houseBest: {
+    readonly places: number
+    readonly titleTier: number
+    readonly shames: number
+    readonly day: number
+  }
+  raised: number
   recognitions: Readonly<Record<string, number>>
   union: { readonly sinceDay: number } | null
   usedDay: Readonly<Record<string, number>>
@@ -10073,6 +10094,8 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    houseBest: state.houseBest ?? { places: 0, titleTier: 0, shames: 0, day: 0 },
+    raised: state.raised ?? 0,
     recognitions: state.recognitions ?? {},
     union: state.union ?? null,
     usedDay: state.usedDay ?? {},
@@ -10414,6 +10437,8 @@ function close(draft: Draft): CommandResult {
     tickResidents(draft, daysPassed)
     // Признали все или уже не все: срок объединения идёт или начинается заново (этап 131).
     tickUnion(draft, daysPassed)
+    // Дом сверяется с лучшим своим днём: потеря — это то, что было и ушло (этап 132).
+    tickHouse(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10585,6 +10610,8 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    houseBest: draft.houseBest,
+    raised: draft.raised,
     recognitions: draft.recognitions,
     union: draft.union,
     usedDay: draft.usedDay,
@@ -12683,6 +12710,63 @@ function retrain(state: GameState, from: SkillId, to: SkillId): CommandResult {
     notice(draft, `${now.says} ${seenAs(now.id)}`, 'people')
   }
   return close(draft)
+}
+
+/**
+ * Растить наследника (этап 132, Дм3).
+ *
+ * Наследнику и так достаётся треть отцовского умения (0.6). Воспитание
+ * прибавляет к этой трети — и платится теми же часами, из которых состоит день
+ * государя: учить сына значит не принимать просителей.
+ */
+function raiseHeir(state: GameState): CommandResult {
+  const day = dayOf(state.time)
+  const heir = heirOf(state.character.family, day)
+  if (!heir) return fail('requirements', 'Растить некого: наследника нет.')
+  if (raisedShare(state) >= LINEAGE.raiseMax) {
+    return fail('invalid', 'Больше ты ему не передашь: сын не станет отцом.')
+  }
+
+  const draft = open(state)
+  advance(draft, hours(LINEAGE.raiseHours))
+  addFatigue(draft, 6)
+  draft.raised = Math.min(LINEAGE.raiseMax, draft.raised + LINEAGE.raiseGain)
+  const gets = heirGets({ ...draft.base, raised: draft.raised })
+  notice(draft, `${heir.name}: ${gets.says}`, 'people')
+  return close(draft)
+}
+
+/**
+ * Дом и его лучший день (этап 132, Дм1 и Дм2).
+ *
+ * Лучшее запоминается, потери считаются против него. Ничего больше не хранится:
+ * колена берутся из летописи, родство — из браков, слово — из договоров.
+ */
+function tickHouse(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % LINEAGE.beat !== 0) return
+  const now = houseNow(draft.base, draft.world, day)
+  const best = draft.houseBest
+  // Лучшее только растёт: дом помнят по лучшему его дню.
+  if (now.places > best.places || now.titleTier > best.titleTier) {
+    draft.houseBest = {
+      places: Math.max(best.places, now.places),
+      titleTier: Math.max(best.titleTier, now.titleTier),
+      shames: Math.min(best.shames, now.shames),
+      day,
+    }
+    return
+  }
+  const losses = lossesOf(draft.base, draft.world, day)
+  if (losses.length === 0) return
+  // Потеря названа один раз в сезон, а не каждый такт.
+  if (day % (LINEAGE.beat * 4) !== 0) return
+  notice(
+    draft,
+    `${LINEAGE_WORDS.lost} ${losses.map((one) => LOSS_DEFS[one.loss].label).join(', ')}. ${losses[0]?.says ?? ''}`,
+    'people',
+  )
 }
 
 /**

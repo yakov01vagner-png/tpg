@@ -416,6 +416,20 @@ export interface GameState {
   /** Дела, которые ты уже разобрал или передал: чтобы не звали дважды. */
   readonly settled?: Readonly<Record<string, number>>
   /**
+   * Лучшее, что было у дома (этап 132): земля, титул и честь в лучший его день.
+   *
+   * Потеря считается против этого, и потому лучшее приходится помнить: вывести
+   * прошлое из настоящего нельзя.
+   */
+  readonly houseBest?: {
+    readonly places: number
+    readonly titleTier: number
+    readonly shames: number
+    readonly day: number
+  }
+  /** Сколько вложено в воспитание наследника: доля отцовского умения сверх трети. */
+  readonly raised?: number
+  /**
    * Кто признал тебя не по силе (этап 131): дверью договора, родства или дара.
    *
    * Хранится день признания, потому что вывести его нельзя: дар был или не был.
@@ -658,6 +672,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     favours: {},
     ruleLog: { heard: 0, handed: 0, missed: 0 },
     settled: {},
+    houseBest: { places: 0, titleTier: 0, shames: 0, day: 0 },
+    raised: 0,
     recognitions: {},
     union: null,
     usedDay: {},

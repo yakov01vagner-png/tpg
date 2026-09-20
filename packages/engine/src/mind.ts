@@ -360,7 +360,12 @@ export function gambitWords(gambit: Gambit, world: World): string {
 
 /** Кто из корон держит тебя целью своей партии (И5). */
 export function aimedAtPlayer(state: GameState, world: World, day: number): readonly Gambit[] {
+  // Родня в счёт не идёт (этап 132, Дм4): корона, с которой у тебя брак, тебя
+  // целью не выбирает. Это не запрет воевать — это то, что война в родне дороже
+  // и потому в замысел не попадает.
+  const kin = new Set((state.marriages ?? []).map((one) => one.kingdomId))
   return Object.keys(world.kingdoms)
+    .filter((one) => !kin.has(one))
     .map((one) => crownGame(state, world, one, day))
     .filter((one) => one.targetId === PLAYER)
 }
