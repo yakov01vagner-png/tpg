@@ -1,4 +1,5 @@
 import { type Band, bandSize } from './band'
+import { LEARN } from './content/learning'
 import { RUSE, RUSE_DEFS, RUSE_WORDS, type RuseKind } from './content/ruse'
 import { visibleTo } from './fog'
 import { PLAYER } from './holding'
@@ -41,6 +42,29 @@ export interface Ruse {
   readonly hostId: string | null
   readonly sinceDay: number
   readonly untilDay: number
+}
+
+/**
+ * Сколько раз этот приём уже показывали — и насколько он от этого выдохся
+ * (этап 198, Ош3).
+ *
+ * Считается по тем же обманам, что уже записаны: ничего нового не хранится.
+ * Старое забывается, и через `LEARN.forgetsDays` приём снова идёт как новый.
+ */
+export function wiseTo(
+  state: Pick<GameState, 'ruses'>,
+  kind: RuseKind,
+  day: number,
+  skipId?: string,
+): { readonly times: number; readonly adds: number } {
+  const times = (state.ruses ?? []).filter(
+    (one) =>
+      one.kind === kind &&
+      one.id !== skipId &&
+      one.sinceDay <= day &&
+      day - one.sinceDay < LEARN.forgetsDays,
+  ).length
+  return { times, adds: Math.round(times * LEARN.perRepeat * 100) / 100 }
 }
 
 export function ruseDef(kind: RuseKind) {
@@ -120,7 +144,10 @@ export function seesThrough(
   const age = Math.max(0, day - ruse.sinceDay) / Math.max(1, def.days)
   // Плотность обмана делит всё, а не вычитает: плотную ложь не берут ни глаза,
   // ни ум по отдельности — её берёт их сумма, и то не сразу.
-  const looking = (near + wits + age * 0.4) * (1 - def.holds) * 2
+  // Тот же приём в третий раз ждут (этап 198, Ош3): каждый прежний обман того
+  // же рода прибавляет смотрящему зоркости, пока о нём не забыли.
+  const wiser = who === PLAYER ? 0 : wiseTo(state, ruse.kind, day, ruse.id).adds
+  const looking = (near + wits + age * 0.4 + wiser) * (1 - def.holds) * 2
   const chance = Math.round(Math.min(0.95, Math.max(0, looking)) * 100) / 100
   // Не бросок: один и тот же взгляд на один и тот же обман видит одно и то же.
   const roll = (hashOf(`${ruse.id}:${who}:${Math.floor(day / 3)}`) % 1000) / 1000

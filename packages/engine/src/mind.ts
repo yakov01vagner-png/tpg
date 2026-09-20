@@ -1,5 +1,6 @@
 import { bandSize } from './band'
 import { crownPlaces } from './company'
+import { LEARN } from './content/learning'
 import {
   GAMBIT_DEFS,
   type GambitAim,
@@ -214,7 +215,12 @@ export function seenStrength(
   const lust = crownWarlust(watcher)
   const lean = lust >= 1.2 ? -1 : lust <= 0.9 ? 1 : 0
   const jitter = ((hashOf(`${watcher}:${about}:${Math.floor(day / 180)}`) % 100) / 100 - 0.5) * 2
-  const error = Math.round(span * (lean * 0.6 + jitter * 0.4) * 100) / 100
+  // Битого учит не рассказ, а счёт (этап 198, Ош2): кто уже уступал этому
+  // противнику, тот считает его вернее — несбывшееся правит догадку.
+  const beaten = (state.peaces ?? []).filter(
+    (one) => one.yielded === watcher && one.against === about,
+  ).length
+  const error = Math.round(span * (lean * 0.6 + jitter * 0.4) * LEARN.humbles ** beaten * 100) / 100
   const guess = Math.max(0, Math.round(truth.score * (1 + error)))
   // С 0.8 догадка — только основа: если короне что-то принесли, она считает по
   // принесённому (этап 118). Оттого твой обман попадает в её решения.
@@ -347,7 +353,16 @@ export function crownGame(state: GameState, world: World, kingdomId: string, day
   let targetId: string | null
   let why: string
   const crowded = biggest && biggest.score > mine.score * 1.5
-  if (owes) {
+  // Не сработавшее дважды не пробуют в третий раз (этап 198, Ош4): дважды
+  // уступивший меняет дорогу, а не цель.
+  const yielded = (state.peaces ?? []).filter(
+    (one) => one.yielded === kingdomId && one.day >= day - LEARN.forgetsDays,
+  ).length
+  if (yielded >= LEARN.blindsAfter) {
+    aim = 'wed'
+    targetId = biggest?.id ?? null
+    why = `${kingdomId} уступал ${yielded} раза и больше той дорогой не ходит: ищет родства там, где пробовал силу.`
+  } else if (owes) {
     aim = 'coin'
     targetId = state.politics.tributes.find((one) => one.from === kingdomId)?.to ?? null
     why = `${kingdomId} платит дань и первым делом считает серебро: войной такой долг не снять.`
