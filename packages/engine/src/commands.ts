@@ -457,6 +457,7 @@ import {
   stepped,
   talkWords,
 } from './gossip'
+import { GROWTH, GROWTH_WORDS, rustOf } from './growth'
 import {
   GUESS,
   GUESS_WORDS,
@@ -9877,6 +9878,7 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
     readonly byTeacher: number
@@ -10058,6 +10060,7 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
     deceitLog: state.deceitLog ?? { made: 0, worked: 0, caught: 0 },
@@ -10396,6 +10399,8 @@ function close(draft: Draft): CommandResult {
     tickResidents(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
+    // А брошенное ржавеет (этап 125, Ц4).
+    tickRust(draft, daysPassed)
     // Короны читают твои ходы и делают выводы (этап 119).
     tickGuesses(draft, daysPassed)
     // Они упорствуют в заблуждениях и прозревают (этап 120).
@@ -10563,6 +10568,7 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
     deceitLog: draft.deceitLog,
@@ -12566,6 +12572,34 @@ function tickGuesses(draft: Draft, days: number): void {
       'world',
     )
   }
+}
+
+/**
+ * Ржавчина (этап 125, Ц4).
+ *
+ * Навык, которым не занимаются годами, оседает — не до нуля и не быстро.
+ * Считается раз в сезон: чаще незачем, а реже игрок не заметит связи.
+ */
+function tickRust(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % GROWTH.rustBeat !== 0) return
+  let skills = draft.character.skills
+  let lost = 0
+  let which = ''
+  for (const [id, progress] of Object.entries(skills)) {
+    const used = draft.usedDay[id] ?? 0
+    if (used === 0 || progress.level <= 0) continue
+    const rusted = rustOf(progress.level, used, day)
+    if (rusted.lost <= 0) continue
+    skills = { ...skills, [id]: { ...progress, level: rusted.level, xp: 0 } }
+    draft.usedDay = { ...draft.usedDay, [id]: day }
+    lost += rusted.lost
+    which = SKILLS[id as SkillId].label
+  }
+  if (lost === 0) return
+  patch(draft, { skills })
+  notice(draft, `${GROWTH_WORDS.rust} ${which} и другие: потеряно ${lost} уровней.`, 'people')
 }
 
 /**
@@ -16453,6 +16487,8 @@ function practice(draft: Draft, skill: SkillId, rawXp: number, path: PathId = 'd
             ? 'byService'
             : 'byDoing'
   draft.pathLog = { ...draft.pathLog, [by]: draft.pathLog[by] + Math.round(gain.appliedXp) }
+  // Чем занимались, то и в руках (этап 125, Ц4).
+  draft.usedDay = { ...draft.usedDay, [skill]: dayOf(draft.time) }
   patch(draft, { skills: { ...draft.character.skills, [skill]: gain.progress } })
   if (gain.levelsGained === 0) return
 

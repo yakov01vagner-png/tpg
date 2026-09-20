@@ -23,6 +23,8 @@ export const PATH_DEFS: Record<
     readonly cap: number
     /** Сколько сырого опыта даёт за раз. */
     readonly xp: number
+    /** Сколько раз в год этим вообще можно воспользоваться. */
+    readonly perYear: number
   }
 > = {
   doing: {
@@ -31,6 +33,7 @@ export const PATH_DEFS: Record<
     costs: 'временем, которого не вернёшь',
     cap: 0,
     xp: 8,
+    perYear: 300,
   },
   teacher: {
     label: 'учитель',
@@ -38,6 +41,7 @@ export const PATH_DEFS: Record<
     costs: 'серебром и дорогой до школы',
     cap: 0,
     xp: 40,
+    perYear: 120,
   },
   book: {
     label: 'книга',
@@ -45,6 +49,7 @@ export const PATH_DEFS: Record<
     costs: 'серебром и неделями чтения',
     cap: 50,
     xp: 60,
+    perYear: 6,
   },
   trial: {
     label: 'испытание',
@@ -52,6 +57,7 @@ export const PATH_DEFS: Record<
     costs: 'риском',
     cap: 0,
     xp: 140,
+    perYear: 12,
   },
   service: {
     label: 'служба',
@@ -59,6 +65,7 @@ export const PATH_DEFS: Record<
     costs: 'свободой: служащий не сам себе голова',
     cap: 0,
     xp: 22,
+    perYear: 36,
   },
 }
 
