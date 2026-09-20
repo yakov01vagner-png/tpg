@@ -20,6 +20,7 @@ import {
 } from './anoint'
 import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
+import { BALANCE, BALANCE_WORDS, betrayers, warPressure } from './balance'
 import type { Band, BandEvent, GarrisonOrder } from './band'
 import { bandSize, bandsOnLeg, clash, nextHop, roadHours, tickBands } from './band'
 import type { Battle, BattleSide, GroupId, OrderId } from './battle'
@@ -173,6 +174,7 @@ import {
   companyById,
   companyDef,
   companyUnits,
+  crownPlaces,
   hireBids,
   hiringCrowns,
   idleHarm,
@@ -10087,6 +10089,7 @@ interface Draft {
     readonly shares?: Readonly<Record<string, number>>
   }
   theirEnd: { readonly who: string; readonly sinceDay: number; readonly served?: number } | null
+  balanceLog: { readonly betrayals: number; readonly wars: number }
   usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
@@ -10289,6 +10292,7 @@ function open(state: GameState): Draft {
     crownWays: state.crownWays ?? {},
     raceLog: state.raceLog ?? { steps: 0, done: [], shares: {} },
     theirEnd: state.theirEnd ?? null,
+    balanceLog: state.balanceLog ?? { betrayals: 0, wars: 0 },
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
@@ -10421,6 +10425,8 @@ function close(draft: Draft): CommandResult {
       draft.rng,
       // Своим архимагом игрок бывает только сам (этап 43).
       rankTier(draft.character.magicRank) >= MAGIC_RANKS.archmage.tier ? 'free' : 'busy',
+      // Война объявляется расчётом, а не кубиком (этап 143, Рв0).
+      (a, b) => warPressure(draft.base, draft.world, a, b, dayOf(draft.time)),
     )
     draft.rng = politics.rng
     draft.politics = politics.politics
@@ -10650,6 +10656,8 @@ function close(draft: Draft): CommandResult {
     tickRace(draft, daysPassed)
     // А кто-нибудь может и дойти — без тебя (этап 142).
     tickTheirEnd(draft, daysPassed)
+    // Равновесие рвёт союзы с тем, кто вырвался вперёд (этап 143).
+    tickBalance(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10841,6 +10849,7 @@ function close(draft: Draft): CommandResult {
     crownWays: draft.crownWays,
     raceLog: draft.raceLog,
     theirEnd: draft.theirEnd,
+    balanceLog: draft.balanceLog,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
@@ -13737,9 +13746,9 @@ function tickTheirWay(draft: Draft, days: number): void {
   }
   for (const id of Object.keys(draft.base.world.kingdoms)) {
     const now = crownWay(draft.base, draft.world, id, day)
-    const places =
-      theirWay(draft.base, draft.world, id, day).steps.find((one) => one.step.measure === 'places')
-        ?.have ?? 0
+    // Земля берётся прямо, а не через весь путь: считать пути восьми корон
+    // каждый такт дорого, и делает это один такт гонки (этап 141).
+    const places = crownPlaces(draft.base, id)
     const was = ways[id]
     if (!was) {
       ways[id] = { way: now, sinceDay: day, places }
@@ -13821,7 +13830,8 @@ function tickTheirEnd(draft: Draft, days: number): void {
   if (day % THEIREND.beat !== 0) return
   if (!draft.theirEnd) {
     for (const id of Object.keys(draft.base.world.kingdoms)) {
-      if (!theirWay(draft.base, draft.world, id, day).finished) continue
+      // Доли путей считает такт гонки (этап 141), здесь они только читаются.
+      if ((draft.raceLog.shares?.[id] ?? 0) < 1) continue
       draft.theirEnd = { who: id, sinceDay: day }
       notice(
         draft,
@@ -13867,6 +13877,35 @@ function serveWinner(state: GameState): CommandResult {
   draft.hands = [...draft.hands, { patron: end.who as string, ward: PLAYER, sinceDay: day }]
   notice(draft, `${THEIREND_WORDS.serve} ${kingdomName(draft.base, end.who as string)}.`, 'world')
   return close(draft)
+}
+
+/**
+ * Равновесие рвёт союзы (этап 143, Рв1 и Рв3).
+ *
+ * Союз держался отношением; теперь он держится ещё и тем, что союзник не
+ * вырвался вперёд. Вырвался — его бросают, и причина называется: не ссора, а
+ * расчёт.
+ */
+function tickBalance(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % BALANCE.beat !== 0) return
+  const rows = betrayers(draft.base, draft.world, day)
+  if (rows.length === 0) return
+  const first = rows[0]
+  if (!first) return
+  draft.politics = {
+    ...draft.politics,
+    alliances: draft.politics.alliances.filter(
+      (one) =>
+        !((one.a === first.by && one.b === first.of) || (one.b === first.by && one.a === first.of)),
+    ),
+  }
+  draft.balanceLog = {
+    ...draft.balanceLog,
+    betrayals: draft.balanceLog.betrayals + 1,
+  }
+  notice(draft, first.says, 'world')
 }
 
 /**

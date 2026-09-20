@@ -332,6 +332,15 @@ export function tickPolitics(
   day: number,
   rng: Rng,
   playerMage: Archmage['state'] = 'busy',
+  /**
+   * Давление равновесия на эту пару (этап 143, Рв0).
+   *
+   * Война перестаёт быть броском: кубик остаётся, но множителем к нему идёт
+   * расчёт — насколько `a` опасается продвижения `b` и не связан ли он с ним.
+   * Считает это не `war.ts` (иначе ядро войны потянет за собой весь слой путей),
+   * а тот, кто вызывает такт; по умолчанию давление ровно единица.
+   */
+  pressure: (a: string, b: string) => number = () => 1,
 ): PoliticsResult {
   let generator = rng
   let wars = [...politics.wars]
@@ -362,6 +371,13 @@ export function tickPolitics(
     const chosen =
       declares && a ? crownFoe(world, { ...politics, wars, tributes }, current, a) : null
     const b = chosen ?? kingdomIds[second]
+    // Второй бросок — уже не бросок: он взвешен равновесием (этап 143, Рв0).
+    // Связанный с целью не пойдёт на неё и по кубику, а опасающийся пойдёт
+    // охотнее — и то и другое считается, а не выпадает.
+    const weight = a && b ? pressure(a, b) : 1
+    const [balanced, afterBalance] = rollChance(generator, Math.max(0, Math.min(1, weight)))
+    generator = afterBalance
+    if (!balanced) continue
     // Воюющая корона не открывает второй войны, если не воинственна настолько,
     // что ей всё равно: до этого этого правила не было, и мелкая корона могла
     // получить три войны за месяц.

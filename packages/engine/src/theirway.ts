@@ -1,3 +1,4 @@
+import { crownPlaces } from './company'
 import { FLAVOUR_WAY, TEMPER_WAY, THEIRWAY, THEIRWAY_WORDS } from './content/theirway'
 import type { WayId } from './content/way'
 import { sideName } from './dread'
@@ -48,9 +49,7 @@ export function wouldChange(
 ): { readonly changes: boolean; readonly to: WayId; readonly says: string } {
   const now = crownWay(state, world, id, day)
   const lost = state.crownWays?.[id]?.places ?? 0
-  const places = theirWay(state, world, id, day).steps.find(
-    (one) => one.step.measure === 'places',
-  )?.have
+  const places = crownPlaces(state, id)
   const shrank = lost > 0 && places !== undefined && lost - places >= THEIRWAY.losesPlaces
   // Проигравший войну идёт не тем же путём: короной не вышло — пойдёт домом.
   const to: WayId = now === 'crown' ? 'house' : now === 'faith' ? 'trade' : 'crown'

@@ -549,6 +549,8 @@ export interface GameState {
     readonly sinceDay: number
     readonly served?: number
   } | null
+  /** Равновесие (этап 143): сколько союзов брошено по расчёту и войн начато им. */
+  readonly balanceLog?: { readonly betrayals: number; readonly wars: number }
   /** Гонка (этап 141): чья доля где была, сколько шагов замечено и кто дошёл. */
   readonly raceLog?: {
     readonly steps: number
@@ -810,6 +812,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     crownWays: {},
     raceLog: { steps: 0, done: [], shares: {} },
     theirEnd: null,
+    balanceLog: { betrayals: 0, wars: 0 },
     usedDay: {},
     pathLog: { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: {},

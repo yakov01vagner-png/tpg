@@ -24,6 +24,7 @@ export function endNear(
   world: World,
   day: number,
 ): { readonly who: Walker | null; readonly left: readonly string[]; readonly says: string } {
+  // Считанные тактом гонки доли (этап 141) — если их ещё нет, считаем сами.
   const rows = Object.keys(world.kingdoms)
     .map((id) => ({ id, way: theirWay(state, world, id, day) }))
     .sort((a, b) => b.way.share - a.way.share)
