@@ -155,8 +155,15 @@ describe('М3 и М5: зерно правды и проверка', () => {
     }
     expect(heardAt(gossipOf(heard)[0] as never, state.locationId, day)).toBe(true)
 
+    // С этапа 109 в вестях лежат и донесения о чужих войсках: ждём ту, что о месте.
     let run = heard
-    for (let i = 0; i < 6 && wordsTo(run, PLAYER).length === 0; i += 1) run = oneDay(run)
+    for (
+      let i = 0;
+      i < 6 && wordsTo(run, PLAYER).filter((one) => one.about === about).length === 0;
+      i += 1
+    ) {
+      run = oneDay(run)
+    }
     const known = knownTo(run, world, PLAYER, { kind: 'garrison', about }, day + 6)
     console.log(`услышано на торгу: ${spreadWords(known)} — ${known.says}; на деле ${truth}`)
     expect(known.source).toBe('rumour')

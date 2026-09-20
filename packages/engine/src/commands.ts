@@ -23,6 +23,17 @@ import {
   outcomeOf,
   recallable,
 } from './behest'
+import {
+  BLIND,
+  BLIND_WORDS,
+  bannersLift,
+  besiegedOf,
+  bluffWorth,
+  defectorAt,
+  garrisonGuess,
+  reliefKnown,
+  storesGuess,
+} from './blind'
 import { type OrderSway, brothersAt, startSway, swayOf, tickOrders } from './brother'
 import { type Brotherhood, canFound, charterById, ownCharterFeels } from './brotherhood'
 import {
@@ -1175,6 +1186,11 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Осада вслепую (этап 113): что видно из-под стен, блеф, перебежчик, знамёна. */
+  | { readonly type: 'weighSiege' }
+  | { readonly type: 'bluffParley' }
+  | { readonly type: 'buyDefector' }
+  | { readonly type: 'raiseBanners'; readonly locationId: string }
   /** Обман (этап 112): завести ложный лагерь, демонстрацию, слух или засаду. */
   | {
       readonly type: 'makeRuse'
@@ -1709,6 +1725,14 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'weighSiege':
+      return weighSiege(state)
+    case 'bluffParley':
+      return bluffParley(state)
+    case 'buyDefector':
+      return buyDefector(state)
+    case 'raiseBanners':
+      return raiseBanners(state, command.locationId)
     case 'makeRuse':
       return makeRuse(state, command.kind, command.locationId, command.hostId ?? null)
     case 'dropRuse':
@@ -3275,6 +3299,10 @@ function takeCaptive(draft: Draft, battle: Battle): void {
  */
 function seizePlace(draft: Draft, locationId: string, mode: 'storm' | 'terms'): void {
   const taken = draft.settlements[locationId]
+  // Чем кончилась осада — приступом или тем, что ты понял больше их (этап 113).
+  if (mode === 'storm') {
+    draft.siegeLog = { ...draft.siegeLog, byWalls: draft.siegeLog.byWalls + 1 }
+  }
   const name = draft.base.world.locations[locationId]?.name ?? 'место'
   if (taken) {
     // Провинция следует за главным местом: взяв его, берёшь и остальное,
@@ -9688,6 +9716,12 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  siegeLog: {
+    readonly byKnowing: number
+    readonly byWalls: number
+    readonly bluffs: number
+    readonly defectors: number
+  }
   ruses: readonly Ruse[]
   ruseLog: { readonly made: number; readonly worked: number; readonly seen: number }
   fieldOrders: readonly FieldOrder[]
@@ -9818,6 +9852,7 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    siegeLog: state.siegeLog ?? { byKnowing: 0, byWalls: 0, bluffs: 0, defectors: 0 },
     ruses: state.ruses ?? [],
     ruseLog: state.ruseLog ?? { made: 0, worked: 0, seen: 0 },
     fieldOrders: state.fieldOrders ?? [],
@@ -10130,6 +10165,8 @@ function close(draft: Draft): CommandResult {
     tickFieldOrders(draft, daysPassed)
     // Обманы живут, срабатывают и раскусываются (этап 112).
     tickRuses(draft, daysPassed)
+    // Из осаждённого города по ночам кто-нибудь да перелезет (этап 113).
+    tickDefectors(draft, daysPassed)
     // Двор просит, стареет и уходит (этап 104).
     tickCourtiers(draft, daysPassed)
     // Посланные смотреть возвращаются (этап 102).
@@ -10291,6 +10328,7 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    siegeLog: draft.siegeLog,
     ruses: draft.ruses,
     ruseLog: draft.ruseLog,
     fieldOrders: draft.fieldOrders,
@@ -12068,6 +12106,172 @@ function handMatter(state: GameState, matterId: string): CommandResult {
     `${matter.says} ${AUDIENCE_WORDS.handed} Взял ${who.name} (${who.temper}, умение ${who.worth}): выйдет на ${Math.round(worth * 100)} из ста от твоего.`,
     'people',
   )
+  return close(draft)
+}
+
+/**
+ * Кто приходит из-за стен сам (этап 113, Ос4).
+ *
+ * Голодный перелезет и без твоего серебра. И подосланный тоже — только его
+ * выпустят нарочно, и он будет очень убедителен.
+ */
+function tickDefectors(draft: Draft, days: number): void {
+  if (days <= 0 || !draft.siege) return
+  const day = dayOf(draft.time)
+  const who = defectorAt(draft.base, draft.siege, day, false)
+  if (!who) return
+  draft.siegeLog = { ...draft.siegeLog, defectors: draft.siegeLog.defectors + 1 }
+  draft.words = withSightings(draft.words, [
+    {
+      id: `defect:${draft.siege.locationId}:${day}`,
+      to: PLAYER,
+      kind: 'stores',
+      about: draft.siege.locationId,
+      value: who.saysStores,
+      source: who.truthful ? 'own' : 'rumour',
+      from: who.name,
+      day,
+    },
+  ])
+  notice(draft, who.says, 'war')
+}
+
+/**
+ * Оглядеть осаду (этап 113, Ос1 и Ос2).
+ *
+ * Под стенами не бывает точных чисел — ни у тебя, ни у них. Здесь видно, что
+ * ты о них знаешь, насколько это догадка и знают ли они сами о своей выручке.
+ */
+function weighSiege(state: GameState): CommandResult {
+  const siege = state.siege
+  if (!siege) return fail('invalid', 'Ты никого не осаждаешь.')
+  const day = dayOf(state.time)
+  const stores = storesGuess(state, state.world, siege, day)
+  const guard = garrisonGuess(state, state.world, siege, day)
+  const relief = reliefKnown(state, state.world, siege.locationId, day)
+
+  const draft = open(state)
+  advance(draft, hours(2))
+  notice(draft, stores.says, 'war')
+  notice(
+    draft,
+    `За стенами, по-твоему, ${guard.value} человек (вилка ${Math.round(guard.spread * 100)} из ста). ${relief.says}`,
+    'war',
+  )
+  return close(draft)
+}
+
+/**
+ * Требовать сдачи с блефом (этап 113, Ос3).
+ *
+ * Торг идёт по догадкам с обеих сторон, и оттого блефовать может каждая.
+ * Блеф стоит ровно того, насколько чужая догадка о тебе шире правды; раскрытый
+ * блеф стоит доверия под этими стенами.
+ */
+function bluffParley(state: GameState): CommandResult {
+  const siege = state.siege
+  if (!siege) return fail('invalid', 'Ты никого не осаждаешь.')
+  const settlement = state.settlements[siege.locationId]
+  if (!settlement) return fail('invalid', 'Осаждать нечего.')
+  const day = dayOf(state.time)
+  const bluff = bluffWorth(state, state.world, siege, day)
+
+  const draft = open(state)
+  advance(draft, hours(3))
+  draft.siegeLog = { ...draft.siegeLog, bluffs: draft.siegeLog.bluffs + 1 }
+  const base = surrenderChance(settlement, siege)
+  const chance = bluff.holds ? Math.min(0.95, base + bluff.gain) : Math.max(0, base - 0.15)
+  const [yields, afterRoll] = rollChance(draft.rng, chance)
+  draft.rng = afterRoll
+  notice(
+    draft,
+    `${bluff.says} Сдача: ${Math.round(base * 100)} → ${Math.round(chance * 100)} из ста.`,
+    'war',
+  )
+  if (!yields) return close(draft)
+  seizePlace(draft, siege.locationId, 'terms')
+  draft.siegeLog = { ...draft.siegeLog, byKnowing: draft.siegeLog.byKnowing + 1 }
+  draft.renown += 1
+  return close(draft)
+}
+
+/**
+ * Купить человека из-за стен (этап 113, Ос4).
+ *
+ * Он принесёт числа. Правда ли это — зависит от того, кто его выпустил: голодный
+ * врать не станет, подосланный скажет, что хлеба вдоволь, и будет убедителен.
+ */
+function buyDefector(state: GameState): CommandResult {
+  const siege = state.siege
+  if (!siege) return fail('invalid', 'Ты никого не осаждаешь.')
+  if (state.character.money < BLIND.buyDefector) {
+    return fail('noMoney', `Такому нужно ${BLIND.buyDefector} серебра.`)
+  }
+  const day = dayOf(state.time)
+  const who = defectorAt(state, siege, day, true)
+  if (!who) return fail('invalid', 'Из города никто не идёт.')
+
+  const draft = open(state)
+  advance(draft, hours(4))
+  addMoney(draft, -BLIND.buyDefector)
+  draft.siegeLog = { ...draft.siegeLog, defectors: draft.siegeLog.defectors + 1 }
+  // Его слова ложатся вестью: дальше с ними работает общий слой знания.
+  draft.words = withSightings(draft.words, [
+    {
+      id: `defect:${siege.locationId}:${day}`,
+      to: PLAYER,
+      kind: 'stores',
+      about: siege.locationId,
+      value: who.saysStores,
+      source: who.truthful ? 'own' : 'rumour',
+      from: who.name,
+      day,
+    },
+  ])
+  notice(draft, who.says, 'war')
+  if (!who.truthful) notice(draft, BLIND_WORDS.lied, 'war')
+  return close(draft)
+}
+
+/**
+ * Поднять знамёна (этап 113, Ос5).
+ *
+ * Войска нет — есть холм, шесты и крашеное полотно. Осаждающий снимет осаду,
+ * если побоится оказаться между войском и стенами; а побоится он тем меньше,
+ * чем больше у него своих глаз кругом.
+ */
+function raiseBanners(state: GameState, locationId: string): CommandResult {
+  const place = state.settlements[locationId]
+  if (!place) return fail('invalid', 'Такого места нет.')
+  const day = dayOf(state.time)
+  const besiegers = besiegedOf(state, locationId)
+  if (besiegers.length === 0) return fail('requirements', 'Это место никто не осаждает.')
+  if (state.character.money < RUSE_DEFS.camp.cost) {
+    return fail('noMoney', `На это нужно ${RUSE_DEFS.camp.cost} серебра.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(8))
+  addMoney(draft, -RUSE_DEFS.camp.cost)
+  draft.ruseLog = { ...draft.ruseLog, made: draft.ruseLog.made + 1 }
+  let lifted = 0
+  for (const side of besiegers) {
+    const seen = bannersLift(draft.base, draft.world, locationId, side, day)
+    notice(draft, seen.says, 'war')
+    if (!seen.lifts) continue
+    lifted += 1
+    draft.bands = draft.bands.map((band) =>
+      band.goal.type === 'siege' &&
+      band.goal.targetId === locationId &&
+      (band.kingdomId ?? band.lordId) === side
+        ? { ...band, goal: { type: 'home', targetId: band.locationId }, siegeDays: 0 }
+        : band,
+    )
+  }
+  if (lifted > 0) {
+    draft.ruseLog = { ...draft.ruseLog, worked: draft.ruseLog.worked + lifted }
+    draft.siegeLog = { ...draft.siegeLog, byKnowing: draft.siegeLog.byKnowing + lifted }
+  }
   return close(draft)
 }
 

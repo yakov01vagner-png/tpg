@@ -154,9 +154,22 @@ export function seesNow(state: GameState, world: World, who: string, question: Q
   // Своими глазами — значит своими: владение местом не заменяет присутствия.
   // Именно здесь версия 0.8 расходится с прежними: о своей дальней земле
   // государь знает по донесениям (этап 100), а не по праву собственности.
+  // Запас и гарнизон — то, что за стенами: стоять рядом мало, надо быть внутри.
+  // Иначе осада снова считалась бы при открытых картах (этап 113).
+  const inside = question.kind === 'stores' || question.kind === 'garrison'
+  const place = state.settlements[where]
   if (who === PLAYER) {
+    const ours = place?.owner === PLAYER
+    if (inside && !ours) return false
     if (state.locationId === where) return true
     return state.bands.some((one) => one.lordId === PLAYER && one.locationId === where)
+  }
+  if (inside) {
+    const owner = place?.owner ?? null
+    const theirs =
+      owner === `crown:${who}` ||
+      state.politics.lords.some((lord) => lord.id === owner && lord.kingdomId === who)
+    if (!theirs) return false
   }
   if (seatOf(state, who) === where) return true
   return state.bands.some((one) => one.kingdomId === who && one.locationId === where)

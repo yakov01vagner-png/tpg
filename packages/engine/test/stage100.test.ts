@@ -171,12 +171,16 @@ describe('Д6: отчёт как весть', () => {
     if (!first) return
     const report = reportFrom(state, world, first.locationId, day)
     console.log(report?.says ?? 'отчёта нет')
+    const fromPlaces = (one: GameState) =>
+      wordsTo(one, PLAYER).filter((word) => word.kind !== 'host')
     let run = state
-    for (let i = 0; i < 40 && wordsTo(run, PLAYER).length === 0; i += 1) {
+    for (let i = 0; i < 40 && fromPlaces(run).length === 0; i += 1) {
       run = ok(applyCommand(run, { type: 'rest', hours: 12 }))
       run = ok(applyCommand(run, { type: 'rest', hours: 12 }))
     }
-    const words = wordsTo(run, PLAYER)
+    // С этапа 109 в вестях лежат и донесения о чужих войсках: отчёты наместников
+    // — это те, что о месте.
+    const words = fromPlaces(run)
     console.log(`вестей от своих: ${words.length}, источник первой — ${words[0]?.source}`)
     expect(words.length).toBeGreaterThan(0)
     expect(words.every((one) => one.source === 'own')).toBe(true)

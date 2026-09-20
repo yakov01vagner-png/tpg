@@ -412,6 +412,13 @@ export interface GameState {
   }
   /** Дела, которые ты уже разобрал или передал: чтобы не звали дважды. */
   readonly settled?: Readonly<Record<string, number>>
+  /** Чем решались осады: знанием или стенами (этап 113). */
+  readonly siegeLog?: {
+    readonly byKnowing: number
+    readonly byWalls: number
+    readonly bluffs: number
+    readonly defectors: number
+  }
   /** Обманы, которые сейчас живут на карте (этап 112). */
   readonly ruses?: readonly Ruse[]
   readonly ruseLog?: { readonly made: number; readonly worked: number; readonly seen: number }
@@ -564,6 +571,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     favours: {},
     ruleLog: { heard: 0, handed: 0, missed: 0 },
     settled: {},
+    siegeLog: { byKnowing: 0, byWalls: 0, bluffs: 0, defectors: 0 },
     ruses: [],
     ruseLog: { made: 0, worked: 0, seen: 0 },
     fieldOrders: [],
