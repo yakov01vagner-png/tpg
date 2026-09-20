@@ -168,13 +168,13 @@ describe('Це3 и Це4: тихо и долго против громко и б
   it('тихого дальние не слышат вовсе', () => {
     const loud = far({ time: WORLD_START + (DREAD.wordBeat * 14 - 2) * 24 * 60 })
     const quiet = ok(applyCommand(loud, { type: 'goQuiet' }))
-    const after = (state: GameState): GameState => {
+    const live = (state: GameState): GameState => {
       let out = state
       for (let i = 0; i < 4; i += 1) out = ok(applyCommand(out, { type: 'rest', hours: 12 }))
       return out
     }
-    const loudly = after(loud)
-    const quietly = after(quiet)
+    const loudly = live(loud)
+    const quietly = live(quiet)
     const heardLoud = kingdoms.filter(
       (id) => dreadSeen(loudly, world, id, PLAYER, dayOfState(loudly)).known.value !== null,
     ).length

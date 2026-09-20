@@ -46,7 +46,6 @@ function withLog(lines: readonly { text: string; day: number }[]): GameState {
     time: WORLD_START + (day - 1) * 24 * 60,
     realm: { name: 'Заречье', sinceDay: 1 },
     log: lines.map((one, i) => ({
-      id: `line:${i}`,
       time: WORLD_START + (one.day - 1) * 24 * 60,
       text: one.text,
       kind: 'world' as const,
