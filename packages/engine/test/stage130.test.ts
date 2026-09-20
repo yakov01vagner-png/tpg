@@ -142,11 +142,13 @@ describe('Пт4: цена пути', () => {
       expect(WAY_DEFS[id].costs.length).toBeGreaterThan(10)
       expect(WAY_DEFS[id].ends.length).toBeGreaterThan(3)
     }
-    // Путь силы коронам закрыт: архимагом корона не бывает.
-    expect(WAY_DEFS.might.forCrowns).toBe(false)
+    // До 1.0 путь силы был коронам закрыт: архимагом корона не бывала. С этапа
+    // 162 при её дворе сидит чародей, и ступень у него считается тем же счётом,
+    // — открыты все пять.
+    expect(WAY_DEFS.might.forCrowns).toBe(true)
     const crownWays = waysOf(ruler(6), world, kingdoms[1] as string, day)
     console.log(`короне открыто путей: ${crownWays.length} из ${WAYS.length}`)
-    expect(crownWays).toHaveLength(WAYS.length - 1)
+    expect(crownWays).toHaveLength(WAYS.length)
   })
 })
 

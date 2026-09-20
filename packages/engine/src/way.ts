@@ -18,6 +18,16 @@ import { rankTier } from './magic'
 import { strengthOf } from './mind'
 import { reignOf } from './royal'
 import type { GameState } from './state'
+import {
+  crownCalm,
+  crownCrusade,
+  crownHeir,
+  crownKin,
+  crownMight,
+  crownPiety,
+  crownPurse,
+  crownVentures,
+} from './theirs'
 import { atWar, relationOf } from './war'
 import type { World } from './world/types'
 
@@ -147,21 +157,22 @@ export function measureFor(
     return player ? houseOf(state).length : reignOf(who, day)
   }
   if (measure === 'heir') {
-    if (!player) return 1
+    // У короны наследник — настоящий: из её дома, а не единица-заглушка.
+    if (!player) return crownHeir(world, who, day) ? 1 : 0
     return state.house !== undefined && state.character.age >= 0 && hasHeir(state) ? 1 : 0
   }
   if (measure === 'kin') {
-    return player
-      ? (state.marriages ?? []).length
-      : (state.marriages ?? []).filter((one) => one.kingdomId === who).length
+    // Родня короны — не только брак с игроком: короны роднятся и между собой.
+    return player ? (state.marriages ?? []).length : crownKin(state, world, who, day).length
   }
   if (measure === 'purse') {
-    // Чужая казна не лежит в состоянии: её считают по земле, как в слое знания.
-    return player
-      ? state.character.money
-      : Math.round(strengthOf(state, world, who, day).places * 420)
+    // Чужая казна не лежит в состоянии: её считают по земле и дани (этап 162).
+    return player ? state.character.money : crownPurse(state, world, who, day)
   }
-  if (measure === 'ventures') return player ? state.enterprises.length : 0
+  if (measure === 'ventures') {
+    // Порты, рудники и города — её дела: доход, который идёт без войны.
+    return player ? state.enterprises.length : crownVentures(state, world, who)
+  }
   if (measure === 'debtors') {
     // Короны в долгу у тебя: дань в твою пользу — тот же долг, только признанный,
     // а заём (этап 133) — долг названный, и считаются они вместе.
@@ -169,16 +180,25 @@ export function measureFor(
     const owing = player ? crownDebtsOf(state).map((one) => one.kingdomId) : []
     return new Set([...paying, ...owing]).size
   }
-  if (measure === 'magicRank') return player ? rankTier(state.character.magicRank) : 0
-  if (measure === 'magicSkill') return player ? skillLevel(state.character, 'magic') : 0
-  if (measure === 'artifacts') return player ? (state.artifacts ?? []).length : 0
-  if (measure === 'piety') return player ? (state.piety ?? 0) : 0
+  // Ранг, книги и вещи с чарами есть и у чужих: при дворе сидит чародей, и
+  // архимагом бывает не только игрок (этап 162).
+  if (measure === 'magicRank') {
+    return player ? rankTier(state.character.magicRank) : crownMight(world, who, day).tier
+  }
+  if (measure === 'magicSkill') {
+    return player ? skillLevel(state.character, 'magic') : crownMight(world, who, day).skill
+  }
+  if (measure === 'artifacts') {
+    return player ? (state.artifacts ?? []).length : crownMight(world, who, day).artifacts
+  }
+  if (measure === 'piety') return player ? (state.piety ?? 0) : crownPiety(state, world, who, day)
   if (measure === 'churchCalm') {
-    if (!player) return 1
+    if (!player) return crownCalm(state, world, who, day) ? 1 : 0
     return (state.churchAnger ?? 0) < 20 && !state.censure ? 1 : 0
   }
   if (measure === 'crusade') {
-    return player ? (state.quests.some((one) => one.id.includes('crusade')) ? 1 : 0) : 0
+    if (!player) return crownCrusade(state, world, who, day) ? 1 : 0
+    return state.quests.some((one) => one.id.includes('crusade')) ? 1 : 0
   }
   return 0
 }

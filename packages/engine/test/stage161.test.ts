@@ -41,7 +41,7 @@ function ruler(places = 6): GameState {
     time: WORLD_START,
     locationId: taken[0]?.locationId ?? game.locationId,
     quarter: null,
-    party: { ...game.party, units: { spear: 40, archer: 20 } },
+    party: { ...game.party, units: { spearman: 40, archer: 20 } },
     realm: { name: 'Заречье', sinceDay: 1 },
   }
 }
@@ -90,7 +90,7 @@ describe('См1 и См3: одна мерка на всех', () => {
         ...state,
         settlements: {
           ...state.settlements,
-          [seat.locationId]: { ...seat, garrison: { spear: 50 } },
+          [seat.locationId]: { ...seat, garrison: { spearman: 50 } },
         },
       },
       world,
@@ -100,7 +100,7 @@ describe('См1 и См3: одна мерка на всех', () => {
     console.log(
       `${crown}: без гарнизона ${before.score}, с пятьюдесятью за стенами ${withGuards.score}`,
     )
-    expect(withGuards.guards - before.guards).toBe(50 - (seat.garrison.spear ?? 0))
+    expect(withGuards.guards - before.guards).toBe(50 - (seat.garrison.spearman ?? 0))
     expect(withGuards.score).toBeGreaterThan(before.score)
     expect(MIND.guardWeight).toBeLessThan(MIND.manWeight)
   })
