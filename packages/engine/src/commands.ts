@@ -280,6 +280,19 @@ import {
   rankOfShifts,
   shiftsOf,
 } from './craft'
+import {
+  AUDIENCE,
+  AUDIENCE_WORDS,
+  type Matter,
+  attentionOf,
+  dayOfRule,
+  delegatedWorth,
+  doorway,
+  matterDef,
+  overdue,
+  ruleYear,
+  whoTakes,
+} from './day'
 import { tickDiplomacy } from './diplomacy'
 import {
   PRIME_AGE,
@@ -1110,6 +1123,9 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** День государя (этап 107): разобрать дело самому или передать своему. */
+  | { readonly type: 'hearMatter'; readonly matterId: string }
+  | { readonly type: 'handMatter'; readonly matterId: string }
   /** Утайка (этап 105): выслушать доносчика или прогнать. */
   | { readonly type: 'hearDenounce'; readonly pay: boolean }
   /** Люди двора (этап 104): исполнить просьбу своего или отказать. */
@@ -1623,6 +1639,10 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'hearMatter':
+      return hearMatter(state, command.matterId)
+    case 'handMatter':
+      return handMatter(state, command.matterId)
     case 'hearDenounce':
       return hearDenounce(state, command.pay)
     case 'answerCourtier':
@@ -9561,6 +9581,8 @@ interface Draft {
   looks: readonly Look[]
   trust: Readonly<Record<string, { readonly said: number; readonly lied: number }>>
   favours: Readonly<Record<string, number>>
+  ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
+  settled: Readonly<Record<string, number>>
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9670,6 +9692,8 @@ function open(state: GameState): Draft {
     looks: state.looks ?? [],
     trust: state.trust ?? {},
     favours: state.favours ?? {},
+    ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
+    settled: state.settled ?? {},
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9960,6 +9984,8 @@ function close(draft: Draft): CommandResult {
 
     // Войско ест каждый день, а донесения идут своим ходом (этап 84, Ка3 и Ка5).
     tickCampaign(draft, daysPassed)
+    // То, на что не хватило внимания, решается без тебя (этап 107).
+    tickDoorway(draft, daysPassed)
     // Двор просит, стареет и уходит (этап 104).
     tickCourtiers(draft, daysPassed)
     // Посланные смотреть возвращаются (этап 102).
@@ -10119,6 +10145,8 @@ function close(draft: Draft): CommandResult {
     looks: draft.looks,
     trust: draft.trust,
     favours: draft.favours,
+    ruleLog: draft.ruleLog,
+    settled: draft.settled,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -11792,6 +11820,117 @@ function shutOwnHarbours(draft: Draft, days: number): void {
     notice(draft, `Чужие суда держат твои гавани: заперто ${shut}. Пошлина не идёт.`, 'war')
   }
 }
+
+/**
+ * Разобрать дело самому (этап 107, Дн1 и Дн2).
+ *
+ * Внимание — главный ресурс власти: дел у дверей больше, чем ты успеешь взять.
+ * Разобранное тобой решается лучше всего и стоит усталости; взятое сверх сил
+ * стоит вдвое.
+ */
+function hearMatter(state: GameState, matterId: string): CommandResult {
+  const day = dayOf(state.time)
+  const plan = dayOfRule(state, state.world, day)
+  const matter = plan.waiting.find((one) => one.id === matterId)
+  if (!matter) return fail('invalid', 'Такого дела у дверей нет.')
+  if ((state.settled?.[matterId] ?? 0) >= day) {
+    return fail('invalid', 'Это дело сегодня уже разбирали.')
+  }
+  const taken = Object.values(state.settled ?? {}).filter((one) => one === day).length
+  if (taken >= plan.canTake) {
+    return fail('requirements', `На сегодня довольно: больше ${plan.canTake} дел не берут.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(4))
+  addFatigue(draft, AUDIENCE.fatiguePerMatter)
+  draft.settled = { ...(draft.settled ?? {}), [matterId]: day }
+  draft.ruleLog = { ...draft.ruleLog, heard: draft.ruleLog.heard + 1 }
+  // Разобранное тобой идёт в зачёт тому, о ком оно: место, вассал, свой человек.
+  if (matter.kind === 'plea') {
+    draft.reputation = withPlaceRep(draft.reputation, matter.about, 6)
+  }
+  if (matter.kind === 'vassal') shiftVassals(draft, 5, matter.about)
+  if (matter.kind === 'courtier') {
+    draft.favours = {
+      ...(draft.favours ?? {}),
+      [matter.about]: (draft.favours?.[matter.about] ?? 0) + 1,
+    }
+  }
+  notice(draft, `${matter.says} ${AUDIENCE_WORDS.heard}`, 'people')
+  return close(draft)
+}
+
+/**
+ * Передать дело своему (этап 107, Дн4).
+ *
+ * Дешевле временем, дороже точностью: решит он — и решит по-своему, тем лучше,
+ * чем он лучше. Твоего часа это не стоит, но и твоим решением не будет.
+ */
+function handMatter(state: GameState, matterId: string): CommandResult {
+  const day = dayOf(state.time)
+  const plan = dayOfRule(state, state.world, day)
+  const matter = plan.waiting.find((one) => one.id === matterId)
+  if (!matter) return fail('invalid', 'Такого дела у дверей нет.')
+  const who = whoTakes(state, matter, day)
+  if (!who) return fail('requirements', 'Передавать некому: двор пуст.')
+
+  const draft = open(state)
+  advance(draft, hours(1))
+  draft.settled = { ...(draft.settled ?? {}), [matterId]: day }
+  draft.ruleLog = { ...draft.ruleLog, handed: draft.ruleLog.handed + 1 }
+  const worth = delegatedWorth(who)
+  if (matter.kind === 'plea') {
+    draft.reputation = withPlaceRep(draft.reputation, matter.about, Math.round(6 * worth))
+  }
+  if (matter.kind === 'vassal') shiftVassals(draft, Math.round(5 * worth), matter.about)
+  notice(
+    draft,
+    `${matter.says} ${AUDIENCE_WORDS.handed} Взял ${who.name} (${who.temper}, умение ${who.worth}): выйдет на ${Math.round(worth * 100)} из ста от твоего.`,
+    'people',
+  )
+  return close(draft)
+}
+
+/**
+ * Сутки у дверей (этап 107, Дн3 и Дн5).
+ *
+ * То, на что никто не посмотрел, решается само — и не в твою пользу. А год без
+ * отдыха берёт своё: руки тяжелеют, и решения выходят хуже.
+ */
+function tickDoorway(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % DOOR_BEAT !== 0) return
+  let missed = 0
+  for (const matter of doorway(draft.base, draft.base.world, day)) {
+    if (!overdue(matter, day)) continue
+    if ((draft.settled?.[matter.id] ?? 0) >= day - AUDIENCE.waitsDays) continue
+    missed += 1
+    const def = matterDef(matter.kind)
+    if (matter.kind === 'plea') {
+      draft.reputation = withPlaceRep(draft.reputation, matter.about, -def.cost)
+    }
+    if (matter.kind === 'vassal') shiftVassals(draft, -Math.round(def.cost / 2), matter.about)
+    notice(draft, `${matter.label}: ${matter.ignored} ${AUDIENCE_WORDS.missed}`, 'people')
+  }
+  if (missed > 0) {
+    draft.ruleLog = { ...draft.ruleLog, missed: draft.ruleLog.missed + missed }
+  }
+  // Год без отдыха: усталость, которую не сняли, оборачивается здоровьем.
+  if (day % 360 === 0 && draft.character.fatigue >= AUDIENCE.tiredFrom) {
+    patch(draft, {
+      attributes: {
+        ...draft.character.attributes,
+        endurance: Math.max(1, draft.character.attributes.endurance - 1),
+      },
+    })
+    notice(draft, AUDIENCE_WORDS.worn, 'people')
+  }
+}
+
+/** Как часто считают, что осталось без ответа. */
+const DOOR_BEAT = 6
 
 /**
  * Выслушать доносчика (этап 105, С5).

@@ -396,6 +396,17 @@ export interface GameState {
   readonly trust?: Readonly<Record<string, { readonly said: number; readonly lied: number }>>
   /** Кому из своих ты что исполнил, а в чём отказал (этап 104). */
   readonly favours?: Readonly<Record<string, number>>
+  /**
+   * На что уходит твоё внимание (этап 107): сколько дел ты разобрал сам,
+   * сколько передал своим и сколько решилось без тебя.
+   */
+  readonly ruleLog?: {
+    readonly heard: number
+    readonly handed: number
+    readonly missed: number
+  }
+  /** Дела, которые ты уже разобрал или передал: чтобы не звали дважды. */
+  readonly settled?: Readonly<Record<string, number>>
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -519,6 +530,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     looks: [],
     trust: {},
     favours: {},
+    ruleLog: { heard: 0, handed: 0, missed: 0 },
+    settled: {},
     factions: {},
     spellcraft: {},
     weather: [],
