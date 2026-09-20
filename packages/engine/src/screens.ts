@@ -1,3 +1,4 @@
+import { givingCost, hasGiven } from './acclaim'
 import { campaignOf, dispatchesOf, frontsOf, hostsOf, supplyOf } from './campaign'
 import { churchLedger } from './church'
 import { citiesOf, cityLedger } from './city'
@@ -7,12 +8,15 @@ import { KNOWN_WORDS } from './content/known'
 import { MOULD_WORDS } from './content/mould'
 import { OFFICES, type OfficeId } from './content/offices'
 import { vassalsOf } from './court'
+import { sideName, whoFears } from './dread'
+import { nearestEnding } from './ending'
 import { lawOf } from './estate'
 import { blindToShare, fogMap } from './fog'
 import { ageSays, skillCeiling } from './growth'
 import { PLAYER, holdingsOf } from './holding'
 import { claimantsOf, heirLawOf, heirUnder, partitionOf, regencyFor, strifeOf } from './inherit'
 import { type Known, askedDef, knownTo, sourceDef, wordsTo } from './known'
+import { leagueNow, whoToCall } from './league'
 import { playStyle, worldOpinion } from './memory'
 import { mouldOf, paysWith } from './mould'
 import { seaLedger } from './navy'
@@ -21,6 +25,7 @@ import { isLiar, overturesOf, wordOf } from './overture'
 import { TRIALS, trialOdds } from './paths'
 import { peaceChronicle, talksOf } from './peace'
 import { skillXpToNext } from './progression'
+import { whoLeads } from './race'
 import { courtMood, plotAgainst } from './revolt'
 import { SCOUT } from './scout'
 import { sheetOf } from './sheet'
@@ -30,6 +35,8 @@ import type { GameState } from './state'
 import { dayOf } from './time'
 import { ledger } from './treasury'
 import { atWar, warsOf } from './war'
+import { canGuarantee } from './ward'
+import { wayOf } from './way'
 import type { World } from './world/types'
 
 /**
@@ -61,7 +68,7 @@ export interface Deed {
 }
 
 export interface Screen {
-  readonly id: 'realm' | 'talks' | 'war' | 'court' | 'house' | 'growth' | 'news'
+  readonly id: 'realm' | 'talks' | 'war' | 'court' | 'house' | 'growth' | 'news' | 'way'
   readonly title: string
   readonly lines: readonly Line[]
   readonly deeds: readonly Deed[]
@@ -501,5 +508,89 @@ export function powerScreens(state: GameState, world: World): readonly Screen[] 
     houseScreen(state, world),
     growthScreen(state, world),
     newsScreen(state, world),
+    wayScreen(state, world),
   ]
+}
+
+/**
+ * Экран пути (этап 158).
+ *
+ * Восьмой экран власти. Он отвечает на пять вопросов разом: где я, кто рядом,
+ * что мешает, кто меня боится и что с этим делать. Чужие числа на нём — не
+ * правда, а вести (0.8), и это сказано у каждого.
+ */
+export function wayScreen(state: GameState, world: World): Screen {
+  const day = dayOf(state.time)
+  const near = nearestEnding(state, world, day)
+  const mine = wayOf(state, world, PLAYER, 'crown', day)
+  const leads = whoLeads(state, world, day)
+  const fears = whoFears(state, world, PLAYER, day)
+  const league = leagueNow(state, world, day)
+  const lines: Line[] = [
+    {
+      label: 'Твой путь',
+      value: `${Math.round(near.share * 100)} из ста`,
+      hint: near.says,
+    },
+    {
+      label: 'Что мешает',
+      value: `${mine.left.length}`,
+      hint: mine.left.length > 0 ? (mine.left[0] as string) : 'На этом пути тебе ничего не мешает.',
+    },
+    {
+      label: 'Ведёт',
+      value: `${sideName(world, leads.who)} ${leads.seen}`,
+      hint: leads.says,
+    },
+    {
+      label: 'Боятся тебя',
+      value: `${fears.length}`,
+      hint:
+        fears.length > 0
+          ? `${fears.map((one) => `${sideName(world, one.who)} ${one.score}`).join(', ')} — считается по вестям, а не по правде.`
+          : 'Тебя пока не боится никто: продвижение твоё до них не дошло.',
+    },
+    {
+      label: 'Против кого сходятся',
+      value: league.against ? sideName(world, league.against) : '—',
+      hint: league.says,
+    },
+  ]
+  const deeds: Deed[] = []
+  const first = Object.keys(world.kingdoms).find((id) => !hasGiven(state, id))
+  if (first) {
+    deeds.push({
+      label: `Признать: ${sideName(world, first)}`,
+      command: { type: 'recogniseCrown', of: first },
+      can: !atWar(state.politics, PLAYER, first),
+      why: givingCost(state, world, first, day).says,
+    })
+  }
+  const call = whoToCall(state, world, day)
+  if (call.against) {
+    deeds.push({
+      label: `Собрать мир против: ${sideName(world, call.against)}`,
+      command: { type: 'callLeague', against: call.against },
+      can: call.members.length >= 3,
+      why: call.says,
+    })
+  }
+  const weak = Object.keys(world.kingdoms).find(
+    (id) => canGuarantee(state, world, PLAYER, id, day).can,
+  )
+  if (weak) {
+    deeds.push({
+      label: `Поручиться за: ${sideName(world, weak)}`,
+      command: { type: 'giveGuarantee', of: weak },
+      can: true,
+      why: canGuarantee(state, world, PLAYER, weak, day).says,
+    })
+  }
+  return {
+    id: 'way',
+    title: 'Путь',
+    lines,
+    deeds,
+    says: `${near.says} ${leads.says}`,
+  }
 }
