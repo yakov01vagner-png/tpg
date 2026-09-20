@@ -658,6 +658,7 @@ import {
   veteransOf,
   withUnits,
 } from './party'
+import { PATH_DEFS, PATH_WORDS, type PathId, serviceTeaches, trialById, trialOdds } from './paths'
 import type { Grievance, PeaceRecord, Talks } from './peace'
 import {
   PEACE,
@@ -1285,6 +1286,8 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Испытание (этап 124): выйти на турнир, охоту, диспут, смотр, мост, ярмарку. */
+  | { readonly type: 'takeTrial'; readonly trialId: string }
   /** Чужое слово (этап 121): сдержит ли он обещанное. */
   | { readonly type: 'weighPledge'; readonly of: string }
   /** Чужое заблуждение (этап 120): чем он ошибается о тебе. */
@@ -1848,6 +1851,8 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'takeTrial':
+      return takeTrial(state, command.trialId)
     case 'weighPledge':
       return weighPledge(state, command.of)
     case 'weighError':
@@ -8406,7 +8411,13 @@ function readBook(state: GameState, bookId: string): CommandResult {
     return close(draft)
   }
   for (const [skill, xp] of Object.entries(book.teaches)) {
-    practice(draft, skill as SkillId, xp ?? 0)
+    // По книге дальше середины не уйдёшь (этап 124, Пу5): дальше нужен человек
+    // или дело. Иначе книжник вырастал бы в кресле.
+    if (skillLevel(draft.character, skill as SkillId) >= PATH_DEFS.book.cap) {
+      notice(draft, `${SKILLS[skill as SkillId].label}: ${PATH_WORDS.bookCap}`)
+      continue
+    }
+    practice(draft, skill as SkillId, xp ?? 0, 'book')
   }
   notice(draft, `${book.label} прочитана. ${book.about}`)
   if (book.spellId) {
@@ -9526,7 +9537,7 @@ function study(state: GameState, courseId: string, content: Content): CommandRes
   advance(draft, course.durationMinutes)
   addMoney(draft, -course.cost)
   addFatigue(draft, course.fatigue)
-  practice(draft, course.skill, course.xp * efficiency)
+  practice(draft, course.skill, course.xp * efficiency, 'teacher')
   return close(draft)
 }
 
@@ -9866,6 +9877,14 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  pathLog: {
+    readonly byDoing: number
+    readonly byTeacher: number
+    readonly byBook: number
+    readonly byTrial: number
+    readonly byService: number
+  }
+  trials: Readonly<Record<string, number>>
   deceitLog: { readonly made: number; readonly worked: number; readonly caught: number }
   beliefs: Readonly<Record<string, { readonly value: number; readonly day: number }>>
   biasLog: { readonly held: number; readonly woke: number; readonly warsByError: number }
@@ -10039,6 +10058,8 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
+    trials: state.trials ?? {},
     deceitLog: state.deceitLog ?? { made: 0, worked: 0, caught: 0 },
     beliefs: state.beliefs ?? {},
     biasLog: state.biasLog ?? { held: 0, woke: 0, warsByError: 0 },
@@ -10373,6 +10394,8 @@ function close(draft: Draft): CommandResult {
     tickGuests(draft, daysPassed)
     // Постоянные послы пишут, дорожают и попадаются (этап 117).
     tickResidents(draft, daysPassed)
+    // Служба учит тому, чем служишь (этап 124, Пу6).
+    tickService(draft, daysPassed)
     // Короны читают твои ходы и делают выводы (этап 119).
     tickGuesses(draft, daysPassed)
     // Они упорствуют в заблуждениях и прозревают (этап 120).
@@ -10540,6 +10563,8 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    pathLog: draft.pathLog,
+    trials: draft.trials,
     deceitLog: draft.deceitLog,
     beliefs: draft.beliefs,
     biasLog: draft.biasLog,
@@ -12544,6 +12569,75 @@ function tickGuesses(draft: Draft, days: number): void {
 }
 
 /**
+ * Служба учит сама (этап 124, Пу6).
+ *
+ * Рост за чужой счёт: пока ты кому-то служишь, навыки этой службы растут без
+ * серебра и без школы. Платишь ты не деньгами, а свободой: служащий не сам
+ * себе голова.
+ */
+function tickService(draft: Draft, days: number): void {
+  if (days <= 0) return
+  // Считается раз в декаду за всю декаду: перебирать навыки каждый день дорого,
+  // а на росте это не сказывается.
+  const day = dayOf(draft.time)
+  if (day % SERVICE_BEAT !== 0) return
+  const kinds: string[] = []
+  if (draft.service) kinds.push('mercenary')
+  if (draft.realm) kinds.push('steward')
+  if ((draft.embassies ?? []).length > 0 || draft.residents.length > 0) kinds.push('envoy')
+  if ((draft.spies ?? []).length > 0) kinds.push('spy')
+  if (draft.politics.lords.some((one) => one.kingdomId === PLAYER)) kinds.push('vassal')
+  if (kinds.length === 0) return
+  for (const kind of kinds) {
+    for (const skill of serviceTeaches(kind)) {
+      practice(draft, skill, PATH_DEFS.service.xp * days * 0.1 * SERVICE_BEAT, 'service')
+    }
+  }
+}
+
+/**
+ * Выйти на испытание (этап 124, Пу1).
+ *
+ * Пятый путь: разом и много, если выдержишь. Считается не броском вслепую, а
+ * запасом умения над порогом, и запас этот назван заранее.
+ */
+function takeTrial(state: GameState, trialId: string): CommandResult {
+  const trial = trialById(trialId)
+  if (!trial) return fail('invalid', 'Такого испытания не бывает.')
+  const day = dayOf(state.time)
+  const odds = trialOdds(state, trial)
+  if (!odds.can) return fail('requirements', odds.says)
+  if (state.character.money < trial.cost) {
+    return fail('noMoney', `На это нужно ${trial.cost} серебра.`)
+  }
+  const last = state.trials?.[trialId] ?? 0
+  if (last > 0 && day - last < 180) {
+    return fail('invalid', 'Такое бывает не каждый месяц: жди следующего раза.')
+  }
+
+  const draft = open(state)
+  advance(draft, hours(24 * trial.days))
+  if (trial.cost > 0) addMoney(draft, -trial.cost)
+  addFatigue(draft, 12 * trial.days)
+  draft.trials = { ...draft.trials, [trialId]: day }
+  const [held, afterRoll] = rollChance(draft.rng, odds.chance)
+  draft.rng = afterRoll
+  if (!held) {
+    practice(draft, trial.skill, Math.round(trial.xp * 0.2))
+    draft.pathLog = {
+      ...draft.pathLog,
+      byTrial: draft.pathLog.byTrial + Math.round(trial.xp * 0.2),
+    }
+    notice(draft, `${trial.label}: не вышло — ${trial.fails}.`, 'people')
+    return close(draft)
+  }
+  practice(draft, trial.skill, trial.xp, 'trial')
+  draft.renown += 2
+  notice(draft, `${trial.label}: выдержал. ${trial.about} Слава +2.`, 'people')
+  return close(draft)
+}
+
+/**
  * Сдержит ли он слово (этап 121, Об1 и Об4).
  *
  * Считается выгодой, а не честностью. И заодно видно, не показывает ли он тебе
@@ -13766,6 +13860,9 @@ function tickDoorway(draft: Draft, days: number): void {
 const DOOR_BEAT = 6
 /** Раз во сколько суток пересчитывается утечка тайн (этап 115). */
 const SECRET_BEAT = 5
+
+/** Раз во сколько суток служба учит своему (этап 124). */
+const SERVICE_BEAT = 10
 
 /**
  * Выслушать доносчика (этап 105, С5).
@@ -16339,11 +16436,23 @@ function addFatigue(draft: Draft, delta: number): void {
   draft.events.push({ type: 'fatigue', delta: applied })
 }
 
-function practice(draft: Draft, skill: SkillId, rawXp: number): void {
+function practice(draft: Draft, skill: SkillId, rawXp: number, path: PathId = 'doing'): void {
   if (rawXp <= 0) return
   const attribute = attributeForSkill(draft.character, skill)
   const gain = applySkillXp(draft.character.skills[skill], rawXp, attribute)
   if (gain.appliedXp <= 0) return
+  // Чем именно ты рос (этап 124, Пу1): век считает пути отдельно.
+  const by =
+    path === 'teacher'
+      ? 'byTeacher'
+      : path === 'book'
+        ? 'byBook'
+        : path === 'trial'
+          ? 'byTrial'
+          : path === 'service'
+            ? 'byService'
+            : 'byDoing'
+  draft.pathLog = { ...draft.pathLog, [by]: draft.pathLog[by] + Math.round(gain.appliedXp) }
   patch(draft, { skills: { ...draft.character.skills, [skill]: gain.progress } })
   if (gain.levelsGained === 0) return
 
