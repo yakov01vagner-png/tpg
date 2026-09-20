@@ -415,6 +415,20 @@ export interface GameState {
   }
   /** Дела, которые ты уже разобрал или передал: чтобы не звали дважды. */
   readonly settled?: Readonly<Record<string, number>>
+  /**
+   * Кто признал тебя не по силе (этап 131): дверью договора, родства или дара.
+   *
+   * Хранится день признания, потому что вывести его нельзя: дар был или не был.
+   * Признание можно и отозвать (этап 138) — тогда запись уходит.
+   */
+  readonly recognitions?: Readonly<Record<string, number>>
+  /**
+   * Объединение (этап 131): с какого дня тебя признали все.
+   *
+   * Хранится один день, потому что вывести его нельзя: срок — это история, а не
+   * состояние. Отвалился кто-нибудь — день сбрасывается, и круг идёт заново.
+   */
+  readonly union?: { readonly sinceDay: number } | null
   /** Когда каждый навык трогали в последний раз (этап 125): он ржавеет. */
   readonly usedDay?: Readonly<Record<string, number>>
   /** Чем ты рос на самом деле (этап 124) и какие испытания уже брал. */
@@ -644,6 +658,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     favours: {},
     ruleLog: { heard: 0, handed: 0, missed: 0 },
     settled: {},
+    recognitions: {},
+    union: null,
     usedDay: {},
     pathLog: { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: {},

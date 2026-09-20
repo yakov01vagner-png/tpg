@@ -54,6 +54,21 @@ export function recognises(
   if (atWar(state.politics, who, other)) return false
   // Данник признаёт всегда: он это уже признал деньгами.
   if (state.politics.tributes.some((one) => one.from === other && one.to === who)) return true
+  // Четыре двери этапа 131. Родня не признаёт — родня уже родня.
+  if (who === PLAYER && (state.marriages ?? []).some((one) => one.kingdomId === other)) return true
+  // Союз — это признание на бумаге.
+  if (
+    (state.treaties ?? []).some(
+      (one) =>
+        one.kind === 'alliance' &&
+        one.brokenBy === undefined &&
+        ((one.a === who && one.b === other) || (one.a === other && one.b === who)),
+    )
+  ) {
+    return true
+  }
+  // И то, что взято договором, дарами или разбитым войском, записано.
+  if (who === PLAYER && (state.recognitions?.[other] ?? 0) > 0) return true
   const mine = strengthOf(state, world, who, day).score
   const theirs = strengthOf(state, world, other, day).score
   const warm = relationOf(state.politics, who, other) >= -20

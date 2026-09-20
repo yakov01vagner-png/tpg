@@ -1008,6 +1008,7 @@ import {
   treatyDef,
   treatyWords,
 } from './treaty'
+import { DOOR_DEFS, UNION, UNION_WORDS, doorsTo, unionOf, unionWorld, whoIsLeft } from './union'
 import {
   type Oath,
   RAISE_MOOD,
@@ -1029,6 +1030,7 @@ import { allied, pairOf, relationOf } from './war'
 import type { Politics } from './war'
 import type { WarEvent } from './war'
 import { atWar, banditBand, lordById, tickPolitics, warband, warsOf } from './war'
+import { WAY, recognisedBySides } from './way'
 import type { WildMemory } from './wild'
 import {
   denizenOf,
@@ -1290,6 +1292,8 @@ export type Command =
   | { readonly type: 'askLetter'; readonly against: string }
   /** Склад (этап 126): переучиться с одного дела на другое. */
   | { readonly type: 'retrain'; readonly from: SkillId; readonly to: SkillId }
+  /** Путь короны (этап 131): дар за признание и смотр того, кто ещё не признал. */
+  | { readonly type: 'giftRecognition'; readonly to: string }
   /** Испытание (этап 124): выйти на турнир, охоту, диспут, смотр, мост, ярмарку. */
   | { readonly type: 'takeTrial'; readonly trialId: string }
   /** Чужое слово (этап 121): сдержит ли он обещанное. */
@@ -1857,6 +1861,8 @@ export function applyCommand(
       return seaSortie(state, command.locationId)
     case 'retrain':
       return retrain(state, command.from, command.to)
+    case 'giftRecognition':
+      return giftRecognition(state, command.to)
     case 'takeTrial':
       return takeTrial(state, command.trialId)
     case 'weighPledge':
@@ -9883,6 +9889,8 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  recognitions: Readonly<Record<string, number>>
+  union: { readonly sinceDay: number } | null
   usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
@@ -10065,6 +10073,8 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    recognitions: state.recognitions ?? {},
+    union: state.union ?? null,
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
@@ -10402,6 +10412,8 @@ function close(draft: Draft): CommandResult {
     tickGuests(draft, daysPassed)
     // Постоянные послы пишут, дорожают и попадаются (этап 117).
     tickResidents(draft, daysPassed)
+    // Признали все или уже не все: срок объединения идёт или начинается заново (этап 131).
+    tickUnion(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10573,6 +10585,8 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    recognitions: draft.recognitions,
+    union: draft.union,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
@@ -12672,6 +12686,77 @@ function retrain(state: GameState, from: SkillId, to: SkillId): CommandResult {
 }
 
 /**
+ * Дар за признание (этап 131, Кр2, дверь серебра).
+ *
+ * Четвёртая дверь: признать выгоднее, чем не признавать. Стоит она по чужой
+ * земле и дорожает к концу пути — последние трое берут больше первых пяти.
+ */
+function giftRecognition(state: GameState, to: string): CommandResult {
+  if (!state.world.kingdoms[to]) return fail('invalid', 'Такой короны нет.')
+  if (!state.realm) return fail('requirements', 'Признавать пока нечего: державы нет.')
+  const day = dayOf(state.time)
+  if (atWar(state.politics, PLAYER, to)) {
+    return fail('requirements', 'Воюющему дары не посылают: сперва мир.')
+  }
+  if ((state.recognitions?.[to] ?? 0) > 0) {
+    return fail('invalid', 'Эта корона тебя уже признала.')
+  }
+  const door = doorsTo(state, state.world, PLAYER, to, day).find((one) => one.door === 'coin')
+  if (!door) return fail('invalid', 'Этой двери нет.')
+  if (state.character.money < door.cost) {
+    return fail('noMoney', `За признание просят ${door.cost} серебра.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(8))
+  addMoney(draft, -door.cost)
+  draft.recognitions = { ...draft.recognitions, [to]: day }
+  draft.politics = withRelation(draft.politics, PLAYER, to, 12)
+  notice(
+    draft,
+    `${kingdomName(draft.base, to)} признаёт тебя: ${door.cost} серебра. ${DOOR_DEFS.coin.after}`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Срок объединения (этап 131, Кр1 и Кр4).
+ *
+ * Объединение — не день, а срок: пока признают все, он идёт; отвалился
+ * кто-нибудь — начинается заново. И пока он идёт, держава под одной рукой
+ * недовольнее обычной: чужих войн нет, свои есть.
+ */
+function tickUnion(draft: Draft, days: number): void {
+  if (days <= 0 || !draft.realm) return
+  const day = dayOf(draft.time)
+  if (day % WAY.beat !== 0) return
+  const { no } = recognisedBySides(draft.base, draft.world, PLAYER, day)
+  if (no.length > 0) {
+    if (draft.union) {
+      notice(draft, `${UNION_WORDS.lost} Не признают ${no.length}.`, 'world')
+      draft.union = null
+    }
+    return
+  }
+  if (!draft.union) {
+    draft.union = { sinceDay: day }
+    notice(draft, `Тебя признали все. ${UNION_WORDS.hold}`, 'world')
+    return
+  }
+  // Мир под одной рукой: недовольство идёт изнутри (Кр5).
+  const world = unionWorld(draft.base, draft.world, day)
+  if (day % (WAY.beat * 9) === 0) {
+    shiftVassals(draft, -Math.round(world.unrest / 4), null)
+    notice(draft, world.says, 'world')
+  }
+  const union = unionOf(draft.base, draft.world, PLAYER, day)
+  if (union.finished && day % (WAY.beat * 9) === 0) {
+    notice(draft, union.says, 'world')
+  }
+}
+
+/**
  * Выйти на испытание (этап 124, Пу1).
  *
  * Пятый путь: разом и много, если выдержишь. Считается не броском вслепую, а
@@ -14462,6 +14547,10 @@ function tableTerms(state: GameState, terms: readonly PeaceTerm[]): CommandResul
   const ours = warToll(draft.base, draft.base.world, PLAYER, war, day)
   const theirs = warToll(draft.base, draft.base.world, talks.against, war, day)
   const yielded = ours.cost <= theirs.cost ? talks.against : PLAYER
+  // Разбитый признаёт (этап 131, дверь войны): уступивший мир — это и признание.
+  if (yielded !== PLAYER) {
+    draft.recognitions = { ...draft.recognitions, [talks.against]: dayOf(draft.time) }
+  }
   const record: PeaceRecord = {
     against: talks.against,
     day,
