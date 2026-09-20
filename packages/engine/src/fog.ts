@@ -2,6 +2,7 @@ import { bandSize } from './band'
 import type { Band } from './band'
 import { EYE_DEFS, type EyeKind, FOG, FOG_WORDS } from './content/fog'
 import type { SourceKind } from './content/known'
+import { ROLE_DEFS, SCOUT } from './content/scout'
 import { PLAYER } from './holding'
 import { type Word, bring } from './known'
 import { placeRep } from './reputation'
@@ -71,9 +72,11 @@ export function whoSees(
   const mine = eyesOf(state, who)
   // Глаз видит не соседние поселения, а округу по дорогам: войско стоит и в
   // поле, и на броде, и под курганом, и увидеть его там тоже можно.
+  const shut = screenedArea(state, world, who)
+  if (shut.has(where)) return null
   let best: { eye: EyeKind; from: string } | null = null
   for (const eye of mine) {
-    const reach = EYE_DEFS[eye.eye].hops
+    const reach = eye.reach ?? EYE_DEFS[eye.eye].hops
     if (eye.eye === 'peasant' && placeRep(state.reputation, eye.from) < FOG.peasantRep) continue
     const hops = roadHops(world, eye.from, where, reach)
     if (hops === null) continue
@@ -106,12 +109,19 @@ export function roadHops(world: World, from: string, to: string, limit: number):
 function eyesOf(
   state: GameState,
   who: string,
-): readonly { readonly eye: EyeKind; readonly from: string }[] {
-  const eyes: { eye: EyeKind; from: string }[] = []
+): readonly { readonly eye: EyeKind; readonly from: string; readonly reach?: number }[] {
+  const eyes: { eye: EyeKind; from: string; reach?: number }[] = []
   if (who === PLAYER) eyes.push({ eye: 'host', from: state.locationId })
   for (const band of state.bands) {
     const theirs = who === PLAYER ? band.lordId === PLAYER : band.kingdomId === who
-    if (theirs && !band.travel) eyes.push({ eye: 'host', from: band.locationId })
+    if (!theirs || band.travel) continue
+    // Дозор видит вдвое дальше обычной части: он для того и послан (этап 110).
+    const role = state.roles?.[band.id]
+    eyes.push({
+      eye: 'host',
+      from: band.locationId,
+      ...(role === 'scout' ? { reach: ROLE_DEFS.scout.hops } : {}),
+    })
   }
   for (const one of Object.values(state.settlements)) {
     if (one.population <= 0) continue
@@ -165,12 +175,39 @@ export function visibleTo(
   const seen = new Map<string, { eye: EyeKind; from: string }>()
   for (const eye of eyesOf(state, who)) {
     if (eye.eye === 'peasant' && placeRep(state.reputation, eye.from) < FOG.peasantRep) continue
-    for (const at of withinHops(world, eye.from, EYE_DEFS[eye.eye].hops)) {
+    for (const at of withinHops(world, eye.from, eye.reach ?? EYE_DEFS[eye.eye].hops)) {
       const had = seen.get(at)
       if (!had || EYE_DEFS[eye.eye].delay < EYE_DEFS[had.eye].delay) seen.set(at, eye)
     }
   }
+  // Завеса: чужие глаза не доезжают до того, что закрыто заслоном (этап 110, Дз2).
+  for (const at of screenedArea(state, world, who)) seen.delete(at)
   return seen
+}
+
+/**
+ * Что закрыто от этой стороны чужой завесой (Дз2).
+ *
+ * Заслон стоит кругом своих и не даёт чужим дозорам проехать. Видеть сквозь
+ * него можно только одним способом — стоять там самому.
+ */
+export function screenedArea(state: GameState, world: World, who: string): ReadonlySet<string> {
+  const shut = new Set<string>()
+  const roles = state.roles ?? {}
+  for (const band of state.bands) {
+    if (roles[band.id] !== 'screen') continue
+    const theirs = who === PLAYER ? band.lordId === PLAYER : band.kingdomId === who
+    // Своя завеса своим глазам не мешает.
+    if (theirs) continue
+    for (const at of withinHops(world, band.locationId, SCOUT.screenHops)) shut.add(at)
+  }
+  // Но там, где ты стоишь сам, никакая завеса не поможет.
+  if (who === PLAYER) shut.delete(state.locationId)
+  for (const band of state.bands) {
+    const mine = who === PLAYER ? band.lordId === PLAYER : band.kingdomId === who
+    if (mine && !band.travel) shut.delete(band.locationId)
+  }
+  return shut
 }
 
 /** Все места в стольких-то переходах по дорогам, считая само место. */

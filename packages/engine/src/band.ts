@@ -661,6 +661,11 @@ export function tickBands(
   day: number | null = null,
   /** Приказы своим гарнизонам (этап 85, О5): держать, вылазка, сдать. */
   orders: Readonly<Record<string, GarrisonOrder>> = {},
+  /**
+   * Чем занята часть кроме войны (этап 110): дозор идёт налегке и врассыпную,
+   * завеса ходит кругом своих. И то, и другое хуже держит строй.
+   */
+  roles: Readonly<Record<string, number>> = {},
 ): BandResult {
   let generator = rng
   let places = settlements
@@ -758,7 +763,18 @@ export function tickBands(
       const here = world.locations[first.locationId]
       const defending = places[first.locationId]?.owner === second.lordId
       const walls = defending ? wallsOf(places[first.locationId]) : 1
-      const result = clash(first, second, here?.terrain ?? 'plains', walls, generator)
+      // Дозор и завеса дерутся хуже: они посланы видеть, а не держать строй.
+      const asFights = (band: Band): Band => {
+        const share = roles[band.id] ?? 1
+        return share >= 1 ? band : { ...band, morale: Math.round(band.morale * share) }
+      }
+      const result = clash(
+        asFights(first),
+        asFights(second),
+        here?.terrain ?? 'plains',
+        walls,
+        generator,
+      )
       generator = result.rng
 
       const winner = result.attackerWon ? first : second

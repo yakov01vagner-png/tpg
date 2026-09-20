@@ -21,6 +21,7 @@ import { PLAIN_LAW } from './content/estate'
 import type { Ailment } from './content/heal'
 import type { LordDeedId } from './content/lords'
 import type { QuarterId } from './content/quarters'
+import type { HostRole } from './content/scout'
 import type { CechMembership } from './craft'
 import type { Settlement } from './economy'
 import { createSettlements } from './economy'
@@ -408,6 +409,10 @@ export interface GameState {
   }
   /** Дела, которые ты уже разобрал или передал: чтобы не звали дважды. */
   readonly settled?: Readonly<Record<string, number>>
+  /** Чем занята часть, кроме войны: дозором или завесой (этап 110). */
+  readonly roles?: Readonly<Record<string, HostRole>>
+  /** Что дала разведка и во что встала. */
+  readonly scoutLog?: { readonly learned: number; readonly spent: number }
   /** Приказы, которые сейчас в дороге или в работе (этап 108). */
   readonly behests?: readonly Behest[]
   /** Чем кончались прежние приказы: исполнением, своеволием или ничем. */
@@ -542,6 +547,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     favours: {},
     ruleLog: { heard: 0, handed: 0, missed: 0 },
     settled: {},
+    roles: {},
+    scoutLog: { learned: 0, spent: 0 },
     behests: [],
     behestLog: { sent: 0, full: 0, twisted: 0, none: 0 },
     factions: {},

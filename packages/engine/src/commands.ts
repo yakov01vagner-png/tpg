@@ -699,6 +699,19 @@ import {
   schoolAt,
 } from './school'
 import {
+  type HostRole,
+  ROLE_DEFS,
+  SCOUT,
+  SCOUT_WORDS,
+  askLocals,
+  eyesCost,
+  probeCost,
+  probeWord,
+  roleOf,
+  scoutsOf,
+  wearOf,
+} from './scout'
+import {
   anniversariesOf,
   calendarOf,
   fairFolkAt,
@@ -1135,6 +1148,10 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Глаза (этап 110): послать часть смотреть, поставить завесу, спросить местных. */
+  | { readonly type: 'setRole'; readonly hostId: string; readonly role: HostRole | null }
+  | { readonly type: 'askLocals' }
+  | { readonly type: 'probeBand'; readonly bandId: string }
   /** Приказ (этап 108): послать велённое в своё место и отозвать с дороги. */
   | { readonly type: 'sendBehest'; readonly kind: BehestKind; readonly locationId: string }
   | { readonly type: 'recallBehest'; readonly behestId: string }
@@ -1654,6 +1671,12 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'setRole':
+      return setRole(state, command.hostId, command.role)
+    case 'askLocals':
+      return askLocalsHere(state)
+    case 'probeBand':
+      return probeBand(state, command.bandId)
     case 'sendBehest':
       return sendBehest(state, command.kind, command.locationId)
     case 'recallBehest':
@@ -9619,6 +9642,8 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  roles: Readonly<Record<string, HostRole>>
+  scoutLog: { readonly learned: number; readonly spent: number }
   behests: readonly Behest[]
   behestLog: {
     readonly sent: number
@@ -9737,6 +9762,8 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    roles: state.roles ?? {},
+    scoutLog: state.scoutLog ?? { learned: 0, spent: 0 },
     behests: state.behests ?? [],
     behestLog: state.behestLog ?? { sent: 0, full: 0, twisted: 0, none: 0 },
     factions: state.factions ?? {},
@@ -9873,6 +9900,7 @@ function close(draft: Draft): CommandResult {
         draft.rng,
         dayOf(draft.time),
         draft.garrisons,
+        fightShares(draft.roles),
       )
       draft.bands = march.bands
       draft.settlements = march.settlements
@@ -10035,6 +10063,8 @@ function close(draft: Draft): CommandResult {
     tickBehests(draft, daysPassed)
     // Дозорные глаза доносят, где видели чужие войска (этап 109).
     tickSightings(draft, daysPassed)
+    // Дозоры и завесы едят серебро и людей каждый день (этап 110).
+    tickEyes(draft, daysPassed)
     // Двор просит, стареет и уходит (этап 104).
     tickCourtiers(draft, daysPassed)
     // Посланные смотреть возвращаются (этап 102).
@@ -10196,6 +10226,8 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    roles: draft.roles,
+    scoutLog: draft.scoutLog,
     behests: draft.behests,
     behestLog: draft.behestLog,
     factions: draft.factions,
@@ -11943,6 +11975,154 @@ function handMatter(state: GameState, matterId: string): CommandResult {
   return close(draft)
 }
 
+/** Во сколько раз каждая часть хуже в бою из-за того, чем она занята. */
+function fightShares(roles: Readonly<Record<string, HostRole>>): Readonly<Record<string, number>> {
+  const shares: Record<string, number> = {}
+  for (const [id, role] of Object.entries(roles)) shares[id] = ROLE_DEFS[role].fights
+  return shares
+}
+
+/**
+ * Послать часть смотреть или поставить завесой (этап 110, Дз1 и Дз2).
+ *
+ * Это выбор, а не улучшение: часть, посланная смотреть, видит на полкрая
+ * вперёд и вполовину хуже дерётся; заслон закрывает своих от чужих дозоров и
+ * стоит дороже всех. И то, и другое — люди, которых нет в строю.
+ */
+function setRole(state: GameState, hostId: string, role: HostRole | null): CommandResult {
+  const host = hostById(state, hostId)
+  if (!host) return fail('invalid', 'Такой части у тебя нет.')
+  const draft = open(state)
+  advance(draft, hours(2))
+  const roles = { ...draft.roles }
+  if (role === null) {
+    delete roles[hostId]
+    draft.roles = roles
+    notice(draft, SCOUT_WORDS.back, 'war')
+    return close(draft)
+  }
+  roles[hostId] = role
+  draft.roles = roles
+  const def = ROLE_DEFS[role]
+  notice(
+    draft,
+    `${role === 'scout' ? SCOUT_WORDS.scouting : SCOUT_WORDS.screening} ${def.about} В бою — ${Math.round(def.fights * 100)} из ста; в сутки ${Math.round(bandSize(host) * def.perManDay)} серебра.`,
+    'war',
+  )
+  return close(draft)
+}
+
+/**
+ * Спросить местных (этап 110, Дз4).
+ *
+ * Продолжение этапа 61: округа, которая помнит тебя добром, рассказывает сама
+ * и далеко. Холодная говорит, что ничего не видела, — и серебро тут не помогает.
+ */
+function askLocalsHere(state: GameState): CommandResult {
+  const settlement = state.settlements[state.locationId]
+  if (!settlement || settlement.population <= 0) {
+    return fail('unavailableHere', 'Спрашивать здесь некого.')
+  }
+  if (state.character.money < SCOUT.askCost) {
+    return fail('noMoney', `На угощение нужно ${SCOUT.askCost} серебра.`)
+  }
+  const day = dayOf(state.time)
+  const heard = askLocals(state, state.world, state.locationId, day)
+
+  const draft = open(state)
+  advance(draft, hours(3))
+  addMoney(draft, -SCOUT.askCost)
+  draft.scoutLog = {
+    learned: draft.scoutLog.learned + heard.told.length,
+    spent: draft.scoutLog.spent + SCOUT.askCost,
+  }
+  if (heard.told.length > 0) draft.words = withSightings(draft.words, heard.told)
+  notice(draft, heard.says, 'world')
+  return close(draft)
+}
+
+/**
+ * Разведка боем (этап 110, Дз3).
+ *
+ * Самый точный способ узнать чужую силу — ударить по ней и отойти. Число, за
+ * которое заплачено людьми и духом, не врёт: это увидено своими глазами.
+ */
+function probeBand(state: GameState, bandId: string): CommandResult {
+  const band = state.bands.find((one) => one.id === bandId)
+  if (!band) return fail('invalid', 'Этого войска здесь нет.')
+  if (band.locationId !== state.locationId || band.travel) {
+    return fail('unavailableHere', 'Это войско не здесь.')
+  }
+  const men = partySize(state.party)
+  if (men < 4) return fail('requirements', 'Для пробы нужен хоть какой-то отряд.')
+
+  const day = dayOf(state.time)
+  const cost = probeCost(state.party, men)
+  const draft = open(state)
+  advance(draft, hours(6))
+  // Платишь людьми и духом — из строя вынимают тех, кто попроще.
+  let left = cost.men
+  const units = { ...draft.party.units }
+  for (const troop of Object.keys(units) as TroopId[]) {
+    if (left <= 0) break
+    const have = units[troop] ?? 0
+    const take = Math.min(have, left)
+    units[troop] = have - take
+    left -= take
+  }
+  draft.party = {
+    ...draft.party,
+    units,
+    morale: Math.max(0, draft.party.morale - cost.morale),
+  }
+  addFatigue(draft, 10)
+  draft.words = withSightings(draft.words, [probeWord(band, day)])
+  draft.scoutLog = { ...draft.scoutLog, learned: draft.scoutLog.learned + 1 }
+  const lord = lordById(draft.politics, band.lordId)
+  notice(
+    draft,
+    `${SCOUT_WORDS.probed} ${lord ? `${lord.title} ${lord.name}` : 'Королевская рать'}: ${bandSize(band)} человек. Потеряно ${cost.men}, дух −${cost.morale}.`,
+    'war',
+  )
+  return close(draft)
+}
+
+/**
+ * Глаза едят каждый день (этап 110, Дз5).
+ *
+ * Корм, лошади и подковы — счёт идёт в сутки, а не разом, оттого дозоров не
+ * держат много. Дозор в поле ещё и тает: кони бьются, люди отстают.
+ */
+function tickEyes(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const cost = eyesCost(draft.base) * days
+  if (cost <= 0) return
+  addMoney(draft, -Math.round(cost))
+  draft.scoutLog = { ...draft.scoutLog, spent: draft.scoutLog.spent + Math.round(cost) }
+  // Дозор тает в поле — не от боя, а от дороги. Считается раз в неделю: по
+  // полчеловека в сутки не считают.
+  const week = dayOf(draft.time) % SCOUT.wearBeat === 0
+  draft.bands = draft.bands.map((band) => {
+    if (!week) return band
+    const role = roleOf(draft.base, band.id)
+    const wear = wearOf(band, role) * SCOUT.wearBeat
+    if (wear < 1) return band
+    let left = Math.round(wear)
+    const units = { ...band.units }
+    for (const troop of Object.keys(units) as TroopId[]) {
+      if (left <= 0) break
+      const have = units[troop] ?? 0
+      const take = Math.min(have, left)
+      units[troop] = have - take
+      left -= take
+    }
+    return { ...band, units }
+  })
+  if (scoutsOf(draft.base).length > 0 && dayOf(draft.time) % 30 === 0) {
+    notice(draft, `${SCOUT_WORDS.costly} За месяц глаза съели ${Math.round(cost * 30)}.`, 'war')
+  }
+}
+
 /**
  * Донесения о чужих войсках (этап 109, Т1, Т3 и Т5).
  *
@@ -11958,6 +12138,7 @@ function tickSightings(draft: Draft, days: number): void {
   const seen = sightingsNow(draft.base, draft.world, PLAYER, day)
   if (seen.length === 0) return
   draft.words = withSightings(draft.words, seen)
+  draft.scoutLog = { ...draft.scoutLog, learned: draft.scoutLog.learned + seen.length }
 }
 
 /**
