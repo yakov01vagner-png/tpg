@@ -96,6 +96,7 @@ import {
   intriguesFor,
   judgeOf,
   lordHere,
+  lordTemper,
   receptionFor,
 } from './castle'
 import {
@@ -736,6 +737,15 @@ import { isAvailableAt } from './place'
 import type { Plague, PlagueEvent } from './plague'
 import { plagueAt, tickPlague } from './plague'
 import { aimEra, orderAim, orderAimLabel, tickTrade } from './plans'
+import {
+  PRIMACY,
+  PRIMACY_WORDS,
+  TEMPER_LOOK,
+  courtSplit,
+  firstPays,
+  goingQuiet,
+  rightlyFirst,
+} from './primacy'
 import { PROGRESSION, applyCharacterXp, applySkillXp } from './progression'
 import {
   PROOF,
@@ -1368,6 +1378,9 @@ export type Command =
   /** Коалиция (этап 136): разобрать чужую по одному и собрать свою против первого. */
   | { readonly type: 'breakLeague'; readonly member: string }
   | { readonly type: 'callLeague'; readonly against: string }
+  /** Цена первенства (этап 139): идти тихо или громко. */
+  | { readonly type: 'goQuiet' }
+  | { readonly type: 'goLoud' }
   /** Признание (этап 138): признать чужого и отозвать своё признание. */
   | { readonly type: 'recogniseCrown'; readonly of: string }
   | { readonly type: 'recallRecognition'; readonly of: string }
@@ -1956,6 +1969,10 @@ export function applyCommand(
       return breakLeague(state, command.member)
     case 'callLeague':
       return callLeague(state, command.against)
+    case 'goQuiet':
+      return goQuiet(state)
+    case 'goLoud':
+      return goLoud(state)
     case 'recogniseCrown':
       return recogniseCrown(state, command.of)
     case 'recallRecognition':
@@ -6584,9 +6601,11 @@ function sendEnvoy(
   if (!letter && !envoy) return fail('requirements', 'Послать некого: нужен свой человек.')
   // Свидетель берёт своё вперёд: без его доли он и не поедет (этап 80, Г4).
   const fee = paper?.guarantor ? guarantorFee({ kind: 'alliance' }) : 0
-  // Непризнанному дороже всё, что делается через чужие руки (этап 138, Пр4).
+  // Непризнанному дороже всё, что делается через чужие руки (этап 138, Пр4), а
+  // первому — ещё дороже (этап 139, Це1).
   const dearer = strangerCost(state, state.world, day)
-  const cost = Math.round((embassyCost(errand, letter) + fee) * dearer.times)
+  const first = firstPays(state, state.world, day)
+  const cost = Math.round((embassyCost(errand, letter) + fee) * dearer.times * first.times)
   if (state.character.money < cost) {
     return fail('noMoney', `На дары, дорогу${fee > 0 ? ' и свидетеля' : ''} нужно ${cost}.`)
   }
@@ -6630,6 +6649,10 @@ function sendEnvoy(
  * тоже ответ, и его слышат все.
  */
 function crownSelf(state: GameState): CommandResult {
+  // Тихий не коронуется: в том и тишина (этап 139, Це3).
+  if (goingQuiet(state)) {
+    return fail('requirements', `${PRIMACY_WORDS.quiet} Венчание на царство — дело громкое.`)
+  }
   if (!state.realm) return fail('requirements', 'Венчают державу, а не человека.')
   const day = dayOf(state.time)
   const plan = coronationPlan(state, day)
@@ -10042,6 +10065,12 @@ interface Draft {
   hands: readonly { readonly patron: string; readonly ward: string; readonly sinceDay: number }[]
   given: Readonly<Record<string, number>>
   recalls: readonly { readonly by: string; readonly of: string; readonly day: number }[]
+  quiet: { readonly sinceDay: number } | null
+  wrongCalls: readonly {
+    readonly against: string
+    readonly day: number
+    readonly shown?: number
+  }[]
   usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
@@ -10239,6 +10268,8 @@ function open(state: GameState): Draft {
     hands: state.hands ?? [],
     given: state.given ?? {},
     recalls: state.recalls ?? [],
+    quiet: state.quiet ?? null,
+    wrongCalls: state.wrongCalls ?? [],
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
@@ -10592,6 +10623,8 @@ function close(draft: Draft): CommandResult {
     tickWard(draft, daysPassed)
     // А признание отзывают, когда отношения упали ниже дна (этап 138).
     tickAcclaim(draft, daysPassed)
+    // Двор считает твоё продвижение по-своему, а чужая ошибка вскрывается (этап 139).
+    tickPrimacy(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10778,6 +10811,8 @@ function close(draft: Draft): CommandResult {
     hands: draft.hands,
     given: draft.given,
     recalls: draft.recalls,
+    quiet: draft.quiet,
+    wrongCalls: draft.wrongCalls,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
@@ -11846,9 +11881,11 @@ function hireCompany(state: GameState, companyId: string, days: number): Command
     return fail('unavailableHere', `${companyDef(companyId).name} стоит не здесь.`)
   }
   const def = companyDef(companyId)
-  // Роты берут с непризнанного вперёд и больше (этап 138, Пр4).
+  // Роты берут с непризнанного вперёд и больше (этап 138, Пр4), а с первого
+  // ещё больше (этап 139, Це1): кто ближе к концу, тот и платит.
   const dearer = strangerCost(state, state.world, dayOf(state.time))
-  const upfront = Math.round(upfrontFor(company) * dearer.times)
+  const first = firstPays(state, state.world, dayOf(state.time))
+  const upfront = Math.round(upfrontFor(company) * dearer.times * first.times)
   if (state.character.money < upfront) {
     return fail('noMoney', `Задаток ${upfront}, у тебя ${state.character.money}.`)
   }
@@ -13083,6 +13120,10 @@ function tickLevers(draft: Draft, days: number): void {
 function churchDeed(state: GameState, deed: HolyDeedId): CommandResult {
   const day = dayOf(state.time)
   const def = HOLY_DEED_DEFS[deed]
+  // Собор и поход по призыву — дела громкие: тихому они закрыты (этап 139, Це4).
+  if (goingQuiet(state) && (deed === 'synod' || deed === 'crusade')) {
+    return fail('requirements', `${PRIMACY_WORDS.quiet} ${def.label} — дело громкое.`)
+  }
   const cost = deedCost(state, deed, day)
   if (cost.waitDays > 0) return fail('requirements', cost.says)
   if (state.character.money < cost.money) {
@@ -13173,6 +13214,9 @@ function tickDread(draft: Draft, days: number): void {
         const near = dreadOf(draft.base, draft.world, who, of, day).parts.some(
           (one) => one.fear === 'near',
         )
+        // Тихий не показывает (этап 139, Це3): до дальних о нём не доходит
+        // вовсе, а соседи и так видят его землю.
+        if (!near && of === PLAYER && goingQuiet(draft.base)) continue
         said.push({
           id: `word:way:${of}:${who}:${day}`,
           to: who,
@@ -13353,6 +13397,12 @@ function callLeague(state: GameState, against: string): CommandResult {
   }
   declareLeagueWars(draft, against, call.members, day)
   draft.politics = withRelation(draft.politics, PLAYER, against, LEAGUE.chills)
+  // Собрать можно и не против того (этап 139, Це5): сейчас это незаметно, а
+  // через полгода вскроется — и спросят с тебя.
+  const rightly = rightlyFirst(draft.base, draft.world, against, day)
+  if (!rightly.right) {
+    draft.wrongCalls = [...draft.wrongCalls, { against, day }]
+  }
   notice(draft, `${LEAGUE_WORDS.called} ${call.says}`, 'war')
   return close(draft)
 }
@@ -13569,6 +13619,74 @@ function tickAcclaim(draft: Draft, days: number): void {
     notice(
       draft,
       `${kingdomName(draft.base, id)} отзывает своё признание. ${ACCLAIM_WORDS.recalled}`,
+      'world',
+    )
+    return
+  }
+}
+
+/**
+ * Идти тихо (этап 139, Це3).
+ *
+ * Не коронуясь, не объявляя, не показывая: мир узнаёт о тебе меньше и позже, а
+ * часть шагов пути при этом закрыта. Это не хитрость, а выбор темпа.
+ */
+function goQuiet(state: GameState): CommandResult {
+  if (goingQuiet(state)) return fail('invalid', 'Ты и так идёшь тихо.')
+  const day = dayOf(state.time)
+  const draft = open(state)
+  advance(draft, hours(2))
+  draft.quiet = { sinceDay: day }
+  notice(draft, `${PRIMACY_WORDS.quiet} ${PRIMACY_WORDS.slower}`, 'world')
+  return close(draft)
+}
+
+/** И обратно: громко — короче и дороже (этап 139, Це4). */
+function goLoud(state: GameState): CommandResult {
+  if (!goingQuiet(state)) return fail('invalid', 'Ты и так идёшь громко.')
+  const draft = open(state)
+  advance(draft, hours(2))
+  draft.quiet = null
+  notice(draft, PRIMACY_WORDS.loud, 'world')
+  return close(draft)
+}
+
+/**
+ * Двор считает твой путь, а чужая ошибка вскрывается (этап 139, Це2 и Це5).
+ *
+ * Одним вассалам твоё продвижение слава, другим страх, и это не настроение, а
+ * нрав: гордый и мрачный идут за тем, кто идёт к концу, расчётливый и набожный
+ * от него отодвигаются.
+ */
+function tickPrimacy(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % PRIMACY.beat !== 0) return
+  // Двор считает не продвижение вообще, а первенство: пока ты не первый в мире,
+  // твой путь для вассалов — не слава и не страх, а просто дела государя.
+  const pays = firstPays(draft.base, draft.world, day)
+  if (firstOf(draft.base, draft.world, day).who === PLAYER) {
+    const split = courtSplit(draft.base, draft.world, day)
+    for (const lord of draft.politics.lords) {
+      if (lord.kingdomId !== PLAYER) continue
+      const glory = (TEMPER_LOOK[lordTemper(lord)] ?? 'fear') === 'glory'
+      shiftVassals(draft, glory ? PRIMACY.courtMoves : -PRIMACY.courtMoves, lord.id)
+    }
+    if (day % (PRIMACY.beat * 6) === 0 && split.glory + split.fear > 0) {
+      notice(draft, split.says, 'people')
+    }
+  }
+  for (const call of draft.wrongCalls) {
+    if (call.shown !== undefined || day - call.day < PRIMACY.showsUp) continue
+    draft.wrongCalls = draft.wrongCalls.map((one) => (one === call ? { ...one, shown: day } : one))
+    for (const id of Object.keys(draft.base.world.kingdoms)) {
+      if (id === call.against) continue
+      draft.politics = withRelation(draft.politics, PLAYER, id, PRIMACY.wrongCost)
+    }
+    draft.renown = Math.max(0, draft.renown + PRIMACY.wrongRenown)
+    notice(
+      draft,
+      `${PRIMACY_WORDS.wrong} Речь о коалиции против ${kingdomName(draft.base, call.against)}.`,
       'world',
     )
     return
@@ -16551,7 +16669,9 @@ function applyEmbassy(draft: Draft, embassy: Embassy, day: number): void {
     const equal = recognitionOf(draft.base, to, day).standing === 'equal'
     // За непризнанного отдают хуже и просят больше (этап 138, Пр4).
     const dowry = Math.round(
-      dowryFor(draft.base, to, day, equal) * strangerCost(draft.base, draft.world, day).times,
+      dowryFor(draft.base, to, day, equal) *
+        strangerCost(draft.base, draft.world, day).times *
+        firstPays(draft.base, draft.world, day).times,
     )
     const house = royalHouse(draft.base.world, to, day)
     if (draft.character.money < dowry) {

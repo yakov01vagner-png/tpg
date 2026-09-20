@@ -18,6 +18,7 @@ import {
   wageOf,
 } from '../src/company'
 import { COMPANIES, TEMPER_DEFS } from '../src/content/companies'
+import { firstPays } from '../src/primacy'
 import { placeRep } from '../src/reputation'
 import type { GameState } from '../src/state'
 import { createGame } from '../src/state'
@@ -105,9 +106,9 @@ describe('Н2: контракт', () => {
       `${companyDef(company.id).name}: нанята на 90 суток, задаток ${state.character.money - hired.character.money}, жалованья ${wageOf(company)} в сутки; на карте частей ${hired.bands.filter((one) => one.id.startsWith('company:')).length}`,
     )
     expect(row?.hiredBy).toBe('player')
-    // Задаток берут с поправкой на признание (этап 138, Пр4): роты берут с
-    // непризнанного вперёд и больше.
-    const dearer = strangerCost(here, here.world, 1).times
+    // Задаток берут с поправкой на признание (этап 138, Пр4) и на первенство
+    // (этап 139, Це1): роты берут с непризнанного и с первого вперёд и больше.
+    const dearer = strangerCost(here, here.world, 1).times * firstPays(here, here.world, 1).times
     expect(hired.character.money).toBe(
       state.character.money - Math.round(upfrontFor(company) * dearer),
     )

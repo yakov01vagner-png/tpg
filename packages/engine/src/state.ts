@@ -522,6 +522,19 @@ export interface GameState {
     readonly of: string
     readonly day: number
   }[]
+  /**
+   * Идёшь ли ты тихо (этап 139): с какого дня.
+   *
+   * Это решение государя, а не положение вещей: вывести его из мира нельзя.
+   * Пока оно в силе, громкие дела закрыты, а молва о тебе идёт хуже.
+   */
+  readonly quiet?: { readonly sinceDay: number } | null
+  /** Коалиции, собранные не против того (этап 139): день и имя. Это помнят. */
+  readonly wrongCalls?: readonly {
+    readonly against: string
+    readonly day: number
+    readonly shown?: number
+  }[]
   /** Когда каждый навык трогали в последний раз (этап 125): он ржавеет. */
   readonly usedDay?: Readonly<Record<string, number>>
   /** Чем ты рос на самом деле (этап 124) и какие испытания уже брал. */
@@ -766,6 +779,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     hands: [],
     given: {},
     recalls: [],
+    quiet: null,
+    wrongCalls: [],
     usedDay: {},
     pathLog: { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: {},

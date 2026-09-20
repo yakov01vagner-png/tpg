@@ -155,7 +155,11 @@ describe('Пс1: он привозит не только ответ', () => {
       if ((later.embassies ?? []).length === 0) break
     }
     console.log(later.log.find((one) => one.text.includes('Ответ из'))?.text ?? 'ответа ещё нет')
-    expect((later.words ?? []).some((one) => one.source === 'envoy')).toBe(false)
+    // Вести о чужом продвижении (этап 135) приходят от своих людей у соседей и
+    // тоже помечены послом: здесь речь о том, что привозит посольство.
+    expect((later.words ?? []).some((one) => one.source === 'envoy' && one.kind !== 'way')).toBe(
+      false,
+    )
   })
 
   it('живой посол привозит картину, и это видно в счёте', () => {

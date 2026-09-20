@@ -186,10 +186,18 @@ describe('Е4, Е5 и Е6: решение, союз против сильног�
       later = ok(applyCommand(later, { type: 'tick', minutes: MINUTES_PER_DAY }))
     }
     const said = later.log.find((one) => one.text.includes('сошлись'))
+    console.log(
+      `союзов ${later.politics.alliances.length}; коалиция ${later.league?.against ?? '—'}; отношения ${kingdoms.map((id) => later.politics.relations[[PLAYER, id].sort().join('|')] ?? 0).join('/')}`,
+    )
     console.log(said?.text ?? later.log.find((one) => one.text.startsWith('Съезд'))?.text)
     if (said) {
       const ally = called.congress?.guests.find((id) => id !== foe)
-      if (ally) expect(allied(later.politics, PLAYER, ally)).toBe(true)
+      // С версии 0.9 у этого есть продолжение (этап 136): пока съезд съезжался,
+      // мир мог сойтись против самого игрока — тогда −25 отношения кладут
+      // только что заключённый союз ниже порога, и он не держится ни дня. Это
+      // не поломка съезда, а цена первенства, и проверяется она тем же числом.
+      const againstYou = later.league?.against === PLAYER
+      if (ally) expect(allied(later.politics, PLAYER, ally)).toBe(!againstYou)
     }
   })
 })

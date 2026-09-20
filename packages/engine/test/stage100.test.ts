@@ -171,8 +171,10 @@ describe('Д6: отчёт как весть', () => {
     if (!first) return
     const report = reportFrom(state, world, first.locationId, day)
     console.log(report?.says ?? 'отчёта нет')
+    // С этапа 135 в вестях лежит и чужое продвижение: оно приходит молвой, а
+    // здесь речь об отчётах наместников — о местах.
     const fromPlaces = (one: GameState) =>
-      wordsTo(one, PLAYER).filter((word) => word.kind !== 'host')
+      wordsTo(one, PLAYER).filter((word) => word.kind !== 'host' && word.kind !== 'way')
     let run = state
     for (let i = 0; i < 40 && fromPlaces(run).length === 0; i += 1) {
       run = ok(applyCommand(run, { type: 'rest', hours: 12 }))

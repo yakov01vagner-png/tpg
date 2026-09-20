@@ -16,6 +16,7 @@ import {
   pending,
 } from '../src/embassy'
 import { PLAYER } from '../src/holding'
+import { firstPays } from '../src/primacy'
 import { createRng } from '../src/rng'
 import type { GameState } from '../src/state'
 import { createGame } from '../src/state'
@@ -85,8 +86,10 @@ describe('П1 и П2: свой посол и то, с чем его шлют', (
       `${embassy?.envoyName} → ${world.kingdoms[to]?.name}: ${EMBASSY_DEFS.alliance.label}, вернётся на ${embassy?.backDay} день`,
     )
     expect(embassiesOf(sent)).toHaveLength(1)
-    // Посольство непризнанного дороже (этап 138, Пр4): цена та же, множитель свой.
-    const dearer = strangerCost(state, state.world, 1).times
+    // Посольство непризнанного дороже (этап 138, Пр4), а первого — ещё дороже
+    // (этап 139, Це1): цена та же, множители свои.
+    const dearer =
+      strangerCost(state, state.world, 1).times * firstPays(state, state.world, 1).times
     expect(sent.character.money).toBe(
       state.character.money - Math.round(embassyCost('alliance', false) * dearer),
     )
