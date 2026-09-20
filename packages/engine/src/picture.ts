@@ -1,3 +1,5 @@
+import { beliefOf } from './bias'
+import { BIAS } from './content/bias'
 import { PICTURE, PICTURE_WORDS } from './content/picture'
 import { PLAYER } from './holding'
 import { type Known, knownTo } from './known'
@@ -43,6 +45,20 @@ export function seenBy(
   guess: { readonly score: number; readonly error: number },
 ): PictureRow {
   const truth = strengthOf(state, world, about, day).score
+  // Во что он уже верит (этап 120): пока его не опровергли громко, он держится
+  // прежнего, и решения идут по прежнему.
+  const held = beliefOf(state, watcher, about)
+  if (held && day - held.day <= BIAS.holds) {
+    return {
+      about,
+      value: held.value,
+      truth,
+      from: 'words',
+      age: day - held.day,
+      spread: 0,
+      says: `${watcher} держится того, во что поверил ${day - held.day} суток назад: ${held.value} (на деле ${truth}).`,
+    }
+  }
   const known: Known = knownTo(state, world, watcher, { kind: 'strength', about }, day)
   const fresh = known.value !== null && known.age <= PICTURE.freshDays
   if (fresh && typeof known.value === 'number') {

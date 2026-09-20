@@ -24,6 +24,18 @@ import {
   recallable,
 } from './behest'
 import {
+  BIAS,
+  BIAS_WORDS,
+  beliefOf,
+  biasDef,
+  biasLedger,
+  biasOf,
+  errorSays,
+  loudEnough,
+  ownStrengthAs,
+  shadedBy,
+} from './bias'
+import {
   BLIND,
   BLIND_WORDS,
   bannersLift,
@@ -550,7 +562,7 @@ import {
   orderFrom,
   talesOf,
 } from './merchant'
-import { seenStrength } from './mind'
+import { seenStrength, strengthOf } from './mind'
 import type { Blockade, Letter, Warship } from './navy'
 import {
   NAVY,
@@ -1240,6 +1252,8 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Чужое заблуждение (этап 120): чем он ошибается о тебе. */
+  | { readonly type: 'weighError'; readonly of: string }
   /** Чужая голова (этап 118): узнать, из чего исходит эта корона. */
   | { readonly type: 'askPicture'; readonly of: string }
   /** Постоянный посол (этап 117): посадить своего человека при чужом дворе и отозвать. */
@@ -1799,6 +1813,8 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'weighError':
+      return weighError(state, command.of)
     case 'askPicture':
       return askPicture(state, command.of)
     case 'seatResident':
@@ -9808,6 +9824,8 @@ interface Draft {
   favours: Readonly<Record<string, number>>
   ruleLog: { readonly heard: number; readonly handed: number; readonly missed: number }
   settled: Readonly<Record<string, number>>
+  beliefs: Readonly<Record<string, { readonly value: number; readonly day: number }>>
+  biasLog: { readonly held: number; readonly woke: number; readonly warsByError: number }
   guesses: Readonly<
     Record<string, { readonly aim: PlayerAim; readonly sinceDay: number; readonly right: boolean }>
   >
@@ -9978,6 +9996,8 @@ function open(state: GameState): Draft {
     favours: state.favours ?? {},
     ruleLog: state.ruleLog ?? { heard: 0, handed: 0, missed: 0 },
     settled: state.settled ?? {},
+    beliefs: state.beliefs ?? {},
+    biasLog: state.biasLog ?? { held: 0, woke: 0, warsByError: 0 },
     guesses: state.guesses ?? {},
     tellSeen: state.tellSeen ?? {},
     guessLog: state.guessLog ?? { made: 0, right: 0, wrong: 0, confused: 0 },
@@ -10311,6 +10331,8 @@ function close(draft: Draft): CommandResult {
     tickResidents(draft, daysPassed)
     // Короны читают твои ходы и делают выводы (этап 119).
     tickGuesses(draft, daysPassed)
+    // Они упорствуют в заблуждениях и прозревают (этап 120).
+    tickBeliefs(draft, daysPassed)
     // Двор просит, стареет и уходит (этап 104).
     tickCourtiers(draft, daysPassed)
     // Посланные смотреть возвращаются (этап 102).
@@ -10472,6 +10494,8 @@ function close(draft: Draft): CommandResult {
     favours: draft.favours,
     ruleLog: draft.ruleLog,
     settled: draft.settled,
+    beliefs: draft.beliefs,
+    biasLog: draft.biasLog,
     guesses: draft.guesses,
     tellSeen: draft.tellSeen,
     guessLog: draft.guessLog,
@@ -12288,6 +12312,62 @@ function handMatter(state: GameState, matterId: string): CommandResult {
 }
 
 /**
+ * Заблуждение и прозрение (этап 120, Уп1, Уп3 и Уп4).
+ *
+ * Корона видит то, что ждёт увидеть: предубеждение выводится из нрава. Раз
+ * поверив, она держится своего, пока новое не разойдётся с прежним громче, чем
+ * она упряма; когда разойдётся — это событие, и партия её меняется.
+ */
+function tickBeliefs(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % BIAS.beat !== 0) return
+  const sides = Object.keys(draft.base.world.kingdoms)
+  for (const watcher of sides) {
+    const about = PLAYER
+    if (!draft.realm) continue
+    const truth = strengthOf(draft.base, draft.world, about, day).score
+    if (truth <= 0) continue
+    // Свежее мнение: предубеждение поверх того, что ему принесли.
+    const fresh = shadedBy(watcher, truth)
+    const held = beliefOf(draft.base, watcher, about)
+    if (!held) {
+      draft.beliefs = { ...draft.beliefs, [`${watcher}:${about}`]: { value: fresh, day } }
+      continue
+    }
+    const loud = loudEnough(watcher, held.value, fresh)
+    if (!loud.loud) {
+      draft.biasLog = { ...draft.biasLog, held: draft.biasLog.held + 1 }
+      continue
+    }
+    draft.beliefs = { ...draft.beliefs, [`${watcher}:${about}`]: { value: fresh, day } }
+    draft.biasLog = { ...draft.biasLog, woke: draft.biasLog.woke + 1 }
+    // Цена упорства (Уп5): если он пошёл войной, недооценив тебя, век это
+    // запоминает — прозрение приходит, когда война уже начата.
+    const wentToWar = draft.politics.wars.some(
+      (war) =>
+        (war.a === watcher || war.b === watcher) &&
+        (war.a === PLAYER || war.b === PLAYER) &&
+        day - war.since <= BIAS.beat * 2,
+    )
+    if (wentToWar && held.value < truth * 0.7) {
+      draft.biasLog = { ...draft.biasLog, warsByError: draft.biasLog.warsByError + 1 }
+      notice(
+        draft,
+        `${kingdomName(draft.base, watcher)}: ${BIAS_WORDS.cost} Он считал, что у тебя ${held.value}, а их ${truth}.`,
+        'world',
+      )
+    }
+    if (!canSeePicture(draft.base, watcher).can) continue
+    notice(
+      draft,
+      `${kingdomName(draft.base, watcher)}: ${BIAS_WORDS.woke} Было ${held.value}, стало ${fresh} (разошлось на ${Math.round(loud.delta * 100)} из ста при упорстве ${Math.round(loud.needs * 100)}).`,
+      'world',
+    )
+  }
+}
+
+/**
  * Короны делают выводы (этап 119, Вы1–Вы5).
  *
  * Раз в две недели каждая корона, которой ты вообще интересен, смотрит на твои
@@ -12359,6 +12439,35 @@ function tickGuesses(draft: Draft, days: number): void {
       'world',
     )
   }
+}
+
+/**
+ * Чем он о тебе ошибается (этап 120, Уп2 и Уп6).
+ *
+ * Ошибка называется словами, а не числом на экране: «он думает, что у тебя
+ * вдвое меньше людей». Заодно видно, чего он считает своё войско.
+ */
+function weighError(state: GameState, of: string): CommandResult {
+  if (!state.world.kingdoms[of]) return fail('invalid', 'Такой короны нет.')
+  const can = canSeePicture(state, of)
+  if (!can.can) return fail('requirements', can.why)
+  const day = dayOf(state.time)
+  const believed =
+    beliefOf(state, of, PLAYER)?.value ?? seenStrength(state, state.world, of, PLAYER, day).score
+  const truth = strengthOf(state, state.world, PLAYER, day).score
+  const own = ownStrengthAs(state, state.world, of, day)
+  const kind = biasOf(of)
+
+  const draft = open(state)
+  advance(draft, hours(3))
+  notice(
+    draft,
+    `${BIAS_WORDS.expects} ${kingdomName(draft.base, of)} — ${biasDef(kind).label}: ${biasDef(kind).about}`,
+    'world',
+  )
+  notice(draft, errorSays(of, draft.world, PLAYER, believed, truth), 'world')
+  notice(draft, own.says, 'world')
+  return close(draft)
 }
 
 /**
