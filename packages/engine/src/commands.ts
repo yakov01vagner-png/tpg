@@ -575,6 +575,7 @@ import {
   talesOf,
 } from './merchant'
 import { seenStrength, strengthOf } from './mind'
+import { MOULD, MOULD_WORDS, mouldOf, retrainCost, seenAs } from './mould'
 import type { Blockade, Letter, Warship } from './navy'
 import {
   NAVY,
@@ -1287,6 +1288,8 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Склад (этап 126): переучиться с одного дела на другое. */
+  | { readonly type: 'retrain'; readonly from: SkillId; readonly to: SkillId }
   /** Испытание (этап 124): выйти на турнир, охоту, диспут, смотр, мост, ярмарку. */
   | { readonly type: 'takeTrial'; readonly trialId: string }
   /** Чужое слово (этап 121): сдержит ли он обещанное. */
@@ -1852,6 +1855,8 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'retrain':
+      return retrain(state, command.from, command.to)
     case 'takeTrial':
       return takeTrial(state, command.trialId)
     case 'weighPledge':
@@ -12627,6 +12632,42 @@ function tickService(draft: Draft, days: number): void {
       practice(draft, skill, PATH_DEFS.service.xp * days * 0.1 * SERVICE_BEAT, 'service')
     }
   }
+}
+
+/**
+ * Переучиться (этап 126, Сл4).
+ *
+ * Сменить путь можно — и это стоит лет и денег, а не кнопки: половина уровня
+ * теряется на переходе, и ещё столько же времени уходит на то, чтобы новое
+ * дело стало своим.
+ */
+function retrain(state: GameState, from: SkillId, to: SkillId): CommandResult {
+  if (from === to) return fail('invalid', 'Переучиваться с дела на то же дело незачем.')
+  const cost = retrainCost(state.character, from, to)
+  if (!cost.can) return fail('requirements', cost.says)
+  if (state.character.money < cost.silver) {
+    return fail('noMoney', `На это нужно ${cost.silver} серебра.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(24 * cost.days))
+  addMoney(draft, -cost.silver)
+  const had = draft.character.skills[from].level
+  const moved = Math.round(had * MOULD.retrainLoses)
+  patch(draft, {
+    skills: {
+      ...draft.character.skills,
+      [from]: { level: had - moved, xp: 0 },
+    },
+  })
+  practice(draft, to, moved * 40, 'doing')
+  const was = mouldOf(state.character)
+  const now = mouldOf(draft.character)
+  notice(draft, cost.says, 'people')
+  if (was.id !== now.id) {
+    notice(draft, `${now.says} ${seenAs(now.id)}`, 'people')
+  }
+  return close(draft)
 }
 
 /**

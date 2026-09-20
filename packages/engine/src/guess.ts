@@ -9,6 +9,7 @@ import {
 } from './content/guess'
 import { PLAYER } from './holding'
 import { strengthOf } from './mind'
+import { mouldOf } from './mould'
 import type { GameState } from './state'
 import { atWar, relationOf } from './war'
 import { neighbourSettlements } from './world/queries'
@@ -116,6 +117,8 @@ export function guessAim(
   readonly aim: PlayerAim
   readonly confidence: number
   readonly right: boolean
+  /** К чему именно клонятся приметы: землю, серебро, родство. */
+  readonly lean: { readonly land: number; readonly coin: number; readonly kin: number }
   readonly says: string
 } {
   const tells = tellsOf(state, world, watcher, day)
@@ -132,6 +135,12 @@ export function guessAim(
     if (tell.kind === 'envoys') kin += tell.weight
     if (tell.kind === 'noise') noise += GUESS.noiseCuts
   }
+  // Склад виден миру (этап 126, Сл3): о воине думают, что он идёт за землёй, о
+  // купце — что он торгует, и думают так ещё до всяких примет.
+  const mould = mouldOf(state.character)
+  if (mould.id === 'warrior') land += 0.2
+  if (mould.id === 'merchant') coin += 0.2
+  if (mould.id === 'ruler') kin += 0.15
   // Война сама по себе — самая громкая примета.
   if (atWar(state.politics, PLAYER, watcher)) land += 0.5
   if (relationOf(state.politics, PLAYER, watcher) > 35) kin += 0.15
@@ -148,6 +157,11 @@ export function guessAim(
     aim: guessed,
     confidence,
     right: guessed === truth,
+    lean: {
+      land: Math.round(land * 100) / 100,
+      coin: Math.round(coin * 100) / 100,
+      kin: Math.round(kin * 100) / 100,
+    },
     says:
       guessed === 'none'
         ? `${noise > 0 ? GUESS_WORDS.confused : GUESS_WORDS.reads} ${def.label}: ${def.about} (уверенность ${Math.round(confidence * 100)} из ста)`
