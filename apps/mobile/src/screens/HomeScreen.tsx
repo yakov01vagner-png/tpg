@@ -60,6 +60,7 @@ import {
   describeQuest,
   errandsAt,
   examsAt,
+  faceOf,
   fairAt,
   fairFolkAt,
   feastAt,
@@ -329,6 +330,11 @@ export function HomeScreen({ game }: { game: GameState }) {
           <Dim>{`Земля: ${ownerName(game, landHolderOf(game.world, game.settlements, game.locationId))}`}</Dim>
         )}
         {site ? <Dim>{SITES[site].description}</Dim> : null}
+        {/* Лицо места (этап 176): чем живут, по какому порядку и кто здесь
+            есть. Всё это считается из мира — экран только показывает. */}
+        {settlement && people > 0 ? (
+          <Dim>{faceOf(game, game.world, game.locationId, dayOf(game.time)).says}</Dim>
+        ) : null}
         <StateLine game={game} />
         {settlement && settlement.buildings.length > 0 ? (
           <View style={styles.built}>

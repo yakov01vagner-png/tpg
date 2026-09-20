@@ -44,7 +44,13 @@ function ruler(): GameState {
     .filter((one) => one.population > 800)
     .slice(0, 3)
   for (const one of mine) map[one.locationId] = { ...one, owner: PLAYER }
-  const party: Party = { units: { spearman: 40 }, morale: 70, hungryDays: 0, gear: 0.5, veterans: 0 } as Party
+  const party: Party = {
+    units: { spearman: 40 },
+    morale: 70,
+    hungryDays: 0,
+    gear: 0.5,
+    veterans: 0,
+  } as Party
   return {
     ...game,
     politics,
@@ -119,13 +125,33 @@ describe('Рл3 и Рл4: своя правда у каждой и слухи в
     const lost: GameState = {
       ...base,
       relations: [
-        { ...relationFrom(world, { from: PLAYER, where: far, to: home, day: 10, won: false, fell: 60 }), comesDay: 20 },
+        {
+          ...relationFrom(world, {
+            from: PLAYER,
+            where: far,
+            to: home,
+            day: 10,
+            won: false,
+            fell: 60,
+          }),
+          comesDay: 20,
+        },
       ],
     }
     const won: GameState = {
       ...base,
       relations: [
-        { ...relationFrom(world, { from: PLAYER, where: far, to: home, day: 10, won: true, fell: 10 }), comesDay: 20 },
+        {
+          ...relationFrom(world, {
+            from: PLAYER,
+            where: far,
+            to: home,
+            day: 10,
+            won: true,
+            fell: 10,
+          }),
+          comesDay: 20,
+        },
       ],
     }
     console.log(homeMood(lost, 25).says)
@@ -141,7 +167,17 @@ describe('Рл5 и Рл6: вести решают, и они считаны', ()
     const state: GameState = {
       ...ruler(),
       relations: [
-        { ...relationFrom(world, { from: PLAYER, where: far, to: home, day: 10, won: true, fell: 20 }), comesDay: 12 },
+        {
+          ...relationFrom(world, {
+            from: PLAYER,
+            where: far,
+            to: home,
+            day: 10,
+            won: true,
+            fell: 20,
+          }),
+          comesDay: 12,
+        },
         relationFrom(world, { from: PLAYER, where: far, to: home, day: 40, won: false, fell: 30 }),
       ],
     }
@@ -157,7 +193,17 @@ describe('Рл5 и Рл6: вести решают, и они считаны', ()
     const state: GameState = {
       ...ruler(),
       relations: [
-        { ...relationFrom(world, { from: PLAYER, where: far, to: home, day: 10, won: true, fell: 20 }), comesDay: 12 },
+        {
+          ...relationFrom(world, {
+            from: PLAYER,
+            where: far,
+            to: home,
+            day: 10,
+            won: true,
+            fell: 20,
+          }),
+          comesDay: 12,
+        },
         relationFrom(world, { from: 'robl', where: far, to: home, day: 40, won: true, fell: 30 }),
       ],
     }
