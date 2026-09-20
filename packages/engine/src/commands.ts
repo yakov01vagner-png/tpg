@@ -644,6 +644,7 @@ import {
   withUses,
 } from './lore'
 import { MAGIC_RANKS, nextRank, rankTier } from './magic'
+import { marchPlan } from './march'
 import type { PriceLog } from './market'
 import { recordPrices } from './market'
 import { opinionPrice, playStyle, worldOpinion } from './memory'
@@ -2439,6 +2440,12 @@ function travel(state: GameState, toLocationId: string): CommandResult {
   const from = state.world.locations[state.locationId]
   const draft = open(state)
   if (sky !== 'clear') notice(draft, `${skyDef(sky).label}: ${skyDef(sky).about}`, 'world')
+  // Поход виден заранее (этап 173, Пх5): с войском дорога стоит хлеба, фуража
+  // и людей, и это говорится до того, как встали с места. Одному человеку
+  // считать нечего — ему дорога стоит только времени.
+  if (partySize(draft.party) >= 20) {
+    notice(draft, marchPlan(state, state.world, toLocationId, dayOf(state.time)).says, 'war')
+  }
   notice(
     draft,
     `Дорога${from ? ` из ${from.name}` : ''} в ${destination.name}: ${formatDuration(hours(walking))} пути${
