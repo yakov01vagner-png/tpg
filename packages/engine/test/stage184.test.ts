@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { burghRoll, charterTerms, cityOffers, cityRivals, guildsAt, magistrateAt, militiaAt } from '../src/burgh'
+import {
+  burghRoll,
+  charterTerms,
+  cityOffers,
+  cityRivals,
+  guildsAt,
+  magistrateAt,
+  militiaAt,
+} from '../src/burgh'
 import { createCharacter } from '../src/character'
 import { citiesOf } from '../src/city'
 import { BURGH, GUILD_DEFS } from '../src/content/burgh'
@@ -45,7 +53,9 @@ function ruler(): GameState {
 describe('Гр1: город — не место побольше', () => {
   it('у города есть цехи, магистрат и своё ополчение', () => {
     const state = ruler()
-    const city = citiesOf(state, world).find((one) => state.settlements[one.locationId]?.owner === PLAYER)
+    const city = citiesOf(state, world).find(
+      (one) => state.settlements[one.locationId]?.owner === PLAYER,
+    )
     expect(city).toBeTruthy()
     if (!city) return
     const guilds = guildsAt(state, world, city.locationId)
@@ -66,7 +76,9 @@ describe('Гр1: город — не место побольше', () => {
 describe('Гр2 и Гр3: вольность как договор, и город торгуется', () => {
   it('в вольности написано, что город отдаёт и что берёт', () => {
     const state = ruler()
-    const city = citiesOf(state, world).find((one) => state.settlements[one.locationId]?.owner === PLAYER)
+    const city = citiesOf(state, world).find(
+      (one) => state.settlements[one.locationId]?.owner === PLAYER,
+    )
     if (!city) return
     const terms = charterTerms(state, world, city, 1)
     console.log(terms.says)
@@ -78,7 +90,9 @@ describe('Гр2 и Гр3: вольность как договор, и горо�
 
   it('город даёт заём, просит вольность и требует защиты', () => {
     const state = ruler()
-    const city = citiesOf(state, world).find((one) => state.settlements[one.locationId]?.owner === PLAYER)
+    const city = citiesOf(state, world).find(
+      (one) => state.settlements[one.locationId]?.owner === PLAYER,
+    )
     if (!city) return
     const rich = { ...city, purse: 9000 }
     const offers = cityOffers(
@@ -86,7 +100,10 @@ describe('Гр2 и Гр3: вольность как договор, и горо�
         ...state,
         settlements: {
           ...state.settlements,
-          [city.locationId]: { ...(state.settlements[city.locationId] as Settlement), banditry: 0.5 },
+          [city.locationId]: {
+            ...(state.settlements[city.locationId] as Settlement),
+            banditry: 0.5,
+          },
         },
       },
       world,

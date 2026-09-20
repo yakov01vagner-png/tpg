@@ -19,6 +19,7 @@ import { hallNow } from './hall'
 import { childNow, houseRift, kinAbroad, spouseView } from './hearth'
 import { arrived, onTheWay, wasWrong } from './herald'
 import { PLAYER, holdingsOf } from './holding'
+import { collectAll, risingNow, unrestOf } from './impost'
 import { claimantsOf, heirLawOf, heirUnder, partitionOf, regencyFor, strifeOf } from './inherit'
 import { type Known, askedDef, knownTo, sourceDef, wordsTo } from './known'
 import { leagueNow, whoToCall } from './league'
@@ -123,6 +124,18 @@ export function realmScreen(state: GameState, world: World): Screen {
       label: 'Хлеб',
       value: `${bread(state, world, day).hungry.length} голодает`,
       hint: bread(state, world, day).says,
+    },
+    // Один счёт недовольства на державу: откуда взялось и чем сбивается
+    // (этап 185, Пд3). Из него же растёт мятеж.
+    {
+      label: 'Недовольство',
+      value: `${unrestOf(state, world, day).score}`,
+      hint: risingNow(state, world, day).says,
+    },
+    {
+      label: 'Сбор подати',
+      value: `${collectAll(state, world, day).taken}`,
+      hint: collectAll(state, world, day).says,
     },
     { label: 'Закон', value: law.tax, hint: `суд — ${law.justice}, ополчение — ${law.levy}` },
     { label: 'Города', value: `${cities.cities}`, hint: cities.says },
