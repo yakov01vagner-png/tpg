@@ -50,7 +50,14 @@ describe('Рм1 и Рм2: у вещи есть история и износ', ()
     expect(story.line).toContain('Ратша')
     expect(story.line).toContain('год')
     expect(story.state).toBe('new')
-    const mended = storyOf({ ...blade, condition: 55, mark: { ...blade.mark!, repairs: 2 } }, 800)
+    const mended = storyOf(
+      {
+        ...blade,
+        condition: 55,
+        mark: { maker: 'Ратша', place: 'Ре-Эстиз', quality: 3, day: 400, repairs: 2 },
+      },
+      800,
+    )
     console.log(mended.line)
     expect(mended.line).toContain('починок 2')
     expect(mended.state).toBe('worn')

@@ -329,6 +329,7 @@ import {
   TRACK_SKILL,
 } from './content/wild'
 import { JESTER_MORALE, RECRUITER_PRICE, THIEF_SHARE } from './content/year'
+import { YEARLAND_WORDS } from './content/yearland'
 import type { CourtChoice } from './court'
 import { courtCase, vassalsOf } from './court'
 import {
@@ -1184,6 +1185,7 @@ import { fordShut } from './world/rivers'
 import type { World } from './world/types'
 import { TERRAIN_LABELS, isSettlement, isSite } from './world/types'
 import { bedridden, defeatOutcome, healWound } from './wounds'
+import { riversFrozen } from './yearland'
 
 /**
  * Команды — единственный способ изменить состояние (п.2 дизайн-документа).
@@ -2431,6 +2433,9 @@ function travel(state: GameState, toLocationId: string): CommandResult {
   if (fordShut(state.world, toLocationId, dayOf(state.time))) {
     return fail('flood', `Половодье: ${destination.name} под большой водой, вброд не пройти.`)
   }
+  // А зимой реки встают, и брод перестаёт быть узким местом: по льду идут где
+  // угодно (этап 180, Гд2). Погода здесь не отнимает долю — она меняет правило.
+  const onIce = riversFrozen(dayOf(state.time)) && destination.archetype === 'ford'
 
   // К мёртвому месту дорога заросла: идти вдвое дольше (band.ts, OVERGROWN).
   const roadHoursNow = roadHours(state.world, state.settlements, state.locationId, road.to)
@@ -2447,7 +2452,9 @@ function travel(state: GameState, toLocationId: string): CommandResult {
       seasonOf(dayOf(state.time)),
     ) *
       (blind ? BLIND_SLOW : 1) *
-      skyRoad(sky),
+      skyRoad(sky) *
+      // По льду переправа не стоит времени вовсе: не ждут очереди у брода.
+      (onIce ? 0.8 : 1),
   )
   const blocked = checkFatigue(state.character, travelFatigue(walking))
   if (blocked) return blocked
@@ -2455,6 +2462,7 @@ function travel(state: GameState, toLocationId: string): CommandResult {
   const from = state.world.locations[state.locationId]
   const draft = open(state)
   if (sky !== 'clear') notice(draft, `${skyDef(sky).label}: ${skyDef(sky).about}`, 'world')
+  if (onIce) notice(draft, YEARLAND_WORDS.frozen, 'world')
   // Поход виден заранее (этап 173, Пх5): с войском дорога стоит хлеба, фуража
   // и людей, и это говорится до того, как встали с места. Одному человеку
   // считать нечего — ему дорога стоит только времени.
