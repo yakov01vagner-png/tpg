@@ -297,6 +297,7 @@ describe('Б6: контент числом', () => {
 
     const screens = powerScreens(ruler(), generateWorld(1))
     console.log(`экранов власти: ${screens.length} — ${screens.map((one) => one.title).join(', ')}`)
-    expect(screens.length).toBe(7)
+    // Семь на закрытии 0.8; восьмой — путь — прибавился в 0.9 (этап 158).
+    expect(screens.length).toBe(8)
   })
 })
