@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { createCharacter } from '../src/character'
 import { churchOf } from '../src/church'
-import { churchAbroad, churchTalk, churchWealth, clergyOf, clergyRoll, devoutAt } from '../src/clergy'
+import {
+  churchAbroad,
+  churchTalk,
+  churchWealth,
+  clergyOf,
+  clergyRoll,
+  devoutAt,
+} from '../src/clergy'
 import { CENSURE_DEFS } from '../src/content/church'
 import { CLERGY, CLERGY_DEFS } from '../src/content/clergy'
 import { type Settlement, createSettlements } from '../src/economy'
