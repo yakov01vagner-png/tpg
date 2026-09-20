@@ -29,6 +29,7 @@ import type { Law } from './estate'
 import type { GameEvent, LogKind } from './events'
 import { describeEvent, kindOf } from './events'
 import type { Fame, Shame } from './fame'
+import type { Talk } from './gossip'
 import type { Home } from './home'
 import type { LawId } from './inherit'
 import type { Journey } from './journey'
@@ -386,6 +387,8 @@ export interface GameState {
   readonly words?: readonly Word[]
   /** Когда какое своё место проверяли ревизией (этап 100). */
   readonly audits?: Readonly<Record<string, number>>
+  /** Молва, которая ходит по миру (этап 101). */
+  readonly gossip?: readonly Talk[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -505,6 +508,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     censure: null,
     words: [],
     audits: {},
+    gossip: [],
     factions: {},
     spellcraft: {},
     weather: [],

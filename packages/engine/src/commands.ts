@@ -192,6 +192,7 @@ import { type CaptiveFate, SAP_DAYS, type SiegeMove } from './content/field'
 import { GOAL_CHANGE_FAME, MILESTONE_RENOWN } from './content/goals'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
+import { GOSSIP_WORDS, type TalkKind } from './content/gossip'
 import { AILMENT_DEFS, type Ailment, HERB_GOOD, POTIONS, POTIONS_BY_ID } from './content/heal'
 import { KIN_ASK, KIN_GIFT, UPBRINGING_MINUTES } from './content/home'
 import { TEMPER_LINES } from './content/lines'
@@ -349,6 +350,19 @@ import {
 } from './fort'
 import { goalDef, goalOf, goalStepDone, milestoneKey } from './goal'
 import {
+  GOSSIP,
+  type Talk,
+  alive,
+  checkedWord,
+  gossipLedger,
+  gossipOf,
+  hear,
+  heardAt,
+  start as startGossip,
+  stepped,
+  talkWords,
+} from './gossip'
+import {
   type SickWhere,
   ailmentDef,
   ailmentHolds,
@@ -417,7 +431,7 @@ import {
   rumourAt,
   seenFrom,
 } from './knowledge'
-import { type Word, bring, forgetOld } from './known'
+import { type Word, bring, forgetOld, truthOf } from './known'
 import type { HarvestEvent, LifeEvent } from './life'
 import { LIFE, foodSecurity, rollHarvest, tickDays } from './life'
 import { crownOf, factionDef, factionKey, factionMood, heirRegard, withLordDeed } from './lordlife'
@@ -1069,6 +1083,14 @@ export type Command =
   | { readonly type: 'huntTrade'; readonly locationId: string }
   | { readonly type: 'seaSortie'; readonly locationId: string }
   | { readonly type: 'askLetter'; readonly against: string }
+  /** Молва (этап 101): пустить свою, проверить услышанную. */
+  | {
+      readonly type: 'startTalk'
+      readonly kind: TalkKind
+      readonly about: string
+      readonly value: number | string
+    }
+  | { readonly type: 'checkTalk'; readonly talkId: string }
   /** Донесения своих (этап 100): проверить место ревизией. */
   | { readonly type: 'orderAudit'; readonly locationId: string }
   /** Мир и его цена (этап 88): сесть за стол, предложить условия, встать. */
@@ -1567,6 +1589,10 @@ export function applyCommand(
       return huntTrade(state, command.locationId)
     case 'seaSortie':
       return seaSortie(state, command.locationId)
+    case 'startTalk':
+      return startTalk(state, command.kind, command.about, command.value)
+    case 'checkTalk':
+      return checkTalk(state, command.talkId)
     case 'orderAudit':
       return orderAudit(state, command.locationId)
     case 'openTalks':
@@ -9489,6 +9515,7 @@ interface Draft {
   censure: Censure | null
   words: readonly Word[]
   audits: Readonly<Record<string, number>>
+  gossip: readonly Talk[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9594,6 +9621,7 @@ function open(state: GameState): Draft {
     censure: state.censure ?? null,
     words: state.words ?? [],
     audits: state.audits ?? {},
+    gossip: state.gossip ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -9884,6 +9912,8 @@ function close(draft: Draft): CommandResult {
 
     // Войско ест каждый день, а донесения идут своим ходом (этап 84, Ка3 и Ка5).
     tickCampaign(draft, daysPassed)
+    // Молва ходит по местам и стихает сама (этап 101).
+    tickGossip(draft, daysPassed)
     // Свои места отчитываются раз в месяц, и отчёт идёт своей дорогой (этап 100).
     tickReports(draft, daysPassed)
     // Чужие послы приезжают сами и уезжают, не дождавшись (этап 91).
@@ -10033,6 +10063,7 @@ function close(draft: Draft): CommandResult {
     censure: draft.censure,
     words: draft.words,
     audits: draft.audits,
+    gossip: draft.gossip,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
@@ -11705,6 +11736,114 @@ function shutOwnHarbours(draft: Draft, days: number): void {
   if (shut > 0 && day % 10 === 0) {
     notice(draft, `Чужие суда держат твои гавани: заперто ${shut}. Пошлина не идёт.`, 'war')
   }
+}
+
+/**
+ * Пустить молву (этап 101, М4).
+ *
+ * Пущенная молва становится общей: она пойдёт по местам сама, исказится на
+ * переходах и однажды вернётся к тебе не тем, чем была. Власти над ней нет ни у
+ * кого — в этом и цена, и польза.
+ */
+function startTalk(
+  state: GameState,
+  kind: TalkKind,
+  about: string,
+  value: number | string,
+): CommandResult {
+  const day = dayOf(state.time)
+  if (state.character.money < GOSSIP.startSilver) {
+    return fail(
+      'noMoney',
+      `Пустить молву стоит ${GOSSIP.startSilver}, у тебя ${state.character.money}.`,
+    )
+  }
+  if (gossipOf(state).some((one) => one.about === about && one.kind === kind && alive(one, day))) {
+    return fail('invalid', 'Об этом уже говорят.')
+  }
+
+  const draft = open(state)
+  addMoney(draft, -GOSSIP.startSilver)
+  advance(draft, hours(6))
+  practice(draft, 'persuasion', 20)
+  const truth = truthOf(draft.base, draft.base.world, { kind, about }, day)
+  const sooth = truth !== null && truth === value
+  const talk = startGossip(
+    `talk:${kind}:${about}:${day}`,
+    kind,
+    about,
+    value,
+    state.locationId,
+    day,
+    sooth,
+  )
+  draft.gossip = [...gossipOf(draft), talk]
+  notice(draft, `${talkWords(talk)}. ${GOSSIP_WORDS.mine}`, 'people')
+  return close(draft)
+}
+
+/**
+ * Проверить услышанное (этап 101, М5).
+ *
+ * Молву можно свести с правдой — если есть чем: свои глаза, свои люди или
+ * место, до которого можно дойти. Уличённая молва стихает, подтверждённая
+ * становится вестью получше.
+ */
+function checkTalk(state: GameState, talkId: string): CommandResult {
+  const day = dayOf(state.time)
+  const talk = gossipOf(state).find((one) => one.id === talkId)
+  if (!talk) return fail('invalid', 'О такой молве не слышно.')
+  if (!alive(talk, day)) return fail('invalid', 'О том уже не говорят.')
+  if (state.character.money < GOSSIP.checkSilver) {
+    return fail('noMoney', `Проверка стоит ${GOSSIP.checkSilver}, у тебя ${state.character.money}.`)
+  }
+
+  const draft = open(state)
+  addMoney(draft, -GOSSIP.checkSilver)
+  advance(draft, hours(24 * GOSSIP.checkDays))
+  practice(draft, 'scholarship', 25)
+  const truth = truthOf(draft.base, draft.base.world, { kind: talk.kind, about: talk.about }, day)
+  const right = truth !== null && truth === talk.value
+  draft.words = bring(draft.words, checkedWord(talk, truth, PLAYER, dayOf(draft.time)))
+  draft.gossip = gossipOf(draft).map((one) =>
+    one.id === talkId ? { ...one, exposed: !right } : one,
+  )
+  notice(
+    draft,
+    right
+      ? `${GOSSIP_WORDS.checked} ${talkWords(talk)}`
+      : `${GOSSIP_WORDS.exposed} На деле ${truth ?? 'ничего подобного'}.`,
+    'people',
+  )
+  return close(draft)
+}
+
+/**
+ * Сутки молвы (этап 101, М1–М3).
+ *
+ * Молва делает шаг раз в пятидневку: расходится по соседям, искажается и
+ * стихает сама. Дойдя до места, где ты стоишь, она становится вестью с
+ * источником «ходит молва» — и дальше живёт по правилам знания (этап 99).
+ */
+function tickGossip(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % GOSSIP.beat !== 0) return
+  const rows = gossipOf(draft)
+  if (rows.length === 0) return
+  const moved: Talk[] = []
+  let words = draft.words
+  for (const talk of rows) {
+    if (!alive(talk, day)) continue
+    const next = stepped(talk, draft.base.world, day)
+    moved.push(next)
+    // Дошла до тебя — значит, ты её услышал.
+    if (heardAt(next, draft.locationId, day)) {
+      words = hear(words, next, PLAYER, day)
+    }
+  }
+  draft.gossip = moved
+  draft.words = words
 }
 
 /**
