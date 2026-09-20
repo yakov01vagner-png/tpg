@@ -371,6 +371,7 @@ import {
   withDeed,
 } from './fame'
 import { groundFor, orderNeeds, veteranShare, woundedOf } from './field'
+import { FOG, sightingsNow, surpriseOf, withSightings } from './fog'
 import {
   type EngineId,
   SIEGE,
@@ -2462,8 +2463,19 @@ function roadMeet(draft: Draft, journey: Journey, hoursOnRoad: number): void {
     return
   }
   const ahead = draft.base.world.locations[journey.toId]
+  // Встретить на дороге то, о чём не знал, — и есть внезапность (этап 109, Т4).
+  const ambush = surpriseOf(draft.base, draft.base.world, PLAYER, met, dayOf(draft.time))
+  if (ambush.surprised) {
+    draft.party = { ...draft.party, morale: Math.max(0, draft.party.morale - ambush.moraleHit) }
+    notice(draft, `${who}: ${ambush.says} Дух −${ambush.moraleHit}.`, 'war')
+  }
   draft.bands = draft.bands.filter((one) => one.id !== met.id)
-  const enemy: BattleSide = { name: who, units: met.units, morale: met.morale, fatigue: 0 }
+  const enemy: BattleSide = {
+    name: who,
+    units: met.units,
+    morale: draft.party.morale > 0 ? met.morale : met.morale,
+    fatigue: 0,
+  }
   draft.battle = startBattle(draft.party, enemy, ahead?.terrain ?? 'plains', {
     foeId: met.kingdomId ? `crown:${met.kingdomId}` : met.lordId,
     ground: groundFor(ahead?.terrain ?? 'plains', 'road'),
@@ -6737,6 +6749,12 @@ function attackBand(state: GameState, bandId: string): CommandResult {
     advance(draft, hours(2))
     return close(draft)
   }
+  // Войско, о котором не знали, застаёт врасплох — и это считается духом (этап 109, Т4).
+  const surprise = surpriseOf(state, state.world, PLAYER, band, dayOf(state.time))
+  if (surprise.surprised) {
+    draft.party = { ...draft.party, morale: Math.max(0, draft.party.morale - surprise.moraleHit) }
+    notice(draft, `${name}: ${surprise.says} Дух −${surprise.moraleHit}.`, 'war')
+  }
   draft.battle = startBattle(draft.party, softened, here?.terrain ?? 'plains', {
     ...(stake ? { stake } : {}),
     ownWalls,
@@ -10015,6 +10033,8 @@ function close(draft: Draft): CommandResult {
     tickDoorway(draft, daysPassed)
     // Приказы идут дорогой, исполняются чужими руками и возвращаются отчётом (этап 108).
     tickBehests(draft, daysPassed)
+    // Дозорные глаза доносят, где видели чужие войска (этап 109).
+    tickSightings(draft, daysPassed)
     // Двор просит, стареет и уходит (этап 104).
     tickCourtiers(draft, daysPassed)
     // Посланные смотреть возвращаются (этап 102).
@@ -11921,6 +11941,23 @@ function handMatter(state: GameState, matterId: string): CommandResult {
     'people',
   )
   return close(draft)
+}
+
+/**
+ * Донесения о чужих войсках (этап 109, Т1, Т3 и Т5).
+ *
+ * Своё место видит на переход вокруг, своя часть в поле — на два, местные
+ * говорят там, где тебя любят. Увиденное ложится вестью и дальше стареет по
+ * общему правилу этапа 99: знание о войне хранится тем же слоем, что и всё
+ * остальное знание.
+ */
+function tickSightings(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % FOG.beat !== 0) return
+  const seen = sightingsNow(draft.base, draft.world, PLAYER, day)
+  if (seen.length === 0) return
+  draft.words = withSightings(draft.words, seen)
 }
 
 /**
