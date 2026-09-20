@@ -556,6 +556,19 @@ export interface GameState {
    * Всё остальное — направление, длительность, причины — считается из замеров.
    */
   readonly curves?: Readonly<Record<string, readonly number[]>>
+  /**
+   * Своя летопись (этап 147): сколько приписано своей рукой и когда.
+   *
+   * `remembered` — не память, а её пересчёт: счёт выводится из летописи
+   * (`memoryOf`), но летопись за век — тысячи строк, и считать её каждым тактом
+   * нельзя. Раз в год счёт пересчитывается и ложится сюда, а всякий, кому нужно
+   * точно, зовёт `memoryOf` сам.
+   */
+  readonly annals?: {
+    readonly added: number
+    readonly lastDay: number
+    readonly remembered?: { readonly good: number; readonly bad: number }
+  }
   /** Эпоха, которая идёт сейчас (этап 146), и как державa её встретила. */
   readonly era?: {
     readonly id: string
@@ -840,6 +853,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     balanceLog: { betrayals: 0, wars: 0 },
     reigns: {},
     curves: {},
+    annals: { added: 0, lastDay: 0 },
     era: null,
     eraLog: [],
     heirLog: { kept: 0, changed: 0 },

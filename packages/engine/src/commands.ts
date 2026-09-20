@@ -7,6 +7,7 @@ import {
   titleWorth,
   wouldRecall,
 } from './acclaim'
+import { ANNALS, ANNALS_WORDS, memoryOf, writeCost } from './annals'
 import {
   BIND_DEFS,
   FAITH,
@@ -1387,6 +1388,8 @@ export type Command =
   /** Коалиция (этап 136): разобрать чужую по одному и собрать свою против первого. */
   | { readonly type: 'breakLeague'; readonly member: string }
   | { readonly type: 'callLeague'; readonly against: string }
+  /** Летопись (этап 147): писать свою — дело, которое стоит серебра и правды. */
+  | { readonly type: 'writeAnnals' }
   /** Эпоха (этап 146): чем держава её встречает. */
   | { readonly type: 'meetEra'; readonly answer: string }
   /** Чужой конец (этап 142): принять исход и стать первым человеком победителя. */
@@ -1982,6 +1985,8 @@ export function applyCommand(
       return breakLeague(state, command.member)
     case 'callLeague':
       return callLeague(state, command.against)
+    case 'writeAnnals':
+      return writeAnnals(state)
     case 'meetEra':
       return meetEra(state, command.answer)
     case 'serveWinner':
@@ -10100,6 +10105,11 @@ interface Draft {
   balanceLog: { readonly betrayals: number; readonly wars: number }
   reigns: Readonly<Record<string, number>>
   curves: Readonly<Record<string, readonly number[]>>
+  annals: {
+    readonly added: number
+    readonly lastDay: number
+    readonly remembered?: { readonly good: number; readonly bad: number }
+  }
   era: {
     readonly id: string
     readonly sinceDay: number
@@ -10318,6 +10328,7 @@ function open(state: GameState): Draft {
     balanceLog: state.balanceLog ?? { betrayals: 0, wars: 0 },
     reigns: state.reigns ?? {},
     curves: state.curves ?? {},
+    annals: state.annals ?? { added: 0, lastDay: 0 },
     era: state.era ?? null,
     eraLog: state.eraLog ?? [],
     heirLog: state.heirLog ?? { kept: 0, changed: 0 },
@@ -10886,6 +10897,7 @@ function close(draft: Draft): CommandResult {
     balanceLog: draft.balanceLog,
     reigns: draft.reigns,
     curves: draft.curves,
+    annals: draft.annals,
     era: draft.era,
     eraLog: draft.eraLog,
     heirLog: draft.heirLog,
@@ -14026,6 +14038,13 @@ function tickCurves(draft: Draft, days: number): void {
     curves[who] = [...(curves[who] ?? []), now].slice(-CURVE.keep)
   }
   draft.curves = curves
+  // Заодно пересчитывается память мира о тебе (этап 147): летопись за век —
+  // тысячи строк, и счёт по ней берётся раз в год, а не каждым тактом.
+  const memory = memoryOf(draft.base, day)
+  draft.annals = {
+    ...draft.annals,
+    remembered: { good: memory.good, bad: memory.bad },
+  }
   // Раз в пять лет мир говорит о самом заметном процессе.
   if (day % (CURVE.beat * 5) !== 0) return
   const worst = Object.keys(draft.base.world.kingdoms)
@@ -14128,6 +14147,33 @@ function meetEra(state: GameState, answer: string): CommandResult {
   if (index === 1) shiftVassals(draft, -4, null)
   if (index === 2) draft.renown = Math.max(0, draft.renown - 2)
   notice(draft, `${ERA_WORDS.answer} ${def.label}: ${chosen.says}`, 'world')
+  return close(draft)
+}
+
+/**
+ * Своя летопись (этап 147, Лт5).
+ *
+ * Приписать можно, но немного: летопись стоит серебра и правды. Сверх
+ * настоящих дел мир не поверит — и потолок считается от них же.
+ */
+function writeAnnals(state: GameState): CommandResult {
+  const day = dayOf(state.time)
+  const cost = writeCost(state, day)
+  if (cost.can <= 0) return fail('requirements', cost.says)
+  if (state.character.money < cost.cost) {
+    return fail('noMoney', `Глава летописи стоит ${cost.cost} серебра.`)
+  }
+
+  const draft = open(state)
+  advance(draft, hours(10))
+  addMoney(draft, -cost.cost)
+  draft.annals = { added: draft.annals.added + 1, lastDay: day }
+  const now = memoryOf(draft.base, day)
+  notice(
+    draft,
+    `${ANNALS_WORDS.own} Глава написана: доброго о тебе ${now.good}, худого ${now.bad}.`,
+    'people',
+  )
   return close(draft)
 }
 

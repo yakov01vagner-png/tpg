@@ -1,3 +1,4 @@
+import { ANNALS } from './content/annals'
 import { DREAD, DREAD_WORDS, FEARS, FEAR_DEFS, type FearId } from './content/dread'
 import { PLAYER, holdingsOf } from './holding'
 import { type Known, knownTo } from './known'
@@ -80,12 +81,15 @@ export function dreadOf(
   const need = blocks * share
   const cold = relationOf(state.politics, who, of) < 0 ? 1 : 0
   const have: Record<FearId, number> = { share, need, near, cold }
+  // Память мира входит в страх (этап 147, Лт2): взятые города и нарушенные
+  // слова помнят, и боятся того, о ком такое помнят.
+  const remembered = of === PLAYER ? (state.annals?.remembered?.bad ?? 0) * ANNALS.intoDread : 0
   const parts = FEARS.filter((id) => have[id] > 0).map((id) => ({
     fear: id,
     part: Math.round(FEAR_DEFS[id].weight * have[id]),
     says: FEAR_DEFS[id].about,
   }))
-  const score = parts.reduce((sum, one) => sum + one.part, 0)
+  const score = parts.reduce((sum, one) => sum + one.part, 0) + Math.round(remembered)
   const name = sideName(world, of)
   return {
     who,

@@ -6,6 +6,7 @@ import {
   type DearerId,
   TITLE_NEEDS,
 } from './content/acclaim'
+import { ANNALS } from './content/annals'
 import { sideName } from './dread'
 import { PLAYER } from './holding'
 import type { GameState } from './state'
@@ -67,8 +68,17 @@ export function strangerCost(
   day: number,
 ): { readonly times: number; readonly no: number; readonly says: string } {
   const { no } = recognisedBySides(state, world, PLAYER, day)
+  // Доброе имя сбивает цену (этап 147, Лт2): тому, о ком помнят хорошее, и
+  // ворота открывают охотнее.
+  const good = state.annals?.remembered?.good ?? 0
   const times =
-    Math.round(Math.min(ACCLAIM.dearestTimes, 1 + no.length * ACCLAIM.perStranger) * 100) / 100
+    Math.round(
+      Math.max(
+        1,
+        Math.min(ACCLAIM.dearestTimes, 1 + no.length * ACCLAIM.perStranger) -
+          good * ANNALS.intoPrice * 0.01,
+      ) * 100,
+    ) / 100
   return {
     times,
     no: no.length,
