@@ -34,6 +34,7 @@ import type { LawId } from './inherit'
 import type { Journey } from './journey'
 import type { Knowledge } from './knowledge'
 import { startKnowledge } from './knowledge'
+import type { Word } from './known'
 import type { Artifact, Spellcraft, Weather } from './lore'
 import { EMPTY_PRICE_LOG, type PriceLog } from './market'
 import type { Dealing } from './merchant'
@@ -376,6 +377,13 @@ export interface GameState {
   /** Счёт недовольства церкви тобой и её кара (этап 96). */
   readonly churchAnger?: number
   readonly censure?: Censure | null
+  /**
+   * Вести (этап 99): то, что кому-то принесли о мире.
+   *
+   * Знание не хранится вторым состоянием — хранятся только вести, из которых оно
+   * выводится вместе с правдой. Поэтому знание нельзя рассогласовать с миром.
+   */
+  readonly words?: readonly Word[]
   readonly factions?: Readonly<Record<string, number>>
   /** Своё владение, если провозглашено. */
   /**
@@ -493,6 +501,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     pacts: [],
     churchAnger: 0,
     censure: null,
+    words: [],
     factions: {},
     spellcraft: {},
     weather: [],

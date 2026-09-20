@@ -417,6 +417,7 @@ import {
   rumourAt,
   seenFrom,
 } from './knowledge'
+import type { Word } from './known'
 import type { HarvestEvent, LifeEvent } from './life'
 import { LIFE, foodSecurity, rollHarvest, tickDays } from './life'
 import { crownOf, factionDef, factionKey, factionMood, heirRegard, withLordDeed } from './lordlife'
@@ -9481,6 +9482,7 @@ interface Draft {
   pacts: readonly Pact[]
   churchAnger: number
   censure: Censure | null
+  words: readonly Word[]
   factions: Readonly<Record<string, number>>
   spellcraft: Spellcraft
   weather: readonly Weather[]
@@ -9584,6 +9586,7 @@ function open(state: GameState): Draft {
     pacts: state.pacts ?? [],
     churchAnger: state.churchAnger ?? 0,
     censure: state.censure ?? null,
+    words: state.words ?? [],
     factions: state.factions ?? {},
     spellcraft: state.spellcraft ?? {},
     weather: state.weather ?? [],
@@ -10019,6 +10022,7 @@ function close(draft: Draft): CommandResult {
     pacts: draft.pacts,
     churchAnger: draft.churchAnger,
     censure: draft.censure,
+    words: draft.words,
     factions: draft.factions,
     spellcraft: draft.spellcraft,
     weather: draft.weather,
