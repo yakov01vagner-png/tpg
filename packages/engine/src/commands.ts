@@ -19,6 +19,7 @@ import {
   deedCost,
   faithWorld,
 } from './anoint'
+import { caseNow, verdictCost } from './assize'
 import type { AttributeId } from './attributes'
 import { ATTRIBUTE_LABELS, ATTRIBUTE_MAX } from './attributes'
 import { BALANCE, BALANCE_WORDS, betrayers, warPressure } from './balance'
@@ -6490,6 +6491,17 @@ function judge(state: GameState, caseId: string, choice: CourtChoice): CommandRe
   }
   const draft = open(state)
   draft.courtDay = dayOf(draft.time)
+  // Двор считает свои дела (этап 182, Сд6): сколько рассужено и сколько решено
+  // за серебро. По этому о твоём суде и говорят.
+  draft.courtLog = {
+    heard: draft.courtLog.heard + 1,
+    sold: draft.courtLog.sold + (choice === 'ransom' ? 1 : 0),
+  }
+  // И у дела есть стороны с доводами, свидетели и правда, которой ты не знаешь
+  // (Сд1, Сд2): приговор говорит, кого он порадовал, кого обидел и как было на
+  // самом деле.
+  const argued = caseNow(state, state.world, dayOf(state.time))
+  if (argued) notice(draft, verdictCost(argued, choice).says, 'people')
   advance(draft, hours(4))
   const [first, second] = current.lords
   switch (choice) {
@@ -10369,6 +10381,8 @@ interface Draft {
   cleansed: { readonly locationId: string; readonly untilDay: number } | null
   guild: Membership | null
   courtDay: number
+  /** Счёт суда (этап 182). */
+  courtLog: { readonly heard: number; readonly sold: number }
   quarter: QuarterId | null
   knowledge: Knowledge | undefined
   dealings: Readonly<Record<string, Dealing>>
@@ -10659,6 +10673,7 @@ function open(state: GameState): Draft {
     cleansed: state.cleansed ?? null,
     guild: state.guild,
     courtDay: state.courtDay ?? 0,
+    courtLog: state.courtLog ?? { heard: 0, sold: 0 },
     quarter: state.quarter ?? null,
     knowledge: state.knowledge,
     dealings: state.dealings ?? {},
@@ -11317,6 +11332,7 @@ function close(draft: Draft): CommandResult {
     cleansed: draft.cleansed,
     guild: draft.guild,
     courtDay: draft.courtDay,
+    courtLog: draft.courtLog,
     quarter: draft.quarter,
     ...(draft.knowledge ? { knowledge: draft.knowledge } : {}),
     dealings: draft.dealings,

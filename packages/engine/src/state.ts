@@ -80,7 +80,7 @@ import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 34
+export const SCHEMA_VERSION = 35
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -453,6 +453,12 @@ export interface GameState {
   readonly crownDebts?: Readonly<
     Record<string, { readonly owed: number; readonly sinceDay: number }>
   >
+  /**
+   * Счёт суда (этап 182, Сд6): сколько дел рассужено и сколько решено за
+   * серебро. История, которой из мира не вывести: приговор оставляет след в
+   * памяти мест, а не в самом мире.
+   */
+  readonly courtLog?: { readonly heard: number; readonly sold: number }
   /**
    * Реляции с войны (этап 175): что прислали, когда дойдёт и насколько соврали.
    *
@@ -981,6 +987,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     hurt: [],
     bloodPaid: 0,
     relations: [],
+    courtLog: { heard: 0, sold: 0 },
     anointed: null,
     deeds: {},
     dreadLog: {},

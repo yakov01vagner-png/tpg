@@ -616,6 +616,11 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
    * Версия поднята потому, что форма состояния изменилась (CLAUDE.md, п.5).
    */
   33: (data) => ({ ...data }),
+  /** v34 → v35: счёт суда (этап 182). Нули — прежний двор дел не считал. */
+  34: (data) => ({
+    ...data,
+    courtLog: data.courtLog ?? { heard: 0, sold: 0 },
+  }),
 }
 
 export type LoadResult =
