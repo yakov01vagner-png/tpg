@@ -8,6 +8,7 @@ import { KNOWN_WORDS } from './content/known'
 import { TROUBLE_DEFS } from './content/liege'
 import { MOULD_WORDS } from './content/mould'
 import { OFFICES, type OfficeId } from './content/offices'
+import { FIELD_WORK_DEFS } from './content/tillage'
 import { vassalsOf } from './court'
 import { sideName, whoFears } from './dread'
 import { nearestEnding } from './ending'
@@ -38,6 +39,7 @@ import { sheetOf } from './sheet'
 import { knowMap, tourPlan } from './sight'
 import { SKILLS, type SkillId } from './skills'
 import type { GameState } from './state'
+import { bread, fieldSays, fieldWork, whyIncome, whySpent } from './tillage'
 import { dayOf } from './time'
 import { ledger } from './treasury'
 import { atWar, warsOf } from './war'
@@ -97,6 +99,30 @@ export function realmScreen(state: GameState, world: World): Screen {
       label: 'Казна',
       value: `${state.character.money}`,
       hint: `в сутки приходит ${Math.round(purse.income)}, уходит ${Math.round(purse.spent)}, итого ${Math.round(purse.net)}`,
+    },
+    // Всякая монета объясняется, и видно, что срезать (этап 177, Хз2 и Хз3).
+    {
+      label: 'Откуда приходит',
+      value: `${Math.round(purse.income)}`,
+      hint: whyIncome(state, world, day)
+        .map((one) => `${one.what} ${one.sum}: ${one.why}`)
+        .join(' '),
+    },
+    {
+      label: 'Куда уходит',
+      value: `${Math.round(purse.spent)}`,
+      hint: whySpent(state, world, day).cut,
+    },
+    // Год земли и хлеб: то, на чём всё это стоит (этап 177, Хз1 и Хз4).
+    {
+      label: 'Год земли',
+      value: FIELD_WORK_DEFS[fieldWork(day)].label,
+      hint: fieldSays(state, day),
+    },
+    {
+      label: 'Хлеб',
+      value: `${bread(state, world, day).hungry.length} голодает`,
+      hint: bread(state, world, day).says,
     },
     { label: 'Закон', value: law.tax, hint: `суд — ${law.justice}, ополчение — ${law.levy}` },
     { label: 'Города', value: `${cities.cities}`, hint: cities.says },
