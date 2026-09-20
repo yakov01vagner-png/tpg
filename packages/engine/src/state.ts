@@ -80,7 +80,7 @@ import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 26
+export const SCHEMA_VERSION = 27
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -453,6 +453,29 @@ export interface GameState {
   readonly crownDebts?: Readonly<
     Record<string, { readonly owed: number; readonly sinceDay: number }>
   >
+  /**
+   * Книга набора (этап 166): кого, где и когда ты взял в отряд.
+   *
+   * Люди в отряде не хранятся — они выводятся отсюда: имя, годы, прошлое,
+   * страх и выслуга считаются из записи и места в ней. Хранится только то,
+   * чего из мира не вывести: что ты набрал двенадцать копейщиков в Ржаном на
+   * четырёхсотый день.
+   */
+  readonly roll?: readonly {
+    readonly id: string
+    readonly troop: string
+    readonly count: number
+    readonly from: string | null
+    readonly sinceDay: number
+  }[]
+  /** Кого отряд помнит (этап 166, От3): павшие и ушедшие, последние восемьдесят. */
+  readonly graves?: readonly {
+    readonly name: string
+    readonly troop: string
+    readonly day: number
+    readonly where: string | null
+    readonly how: 'fell' | 'left'
+  }[]
   /**
    * Казна короны (этап 165): сколько у неё серебра сейчас.
    *
@@ -878,6 +901,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     crownDebts: {},
     crownCoin: {},
     coinLog: {},
+    roll: [],
+    graves: [],
     anointed: null,
     deeds: {},
     dreadLog: {},

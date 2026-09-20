@@ -258,6 +258,7 @@ import {
   type ShameId,
 } from './content/fame'
 import { type CaptiveFate, SAP_DAYS, type SiegeMove } from './content/field'
+import { FOLK } from './content/folk'
 import { GOAL_CHANGE_FAME, MILESTONE_RENOWN } from './content/goals'
 import type { GoodId } from './content/goods'
 import { GOODS } from './content/goods'
@@ -469,6 +470,7 @@ import {
 } from './fame'
 import { groundFor, orderNeeds, veteranShare, woundedOf } from './field'
 import { FOG, sightingsNow, surpriseOf, withSightings } from './fog'
+import { type Enlist, type Remembered, rememberNames, syncRoll, whoLeaves } from './folk'
 import {
   type EngineId,
   SIEGE,
@@ -10111,6 +10113,9 @@ interface Draft {
   /** Казна корон и счёт их разорений (этап 165). */
   crownCoin: Readonly<Record<string, number>>
   coinLog: Readonly<Record<string, number>>
+  /** Книга набора и имена, которые помнит отряд (этап 166). */
+  roll: readonly Enlist[]
+  graves: readonly Remembered[]
   anointed: { readonly sinceDay: number } | null
   deeds: Readonly<Record<string, number>>
   dreadLog: Readonly<Record<string, { readonly score: number; readonly sinceDay: number }>>
@@ -10378,6 +10383,8 @@ function open(state: GameState): Draft {
     crownDebts: state.crownDebts ?? {},
     crownCoin: state.crownCoin ?? {},
     coinLog: state.coinLog ?? {},
+    roll: (state.roll ?? []) as readonly Enlist[],
+    graves: (state.graves ?? []) as readonly Remembered[],
     anointed: state.anointed ?? null,
     deeds: state.deeds ?? {},
     dreadLog: state.dreadLog ?? {},
@@ -10509,10 +10516,35 @@ function blessedHarvest(draft: Draft): void {
   }
 }
 
+/**
+ * Свести книгу набора с числами отряда (этап 166, От1, От3).
+ *
+ * Одна воронка на все места, где отряд меняется: набор, бой, осада, побег,
+ * роспуск. Числа остаются правдой — книга следует за ними, и всякая убыль
+ * получает имя. Павшим считается тот, кого не стало в бою или под стенами,
+ * прочее — уход.
+ */
+function syncFolk(draft: Draft): void {
+  const day = dayOf(draft.time)
+  const fighting = draft.base.battle !== null || draft.base.siege !== null
+  const synced = syncRoll(
+    draft.roll,
+    draft.party.units,
+    day,
+    draft.locationId,
+    fighting ? 'fell' : 'left',
+  )
+  if (synced.roll === draft.roll && synced.gone.length === 0) return
+  draft.roll = synced.roll
+  if (synced.gone.length > 0) draft.graves = rememberNames(draft.graves, synced.gone)
+}
+
 function close(draft: Draft): CommandResult {
   // Вехи замечаются после всякого дела (этап 70, Ц2): не счётчик, а взгляд на
   // то, что в мире уже есть.
   markMilestones(draft)
+  // Книга набора сводится с числами отряда после всякого дела (этап 166).
+  syncFolk(draft)
   // Мир живёт вместе с игровым временем: сколько суток прошло, столько поселения
   // и досчитывают. Никаких фоновых таймеров — только детерминированный догон.
   const daysPassed = dayOf(draft.time) - dayOf(draft.base.time)
@@ -10781,6 +10813,8 @@ function close(draft: Draft): CommandResult {
     tickTidings(draft, daysPassed)
     // А казна корон сводится: приход, расход, заём и разорение (этап 165).
     tickCoin(draft, daysPassed)
+    // И отряд смотрит, кому с тобой не по пути (этап 166).
+    tickFolk(draft, daysPassed)
     // И сходятся против того, кто ближе всех к концу (этап 136).
     tickLeague(draft, daysPassed)
     // За слабых ручаются, и на зов приходят или не приходят (этап 137).
@@ -10985,6 +11019,8 @@ function close(draft: Draft): CommandResult {
     crownDebts: draft.crownDebts,
     crownCoin: draft.crownCoin,
     coinLog: draft.coinLog,
+    roll: draft.roll,
+    graves: draft.graves,
     anointed: draft.anointed,
     deeds: draft.deeds,
     dreadLog: draft.dreadLog,
@@ -13382,6 +13418,38 @@ function tickAnoint(draft: Draft, days: number): void {
   }
   shiftVassals(draft, world.unrest, null)
   if (day % (FAITH.beat * 18) === 0) notice(draft, world.says, 'world')
+}
+
+/**
+ * Отряд смотрит, кому с тобой не по пути (этап 166, От5).
+ *
+ * Уходят не случайно: по деньгам, по усталости и по годам, а держит привычка к
+ * командиру. Уходят поимённо, и ушедшего помнят: набирая там же, ты можешь
+ * взять его обратно.
+ */
+function tickFolk(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % FOLK.beat !== 0) return
+  const leaving = whoLeaves(draft.base, draft.world, day)
+  if (leaving.length === 0) return
+  const units: Partial<Record<TroopId, number>> = { ...draft.party.units }
+  for (const one of leaving) {
+    const left = (units[one.troop] ?? 0) - 1
+    if (left <= 0) delete units[one.troop]
+    else units[one.troop] = left
+  }
+  draft.party = { ...draft.party, units }
+  const first = leaving[0]
+  if (first) {
+    notice(
+      draft,
+      leaving.length === 1
+        ? `${first.name} ушёл из отряда: ${first.age} лет, ${first.years} г. службы.`
+        : `Из отряда ушли ${leaving.length}, и первым — ${first.name} (${first.age} лет).`,
+      'people',
+    )
+  }
 }
 
 /**
