@@ -510,6 +510,18 @@ export interface GameState {
     readonly ward: string
     readonly sinceDay: number
   }[]
+  /**
+   * Кого признал ты сам (этап 138): чужой путь двигается и твоей рукой.
+   *
+   * Хранится день: признание — это поступок, а не положение вещей.
+   */
+  readonly given?: Readonly<Record<string, number>>
+  /** Отозванные признания (этап 138): кто, у кого и когда. Это повод к войне. */
+  readonly recalls?: readonly {
+    readonly by: string
+    readonly of: string
+    readonly day: number
+  }[]
   /** Когда каждый навык трогали в последний раз (этап 125): он ржавеет. */
   readonly usedDay?: Readonly<Record<string, number>>
   /** Чем ты рос на самом деле (этап 124) и какие испытания уже брал. */
@@ -752,6 +764,8 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     leagueLog: { formed: 0, bought: 0, against: [] },
     guarantees: [],
     hands: [],
+    given: {},
+    recalls: [],
     usedDay: {},
     pathLog: { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: {},

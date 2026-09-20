@@ -1,4 +1,13 @@
 import {
+  ACCLAIM,
+  ACCLAIM_WORDS,
+  givingCost,
+  hasGiven,
+  strangerCost,
+  titleWorth,
+  wouldRecall,
+} from './acclaim'
+import {
   BIND_DEFS,
   FAITH,
   FAITH_WORDS,
@@ -1359,6 +1368,9 @@ export type Command =
   /** Коалиция (этап 136): разобрать чужую по одному и собрать свою против первого. */
   | { readonly type: 'breakLeague'; readonly member: string }
   | { readonly type: 'callLeague'; readonly against: string }
+  /** Признание (этап 138): признать чужого и отозвать своё признание. */
+  | { readonly type: 'recogniseCrown'; readonly of: string }
+  | { readonly type: 'recallRecognition'; readonly of: string }
   /** Поручительство и рука (этап 137). */
   | { readonly type: 'giveGuarantee'; readonly of: string }
   | { readonly type: 'takeUnderHand'; readonly of: string }
@@ -1944,6 +1956,10 @@ export function applyCommand(
       return breakLeague(state, command.member)
     case 'callLeague':
       return callLeague(state, command.against)
+    case 'recogniseCrown':
+      return recogniseCrown(state, command.of)
+    case 'recallRecognition':
+      return recallRecognition(state, command.of)
     case 'giveGuarantee':
       return giveGuarantee(state, command.of)
     case 'takeUnderHand':
@@ -6568,7 +6584,9 @@ function sendEnvoy(
   if (!letter && !envoy) return fail('requirements', 'Послать некого: нужен свой человек.')
   // Свидетель берёт своё вперёд: без его доли он и не поедет (этап 80, Г4).
   const fee = paper?.guarantor ? guarantorFee({ kind: 'alliance' }) : 0
-  const cost = embassyCost(errand, letter) + fee
+  // Непризнанному дороже всё, что делается через чужие руки (этап 138, Пр4).
+  const dearer = strangerCost(state, state.world, day)
+  const cost = Math.round((embassyCost(errand, letter) + fee) * dearer.times)
   if (state.character.money < cost) {
     return fail('noMoney', `На дары, дорогу${fee > 0 ? ' и свидетеля' : ''} нужно ${cost}.`)
   }
@@ -10022,6 +10040,8 @@ interface Draft {
     readonly against?: string
   }[]
   hands: readonly { readonly patron: string; readonly ward: string; readonly sinceDay: number }[]
+  given: Readonly<Record<string, number>>
+  recalls: readonly { readonly by: string; readonly of: string; readonly day: number }[]
   usedDay: Readonly<Record<string, number>>
   pathLog: {
     readonly byDoing: number
@@ -10217,6 +10237,8 @@ function open(state: GameState): Draft {
     leagueLog: state.leagueLog ?? { formed: 0, bought: 0, against: [] },
     guarantees: state.guarantees ?? [],
     hands: state.hands ?? [],
+    given: state.given ?? {},
+    recalls: state.recalls ?? [],
     usedDay: state.usedDay ?? {},
     pathLog: state.pathLog ?? { byDoing: 0, byTeacher: 0, byBook: 0, byTrial: 0, byService: 0 },
     trials: state.trials ?? {},
@@ -10568,6 +10590,8 @@ function close(draft: Draft): CommandResult {
     tickLeague(draft, daysPassed)
     // За слабых ручаются, и на зов приходят или не приходят (этап 137).
     tickWard(draft, daysPassed)
+    // А признание отзывают, когда отношения упали ниже дна (этап 138).
+    tickAcclaim(draft, daysPassed)
     // Служба учит тому, чем служишь (этап 124, Пу6).
     tickService(draft, daysPassed)
     // А брошенное ржавеет (этап 125, Ц4).
@@ -10752,6 +10776,8 @@ function close(draft: Draft): CommandResult {
     leagueLog: draft.leagueLog,
     guarantees: draft.guarantees,
     hands: draft.hands,
+    given: draft.given,
+    recalls: draft.recalls,
     usedDay: draft.usedDay,
     pathLog: draft.pathLog,
     trials: draft.trials,
@@ -11820,7 +11846,9 @@ function hireCompany(state: GameState, companyId: string, days: number): Command
     return fail('unavailableHere', `${companyDef(companyId).name} стоит не здесь.`)
   }
   const def = companyDef(companyId)
-  const upfront = upfrontFor(company)
+  // Роты берут с непризнанного вперёд и больше (этап 138, Пр4).
+  const dearer = strangerCost(state, state.world, dayOf(state.time))
+  const upfront = Math.round(upfrontFor(company) * dearer.times)
   if (state.character.money < upfront) {
     return fail('noMoney', `Задаток ${upfront}, у тебя ${state.character.money}.`)
   }
@@ -13467,6 +13495,80 @@ function tickWard(draft: Draft, days: number): void {
     notice(
       draft,
       `${kingdomName(draft.base, ward)} идёт под руку ${kingdomName(draft.base, wants.patron)}. ${WARD_WORDS.theirs}`,
+      'world',
+    )
+    return
+  }
+}
+
+/**
+ * Признать чужую корону (этап 138, Пр5).
+ *
+ * Не любезность и не пустое слово: признание считается в его пути так же, как
+ * чужое считается в твоём. Оттого признавать соседа, который и так впереди, —
+ * ход дорогой: ближе к концу станет не ты.
+ */
+function recogniseCrown(state: GameState, of: string): CommandResult {
+  if (!state.world.kingdoms[of]) return fail('invalid', 'Такой короны нет.')
+  if (hasGiven(state, of)) return fail('invalid', 'Ты его уже признал.')
+  const day = dayOf(state.time)
+  if (atWar(state.politics, PLAYER, of)) {
+    return fail('requirements', 'Того, с кем воюешь, не признают: сперва мир.')
+  }
+  const cost = givingCost(state, state.world, of, day)
+
+  const draft = open(state)
+  advance(draft, hours(6))
+  draft.given = { ...draft.given, [of]: day }
+  draft.politics = withRelation(draft.politics, PLAYER, of, 15)
+  notice(draft, cost.says, 'world')
+  return close(draft)
+}
+
+/**
+ * Отозвать признание (этап 138, Пр3).
+ *
+ * Отозванное признание — повод к войне, и мир понимает это именно так: не
+ * ссора, а заявленное право. Оттого и стоит оно дороже ссоры.
+ */
+function recallRecognition(state: GameState, of: string): CommandResult {
+  if (!state.world.kingdoms[of]) return fail('invalid', 'Такой короны нет.')
+  if (!hasGiven(state, of)) return fail('invalid', 'Ты его и не признавал.')
+  const day = dayOf(state.time)
+
+  const draft = open(state)
+  advance(draft, hours(4))
+  const given = { ...draft.given }
+  delete given[of]
+  draft.given = given
+  draft.recalls = [...draft.recalls, { by: PLAYER, of, day }]
+  draft.politics = withRelation(draft.politics, PLAYER, of, ACCLAIM.recallChills)
+  notice(
+    draft,
+    `Ты отозвал признание у ${kingdomName(draft.base, of)}. ${ACCLAIM_WORDS.recalled}`,
+    'world',
+  )
+  return close(draft)
+}
+
+/**
+ * Чужое признание тоже отзывают (этап 138, Пр3).
+ *
+ * Та корона, с которой отношения упали ниже дна, забирает своё слово назад — и
+ * это её повод к войне, а не просто холод.
+ */
+function tickAcclaim(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % ACCLAIM.beat !== 0) return
+  for (const id of wouldRecall(draft.base, draft.world, PLAYER, day)) {
+    const rest = { ...draft.recognitions }
+    delete rest[id]
+    draft.recognitions = rest
+    draft.recalls = [...draft.recalls, { by: id, of: PLAYER, day }]
+    notice(
+      draft,
+      `${kingdomName(draft.base, id)} отзывает своё признание. ${ACCLAIM_WORDS.recalled}`,
       'world',
     )
     return
@@ -16447,7 +16549,10 @@ function applyEmbassy(draft: Draft, embassy: Embassy, day: number): void {
     // Сватовство кончается приданым (этап 81, Р2): за невесту платят, и цена
     // считается от того, чего она стоит, — по земле её короны.
     const equal = recognitionOf(draft.base, to, day).standing === 'equal'
-    const dowry = dowryFor(draft.base, to, day, equal)
+    // За непризнанного отдают хуже и просят больше (этап 138, Пр4).
+    const dowry = Math.round(
+      dowryFor(draft.base, to, day, equal) * strangerCost(draft.base, draft.world, day).times,
+    )
     const house = royalHouse(draft.base.world, to, day)
     if (draft.character.money < dowry) {
       notice(

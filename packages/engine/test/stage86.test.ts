@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { strangerCost } from '../src/acclaim'
 import { createCharacter } from '../src/character'
 import { applyCommand } from '../src/commands'
 import {
@@ -104,7 +105,12 @@ describe('Н2: контракт', () => {
       `${companyDef(company.id).name}: нанята на 90 суток, задаток ${state.character.money - hired.character.money}, жалованья ${wageOf(company)} в сутки; на карте частей ${hired.bands.filter((one) => one.id.startsWith('company:')).length}`,
     )
     expect(row?.hiredBy).toBe('player')
-    expect(hired.character.money).toBe(state.character.money - upfrontFor(company))
+    // Задаток берут с поправкой на признание (этап 138, Пр4): роты берут с
+    // непризнанного вперёд и больше.
+    const dearer = strangerCost(here, here.world, 1).times
+    expect(hired.character.money).toBe(
+      state.character.money - Math.round(upfrontFor(company) * dearer),
+    )
     expect(hired.bands.some((one) => one.id === `company:${company.id}`)).toBe(true)
     // Сроку есть предел с обеих сторон.
     expect(applyCommand(here, { type: 'hireCompany', companyId: company.id, days: 5 }).ok).toBe(

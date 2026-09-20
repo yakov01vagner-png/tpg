@@ -70,6 +70,17 @@ export function recognises(
   }
   // И то, что взято договором, дарами или разбитым войском, записано.
   if (who === PLAYER && (state.recognitions?.[other] ?? 0) > 0) return true
+  // Признание игрока — его поступок, а не расчёт мира (этап 138, Пр5): он
+  // решает сам, и этим двигает чужой путь.
+  if (other === PLAYER) {
+    if ((state.given?.[who] ?? 0) > 0) return true
+    if ((state.hands ?? []).some((one) => one.ward === who && one.patron === PLAYER)) return true
+  }
+  // Пятая дверь — церковь (этап 138, Пр2): за помазанника говорит не он сам.
+  // Проверяется по состоянию, без обращения к слою веры: помазание там и лежит.
+  if (who === PLAYER && state.anointed && relationOf(state.politics, who, other) >= -20) {
+    return true
+  }
   // Пятая дверь — сила без войска (этап 133, Тс3). Ранг, с которым считаются,
   // стоит войска: его считают в чужую силу и спорят с ним вровень, а не в
   // полтора раза сверху. На сильнейших это не действует — на слабых да.
@@ -89,7 +100,11 @@ export function recognisedBySides(
 ): { readonly yes: readonly string[]; readonly no: readonly string[] } {
   const yes: string[] = []
   const no: string[] = []
-  for (const side of Object.keys(world.kingdoms)) {
+  // Считаются все стороны мира, включая игрока: чужой путь короны идёт и через
+  // его признание тоже (этап 138, Пр5).
+  const sides =
+    who === PLAYER ? Object.keys(world.kingdoms) : [...Object.keys(world.kingdoms), PLAYER]
+  for (const side of sides) {
     if (side === who) continue
     if (recognises(state, world, who, side, day)) yes.push(side)
     else no.push(side)

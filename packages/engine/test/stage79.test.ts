@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { strangerCost } from '../src/acclaim'
 import { createCharacter } from '../src/character'
 import { applyCommand } from '../src/commands'
 import { hireCompanion } from '../src/companion'
@@ -84,7 +85,11 @@ describe('П1 и П2: свой посол и то, с чем его шлют', (
       `${embassy?.envoyName} → ${world.kingdoms[to]?.name}: ${EMBASSY_DEFS.alliance.label}, вернётся на ${embassy?.backDay} день`,
     )
     expect(embassiesOf(sent)).toHaveLength(1)
-    expect(sent.character.money).toBe(state.character.money - embassyCost('alliance', false))
+    // Посольство непризнанного дороже (этап 138, Пр4): цена та же, множитель свой.
+    const dearer = strangerCost(state, state.world, 1).times
+    expect(sent.character.money).toBe(
+      state.character.money - Math.round(embassyCost('alliance', false) * dearer),
+    )
     expect(pending(sent, 1)).toHaveLength(1)
     // Второго туда же не шлют, пока первый не вернулся.
     expect(applyCommand(sent, { type: 'sendEnvoy', to, errand: 'passage' }).ok).toBe(false)
