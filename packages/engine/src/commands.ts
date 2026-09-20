@@ -10154,6 +10154,13 @@ interface Draft {
   }[]
   ransomLog: { readonly taken: number; readonly freed: number; readonly paid: number }
   fallenLog: readonly { readonly name: string; readonly day: number; readonly places: number }[]
+  legends: readonly {
+    readonly name: string
+    readonly fromDay: number
+    readonly toDay: number
+    readonly ending: string
+    readonly says: string
+  }[]
   exile: { readonly at: string; readonly sinceDay: number } | null
   annals: {
     readonly added: number
@@ -10381,6 +10388,7 @@ function open(state: GameState): Draft {
     taken: state.taken ?? [],
     ransomLog: state.ransomLog ?? { taken: 0, freed: 0, paid: 0 },
     fallenLog: state.fallenLog ?? [],
+    legends: state.legends ?? [],
     exile: state.exile ?? null,
     annals: state.annals ?? { added: 0, lastDay: 0 },
     era: state.era ?? null,
@@ -10958,6 +10966,7 @@ function close(draft: Draft): CommandResult {
     taken: draft.taken,
     ransomLog: draft.ransomLog,
     fallenLog: draft.fallenLog,
+    legends: draft.legends,
     exile: draft.exile,
     annals: draft.annals,
     era: draft.era,

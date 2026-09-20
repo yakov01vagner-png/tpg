@@ -564,6 +564,19 @@ export interface GameState {
     readonly since: number
     readonly ransom: number
   }[]
+  /**
+   * Предания о прежних (этап 157): кто жил в этом мире до тебя и чем кончил.
+   *
+   * Новая игра в старом мире не сбрасывает мир: прежний герой остаётся в нём
+   * тем же, чем остаются все, — памятью.
+   */
+  readonly legends?: readonly {
+    readonly name: string
+    readonly fromDay: number
+    readonly toDay: number
+    readonly ending: string
+    readonly says: string
+  }[]
   /** Потерянные державы (этап 151): что, когда и сколько мест в ней было. */
   readonly fallenLog?: readonly {
     readonly name: string
@@ -873,6 +886,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     curves: {},
     taken: [],
     fallenLog: [],
+    legends: [],
     exile: null,
     ransomLog: { taken: 0, freed: 0, paid: 0 },
     annals: { added: 0, lastDay: 0 },
