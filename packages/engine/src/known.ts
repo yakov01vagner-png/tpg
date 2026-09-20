@@ -272,7 +272,7 @@ export function knownTo(
   const clash =
     second !== undefined &&
     second.spread <= KNOWN.useless &&
-    differ(best.word.value, second.word.value)
+    differ(best.word.value, second.word.value, clashAt(state, who))
   const age = day - best.word.day
   const def = sourceDef(best.word.source)
   return {
@@ -309,10 +309,22 @@ function trustIn(state: GameState, from: string | null): number {
   return Math.max(0.3, 1 - row.lied / row.said)
 }
 
-function differ(a: number | string, b: number | string): boolean {
+/**
+ * При каком расхождении это считается расхождением (этап 123, Н2).
+ *
+ * Учёный государь замечает несходство счетов раньше: ему довольно меньшей
+ * разницы, чтобы понять, что кто-то из двух врёт.
+ */
+function clashAt(state: GameState, who: string): number {
+  if (who !== PLAYER) return KNOWN.clash
+  const learned = state.character.skills.scholarship.level
+  return Math.max(0.05, KNOWN.clash - learned * KNOWN.perLearned)
+}
+
+function differ(a: number | string, b: number | string, at: number = KNOWN.clash): boolean {
   if (typeof a === 'string' || typeof b === 'string') return a !== b
   const bigger = Math.max(Math.abs(a), Math.abs(b), 1)
-  return Math.abs(a - b) / bigger >= KNOWN.clash
+  return Math.abs(a - b) / bigger >= at
 }
 
 function agedWords(age: number): string {

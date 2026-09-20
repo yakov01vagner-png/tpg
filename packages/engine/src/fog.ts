@@ -6,7 +6,7 @@ import { ROLE_DEFS, SCOUT } from './content/scout'
 import { PLAYER } from './holding'
 import { type Word, bring } from './known'
 import { placeRep } from './reputation'
-import { scoutReach } from './sheet'
+import { scoutReach, survivalReach } from './sheet'
 import type { GameState } from './state'
 import { atWar } from './war'
 import { neighbourSettlements, roadsFrom } from './world/queries'
@@ -123,7 +123,12 @@ function eyesOf(
       eye: 'host',
       from: band.locationId,
       ...(role === 'scout'
-        ? { reach: who === PLAYER ? scoutReach(state.character) : ROLE_DEFS.scout.hops }
+        ? {
+            reach:
+              who === PLAYER
+                ? scoutReach(state.character) + survivalReach(state.character)
+                : ROLE_DEFS.scout.hops,
+          }
         : {}),
     })
   }

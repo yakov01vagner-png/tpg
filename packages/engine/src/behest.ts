@@ -56,9 +56,11 @@ export function behestPlan(
   to: string,
   kind: BehestKind,
   day: number,
+  /** Насколько быстрее едет гонец: дело командования (этап 123, Н1). */
+  speed = 1,
 ): Behest {
   const hops = hopsTo(world, from, to)
-  const road = Math.max(1, Math.round(hops * BEHEST.daysPerHop))
+  const road = Math.max(1, Math.round(hops * BEHEST.daysPerHop * speed))
   const def = BEHEST_DEFS[kind]
   const arrives = day + road
   const done = arrives + def.days
@@ -70,7 +72,7 @@ export function behestPlan(
     sentDay: day,
     arrivesDay: arrives,
     doneDay: done,
-    backDay: done + Math.max(1, Math.round(hops * BEHEST.backDaysPerHop)),
+    backDay: done + Math.max(1, Math.round(hops * BEHEST.backDaysPerHop * speed)),
   }
 }
 

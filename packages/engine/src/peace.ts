@@ -224,7 +224,10 @@ export function offerWeight(
   const ease = talks?.mediator ? MEDIATOR_DEFS[talks.mediator].ease : 0
   const rounds = talks ? talks.rounds * 0.05 : 0
   const price = harshness(terms) / 8
-  const weight = 0.25 + tired * 0.6 + ease - price * winning - rounds
+  // Убеждение — дело за столом (этап 123, Н4): уступают охотнее тому, кто умеет
+  // говорить, и это прибавка к весу предложения, а не к его щедрости.
+  const spoken = state.character.skills.persuasion.level * PEACE.perPersuasion
+  const weight = 0.25 + tired * 0.6 + ease + spoken - price * winning - rounds
   return Math.max(0, Math.min(0.95, Math.round(weight * 100) / 100))
 }
 

@@ -182,8 +182,9 @@ export function showTo(
   const def = SHOW_DEFS[show]
   const truth = strengthOf(state, world, PLAYER, day).score
   const keen = guest.eye === 'keen'
-  // Приметливый берёт показное тем вернее, чем сильнее ты перестарался.
-  const overdone = Math.abs(def.strength - 1)
+  // Приметливый берёт показное тем вернее, чем сильнее ты перестарался. Но
+  // убеждение — дело хозяина (этап 123, Н4): краснобая слушают и приметливые.
+  const overdone = Math.abs(def.strength - 1) - state.character.skills.persuasion.level * 0.004
   const caught = keen && overdone > 0.3
   const sees = Math.max(0, Math.round(truth * (caught ? 1 : def.strength)))
   return {

@@ -150,11 +150,13 @@ export function lookCost(
   world: World,
   from: string,
   to: string,
+  /** Насколько быстрее выходит посмотреть: дело выживания (этап 123, Н3). */
+  speed = 1,
 ): { readonly silver: number; readonly days: number } {
   const hops = hopsBetween(world, from, to)
   return {
     silver: SIGHT.lookSilver,
-    days: Math.max(1, Math.round(hops * SIGHT.lookDaysPerHop * 2)),
+    days: Math.max(1, Math.round(hops * SIGHT.lookDaysPerHop * 2 * speed)),
   }
 }
 

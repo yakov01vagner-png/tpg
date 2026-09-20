@@ -11,6 +11,7 @@ import {
 } from './content/siege'
 import type { Settlement } from './economy'
 import { PLAYER, garrisonSize, hasBuilding } from './holding'
+import { siegeHolds, wallsBetter } from './sheet'
 import type { GameState } from './state'
 import { neighbourSettlements } from './world/queries'
 import type { Location, World } from './world/types'
@@ -84,7 +85,15 @@ export function fortOf(state: GameState, world: World, locationId: string): Fort
   const settlement = state.settlements[locationId]
   const here = world.locations[locationId]
   if (!settlement || !here) return null
-  return fortFrom(settlement, here)
+  const fort = fortFrom(settlement, here)
+  // Инженерия — дело хозяина (этап 123, Н5): своя крепость у знающего человека
+  // стоит крепче той же крепости у незнающего, а стойкость держит измор дольше.
+  if (settlement.owner !== PLAYER) return fort
+  return {
+    ...fort,
+    walls: Math.round(fort.walls * wallsBetter(state.character) * 100) / 100,
+    storeDays: Math.round(fort.storeDays * siegeHolds(state.character)),
+  }
 }
 
 /**

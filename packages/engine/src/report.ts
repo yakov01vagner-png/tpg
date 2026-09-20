@@ -140,6 +140,8 @@ export function reportedAt(
   const truth = truthAt(state, locationId, kind)
   if (!reporter) return truth
   const def = REPORTER_DEFS[reporter.kind]
+  // Учёность сужает приписку (этап 100, углублено на 123, Н2): государь,
+  // умеющий читать счёт, видит подделку в счёте.
   const learned = state.character.skills.scholarship.level * REPORT.scholarship
   const gilds = Math.max(1, def.gilds - learned)
   const hides = Math.min(1, def.hides + learned)

@@ -840,15 +840,25 @@ import type { SettleEvent } from './settle'
 import { tickSettling } from './settle'
 import {
   digsFaster,
+  foolsGuest,
   hidesSpy,
   holdsOut,
+  looksQuicker,
+  noticesClash,
+  obeysBetter,
+  ordersRideFaster,
+  persuadesAt,
+  readsLetters,
   remembersDays,
   ridersSpeed,
   ridesQuicker,
   scoutReach,
+  siegeHolds,
   sparesMen,
   steadyUnder,
   stealsCheaper,
+  survivalReach,
+  wallsBetter,
 } from './sheet'
 import type { Passage, Ship } from './ship'
 import {
@@ -13571,7 +13581,14 @@ function sendBehest(state: GameState, kind: BehestKind, locationId: string): Com
 
   const draft = open(state)
   advance(draft, hours(1))
-  const plan = behestPlan(draft.world, state.locationId, locationId, kind, day)
+  const plan = behestPlan(
+    draft.world,
+    state.locationId,
+    locationId,
+    kind,
+    day,
+    ordersRideFaster(state.character),
+  )
   const hand = handFor(state, kind, day)
   const behest: Behest = { ...plan, byOffice: hand?.office ?? null }
   draft.behests = [...draft.behests, behest]
@@ -13694,7 +13711,9 @@ function tickBehests(draft: Draft, days: number): void {
     }
     const hand = handFor(draft.base, behest.kind, behest.doneDay)
     const out = outcomeOf(hand)
-    const what = doBehest(draft, behest, out.share)
+    // Командование — это умение добиваться исполнения (этап 123, Н1).
+    const share = out.share * obeysBetter(draft.character)
+    const what = doBehest(draft, behest, share)
     draft.behestLog = {
       ...draft.behestLog,
       full: draft.behestLog.full + (out.outcome === 'full' ? 1 : 0),
@@ -13919,7 +13938,7 @@ function sendLook(state: GameState, locationId: string): CommandResult {
   if (looksOf(state).some((one) => one.locationId === locationId)) {
     return fail('invalid', 'Туда уже послан человек.')
   }
-  const cost = lookCost(state.world, state.locationId, locationId)
+  const cost = lookCost(state.world, state.locationId, locationId, looksQuicker(state.character))
   if (state.character.money < cost.silver) {
     return fail('noMoney', `Послать человека — ${cost.silver}, у тебя ${state.character.money}.`)
   }
