@@ -80,7 +80,7 @@ import { generateWorld, startLocationFor } from './world/generate'
 import type { World } from './world/types'
 
 /** Версия схемы сейва. Растёт при любом несовместимом изменении GameState. */
-export const SCHEMA_VERSION = 30
+export const SCHEMA_VERSION = 31
 
 /** Сколько строк лога держим в состоянии. Остальное — история, она не нужна. */
 export const LOG_LIMIT = 200
@@ -453,6 +453,14 @@ export interface GameState {
   readonly crownDebts?: Readonly<
     Record<string, { readonly owed: number; readonly sinceDay: number }>
   >
+  /**
+   * Разговоры в доме (этап 170, Сем3): с кем говорили и когда.
+   *
+   * Лад в доме считается, а не хранится: он складывается из мерила жены, из
+   * того, что вложено в детей, из позоров — и из того, бывал ли ты дома.
+   * Хранится только последнее: день разговора.
+   */
+  readonly homeTalk?: Readonly<Record<string, number>>
   /**
    * Письма вассалов (этап 169, Вл2): о чём просит и с какого дня ждёт.
    *
@@ -935,6 +943,7 @@ export function createGame(character: Character, seed = 1, prebuilt?: World): Ga
     vows: [],
     hallLog: { through: 0, lost: 0 },
     lordAsks: {},
+    homeTalk: {},
     anointed: null,
     deeds: {},
     dreadLog: {},

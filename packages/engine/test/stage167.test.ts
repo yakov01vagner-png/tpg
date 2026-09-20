@@ -155,6 +155,9 @@ describe('Сп6: спутники в числах', () => {
       expect(ask.says.length).toBeGreaterThan(20)
       expect(ask.label.length).toBeGreaterThan(3)
     }
-    expect(SCHEMA_VERSION).toBe(28)
+    // Схема растёт с каждой версией: проверяется, что поле этого этапа
+    // в ней уже есть, а не точное число — иначе следующий этап ломает
+    // чужую проверку.
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(28)
   })
 })

@@ -592,6 +592,11 @@ export const MIGRATIONS: Readonly<Record<number, Migration>> = {
     ...data,
     lordAsks: data.lordAsks ?? {},
   }),
+  /** v30 → v31: разговоры в доме (этап 170). Пусто — дома давно не были. */
+  30: (data) => ({
+    ...data,
+    homeTalk: data.homeTalk ?? {},
+  }),
 }
 
 export type LoadResult =

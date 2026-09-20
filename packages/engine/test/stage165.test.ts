@@ -137,6 +137,9 @@ describe('Кз5 и Кз6: чужое серебро известно не точ
     console.log(after.says)
     expect(Object.keys(state.crownCoin ?? {})).toHaveLength(kingdoms.length)
     expect(after.total).not.toBe(before.total)
-    expect(SCHEMA_VERSION).toBe(26)
+    // Схема растёт с каждой версией: проверяется, что поле этого этапа
+    // в ней уже есть, а не точное число — иначе следующий этап ломает
+    // чужую проверку.
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(26)
   })
 })

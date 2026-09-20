@@ -15,6 +15,7 @@ import { lawOf } from './estate'
 import { blindToShare, fogMap } from './fog'
 import { ageSays, skillCeiling } from './growth'
 import { hallNow } from './hall'
+import { childNow, houseRift, kinAbroad, spouseView } from './hearth'
 import { PLAYER, holdingsOf } from './holding'
 import { claimantsOf, heirLawOf, heirUnder, partitionOf, regencyFor, strifeOf } from './inherit'
 import { type Known, askedDef, knownTo, sourceDef, wordsTo } from './known'
@@ -349,6 +350,9 @@ export function houseScreen(state: GameState, world: World): Screen {
   const plan = partitionOf(state, day)
   const strife = strifeOf(state, day)
   const regency = heir ? regencyFor(state, heir, day) : null
+  const spouse = spouseView(state, world, day)
+  const kin = kinAbroad(state, world, day)
+  const rift = houseRift(state, world, day, wayOf(state, world, PLAYER, 'crown', day).way)
   const lines: Line[] = [
     { label: 'Закон', value: heirLawOf(state), hint: plan.says },
     {
@@ -365,6 +369,24 @@ export function houseScreen(state: GameState, world: World): Screen {
         .join('; '),
     },
     { label: 'Спор', value: `${strife.risk}`, hint: strife.says },
+    // Дом как дом, а не как право наследования (этап 170).
+    {
+      label: 'Дом',
+      value: `${rift.accord}`,
+      hint: `${spouse ? spouse.says : 'Ты не женат.'} ${rift.why}`,
+    },
+    {
+      label: 'Дети',
+      value: `${state.character.family.children.length}`,
+      hint:
+        state.character.family.children.map((one) => childNow(state, one, day).says).join(' ') ||
+        'Детей нет.',
+    },
+    {
+      label: 'Родня при чужих дворах',
+      value: `${kin.length}`,
+      hint: kin.map((one) => one.says).join(' ') || 'Родниться ты ни с кем не стал.',
+    },
   ]
   const deeds: Deed[] = [
     {

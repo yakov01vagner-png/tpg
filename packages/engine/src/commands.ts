@@ -265,6 +265,8 @@ import { GOODS } from './content/goods'
 import { GOSSIP_WORDS, type TalkKind } from './content/gossip'
 import { HALL, HALL_WORDS } from './content/hall'
 import { AILMENT_DEFS, type Ailment, HERB_GOOD, POTIONS, POTIONS_BY_ID } from './content/heal'
+import { HEARTH, HOME_TALK_DEFS, type HomeTalk } from './content/hearth'
+import { UPBRINGING_MAX } from './content/home'
 import { KIN_ASK, KIN_GIFT, UPBRINGING_MINUTES } from './content/home'
 import { KITH, KITH_ASK_DEFS, KITH_WORDS } from './content/kith'
 import { KNOWN as KNOWN_DEFS } from './content/known'
@@ -559,6 +561,7 @@ import {
   homeDef,
   homesAt,
   kinOf,
+  spouseSays,
 } from './home'
 import {
   INHERIT,
@@ -1218,6 +1221,8 @@ export type Command =
   | { readonly type: 'talk'; readonly speakerId: string; readonly topicId: string }
   /** Помочь спутнику с его делом (этап 54). */
   | { readonly type: 'grantWish'; readonly companionId: string }
+  /** Поговорить дома (этап 170, Сем3): с женой или с ребёнком. */
+  | { readonly type: 'speakHome'; readonly with: string; readonly talk: HomeTalk }
   /** Ответить вассалу на письмо (этап 169, Вл2): исполнить или отказать. */
   | { readonly type: 'answerLord'; readonly lordId: string; readonly answer: 'yes' | 'no' }
   /** Переписать присягу (этап 169, Вл4): уступить суд, долю подати или людей. */
@@ -1770,6 +1775,8 @@ export function applyCommand(
       return talk(state, command.speakerId, command.topicId)
     case 'grantWish':
       return grantWish(state, command.companionId)
+    case 'speakHome':
+      return speakHome(state, command.with, command.talk)
     case 'answerLord':
       return answerLord(state, command.lordId, command.answer)
     case 'bargainOath':
@@ -8766,6 +8773,52 @@ function grantWish(state: GameState, companionId: string): CommandResult {
 }
 
 /**
+ * Поговорить дома (этап 170, Сем3).
+ *
+ * Разговор — не текст, а дело: он стоит времени и меняет то, что в доме и так
+ * считается. Спросить совета — услышать то, чего не скажет двор; успокоить —
+ * поднять лад; потребовать — добиться своего и получить это в память дома;
+ * заняться сыном — вложить день, который вернётся через двадцать лет.
+ */
+function speakHome(state: GameState, withWhom: string, talk: HomeTalk): CommandResult {
+  const family = state.character.family
+  const spouse = family.spouse
+  const child = family.children.find((one) => one.name === withWhom)
+  if (!spouse && !child) return fail('unknownAction', 'Дома такого нет.')
+  if (withWhom !== spouse?.name && !child) {
+    return fail('unknownAction', `${withWhom} — не из твоего дома.`)
+  }
+  if (talk === 'teach' && !child) {
+    return fail('invalid', 'Заниматься можно ребёнком, а не женой.')
+  }
+  const def = HOME_TALK_DEFS[talk]
+  const day = dayOf(state.time)
+  const last = state.homeTalk?.[withWhom] ?? -HEARTH.holds
+  if (day - last < 7) {
+    return fail(
+      'invalid',
+      `С ${withWhom} вы говорили недавно: дом не двор, здесь не просят каждый день.`,
+    )
+  }
+
+  const draft = open(state)
+  advance(draft, hours(def.hours))
+  draft.homeTalk = { ...draft.homeTalk, [withWhom]: day }
+  if (talk === 'teach' && child) {
+    const raised = (draft.upbringing?.[child.name] ?? 0) + 1
+    draft.upbringing = { ...draft.upbringing, [child.name]: Math.min(UPBRINGING_MAX, raised) }
+  }
+  const said =
+    talk === 'ask'
+      ? spouse && withWhom === spouse.name
+        ? spouseSays(state)
+        : `${withWhom} говорит с тобой, как умеет в его годы.`
+      : def.about
+  notice(draft, `${withWhom}: ${def.label}. ${said}`, 'people')
+  return close(draft)
+}
+
+/**
  * Ответить вассалу (этап 169, Вл2).
  *
  * Письмо — не текст, а положение дел: голод в его деревнях, набег, тяжба,
@@ -10279,6 +10332,8 @@ interface Draft {
   hallLog: { readonly through: number; readonly lost: number }
   /** Открытые письма вассалов (этап 169). */
   lordAsks: Readonly<Record<string, { readonly kind: string; readonly day: number }>>
+  /** Разговоры в доме (этап 170). */
+  homeTalk: Readonly<Record<string, number>>
   anointed: { readonly sinceDay: number } | null
   deeds: Readonly<Record<string, number>>
   dreadLog: Readonly<Record<string, { readonly score: number; readonly sinceDay: number }>>
@@ -10551,6 +10606,7 @@ function open(state: GameState): Draft {
     vows: (state.vows ?? []) as readonly Vow[],
     hallLog: state.hallLog ?? { through: 0, lost: 0 },
     lordAsks: state.lordAsks ?? {},
+    homeTalk: state.homeTalk ?? {},
     anointed: state.anointed ?? null,
     deeds: state.deeds ?? {},
     dreadLog: state.dreadLog ?? {},
@@ -11196,6 +11252,7 @@ function close(draft: Draft): CommandResult {
     vows: draft.vows,
     hallLog: draft.hallLog,
     lordAsks: draft.lordAsks,
+    homeTalk: draft.homeTalk,
     anointed: draft.anointed,
     deeds: draft.deeds,
     dreadLog: draft.dreadLog,

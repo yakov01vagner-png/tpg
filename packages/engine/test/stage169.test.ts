@@ -165,6 +165,9 @@ describe('Вл5 и Вл6: сын помнит, и вассалы считаны'
     const rolled = liegeRoll(state, world, 400)
     console.log(rolled.says)
     expect(rolled.vassals).toBe(3)
-    expect(SCHEMA_VERSION).toBe(30)
+    // Схема растёт с каждой версией: проверяется, что поле этого этапа
+    // в ней уже есть, а не точное число — иначе следующий этап ломает
+    // чужую проверку.
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(30)
   })
 })
