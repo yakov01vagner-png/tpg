@@ -59,11 +59,7 @@ describe('Вс1 и Вс4: мир заключают расчётом, и зим�
       warTally(state, world, warFor(first, second, day - Math.round(years * 365)), day),
     )
     for (const row of rows) console.log(row.says)
-    const [fresh, middling, spent] = rows as [
-      (typeof rows)[0],
-      (typeof rows)[0],
-      (typeof rows)[0],
-    ]
+    const [fresh, middling, spent] = rows as [(typeof rows)[0], (typeof rows)[0], (typeof rows)[0]]
     expect(fresh.haste).toBeLessThan(middling.haste)
     expect(middling.haste).toBeLessThan(spent.haste)
     expect(spent.weariness).toBe(1)
@@ -89,7 +85,12 @@ describe('Вс2 и Вс3: у войны есть цель, и условия и�
       if (!place || place.population <= 0) continue
       taken[id] = { ...place, owner: `crown:${first}` }
     }
-    const won = warTally({ ...state, settlements: taken }, world, warFor(first, second, day - 800, theirs), day)
+    const won = warTally(
+      { ...state, settlements: taken },
+      world,
+      warFor(first, second, day - 800, theirs),
+      day,
+    )
     console.log(won.says)
     expect(won.reached).toBe(true)
     expect(won.winner).toBe(first)

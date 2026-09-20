@@ -300,6 +300,7 @@ import { SITES } from './content/sites'
 import type { SpellDef, SpellWhere } from './content/spells'
 import { SPELLS_BY_ID } from './content/spells'
 import { TONES, TOPICS_BY_ID } from './content/talk'
+import { TIDINGS, TIDINGS_WORDS } from './content/tidings'
 import type { TroopId } from './content/troops'
 import { TROOPS, TROOP_FOOD_PER_DAY } from './content/troops'
 import {
@@ -1034,6 +1035,7 @@ import {
 } from './temple'
 import { THEIREND, THEIREND_WORDS, endNear, theirEnd } from './theirend'
 import { THEIRWAY, crownWay, theirWay, theirWaySays, wouldChange } from './theirway'
+import { tidingsAt } from './tidings'
 import { DAYS_PER_YEAR, timeOfDay } from './time'
 import type { GameTime } from './time'
 import type { TimeWindow } from './time'
@@ -10747,6 +10749,8 @@ function close(draft: Draft): CommandResult {
     tickAnoint(draft, daysPassed)
     // Молва разносит чужое продвижение, а короны считают, кто им опасен (этап 135).
     tickDread(draft, daysPassed)
+    // И вести о чужой силе ходят между коронами сами, без игрока (этап 164).
+    tickTidings(draft, daysPassed)
     // И сходятся против того, кто ближе всех к концу (этап 136).
     tickLeague(draft, daysPassed)
     // За слабых ручаются, и на зов приходят или не приходят (этап 137).
@@ -13346,6 +13350,24 @@ function tickAnoint(draft: Draft, days: number): void {
   }
   shiftVassals(draft, world.unrest, null)
   if (day % (FAITH.beat * 18) === 0) notice(draft, world.says, 'world')
+}
+
+/**
+ * Вести о чужой силе ходят между коронами (этап 164, Зн1).
+ *
+ * Слой знания 0.8 работал в одну сторону: вести заводил игрок, а за его спиной
+ * короны смотрели на мир догадкой, которая не старела и не бывала чужой
+ * ошибкой. Такт кладёт в тот же `words` то, что они узнают друг о друге сами:
+ * своими людьми у соседа, послом у союзника, молвой обо всех прочих. Второго
+ * состояния не заводится, и старое забывается тем же `forgetOld`.
+ */
+function tickTidings(draft: Draft, days: number): void {
+  if (days <= 0) return
+  const day = dayOf(draft.time)
+  if (day % TIDINGS.beat !== 0) return
+  const said = tidingsAt(draft.base, draft.world, day)
+  if (said.length === 0) return
+  draft.words = withSightings(draft.words, said)
 }
 
 /**
@@ -17309,14 +17331,30 @@ function spreadRumour(state: GameState, kingdomId: string): CommandResult {
   addMoney(draft, -RUMOUR.cost)
   const day = dayOf(draft.time)
   draft.rumours = [...(draft.rumours ?? []), { against: kingdomId, untilDay: day + RUMOUR.days }]
+  // Слух ложится не только в отношения, но и в их счёт (этап 164, Зн5): теперь
+  // короны считают оболганного слабее, чем он есть, и решают по этому числу.
+  // До 1.0 лгать можно было только тому, с кем говоришь сам.
+  const truth = strengthOf(state, state.world, kingdomId, day).score
+  const told: Word[] = []
   for (const id of Object.keys(state.world.kingdoms)) {
     if (id === kingdomId) continue
     draft.politics = withRelation(draft.politics, id, kingdomId, RUMOUR.spoils)
+    told.push({
+      id: `word:tale:${id}:${kingdomId}:${day}`,
+      to: id,
+      kind: 'strength',
+      about: kingdomId,
+      value: Math.round(truth * TIDINGS.taleOff),
+      source: 'rumour',
+      from: null,
+      day,
+    })
   }
+  draft.words = withSightings(draft.words, told)
   advance(draft, hours(6))
   notice(
     draft,
-    `О ${kingdomName(state, kingdomId)} заговорили дурное. Слух пойдёт ${RUMOUR.days} суток.`,
+    `О ${kingdomName(state, kingdomId)} заговорили дурное. Слух пойдёт ${RUMOUR.days} суток. ${TIDINGS_WORDS.tale}`,
     'world',
   )
   return close(draft)
