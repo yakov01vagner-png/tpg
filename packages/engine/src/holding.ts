@@ -19,11 +19,21 @@ export function isOwnedByPlayer(settlement: Settlement): boolean {
   return settlement.owner === PLAYER
 }
 
+/**
+ * Чьи это места — в порядке, который не плавает (этап 208, Пр1).
+ *
+ * Порядок ключей в словаре поселений — не данные: он такой, каким его оставила
+ * запись. А держатель по этому списку ходит: отчитывается местами, объезжает
+ * их, кормит и собирает подать, — и пока список шёл словарём, «первое место»
+ * значило «то, что раньше записалось в сейв». Здесь порядок назван: по имени.
+ */
 export function holdingsOf(
   settlements: Readonly<Record<string, Settlement>>,
   owner: string,
 ): readonly Settlement[] {
-  return Object.values(settlements).filter((settlement) => settlement.owner === owner)
+  return Object.values(settlements)
+    .filter((settlement) => settlement.owner === owner)
+    .sort((a, b) => (a.locationId < b.locationId ? -1 : a.locationId > b.locationId ? 1 : 0))
 }
 
 export function hasBuilding(settlement: Settlement, building: BuildingId): boolean {

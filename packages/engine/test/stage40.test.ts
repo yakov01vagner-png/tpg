@@ -132,7 +132,12 @@ describe('лестница проходима целиком', () => {
         state = { ...state, time: morning, character: { ...state.character, fatigue: 0 } }
         // Глава академии — архимаг короны, и корона его зовёт: пока он в
         // отъезде, старшие ступени ждут его возвращения — и мы ждём.
-        for (let day = 0; day < 400 && masterStance(state, seat) === 'absent'; day += 1) {
+        // Ждём до трёх лет, а не до года: одно дело архимага длится до ста
+        // восьмидесяти суток (`DEED_DAYS`), и два-три подряд кладут его в
+        // отъезд надолго. Прежняя граница в 400 суток держалась на том, какой
+        // короне какой бросок доставался, — то есть на порядке ключей в
+        // словаре (этап 208).
+        for (let day = 0; day < 1200 && masterStance(state, seat) === 'absent'; day += 1) {
           state = ok(applyCommand(state, { type: 'tick', minutes: MINUTES_PER_DAY }))
         }
         const result = applyCommand(state, { type: 'takeExam', examId: exam.id })

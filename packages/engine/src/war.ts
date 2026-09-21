@@ -571,23 +571,31 @@ function tickLords(
   let generator = rng
   const events: WarEvent[] = []
   const archmages: Record<string, Archmage> = { ...politics.archmages }
+  // Обход по именам, а не по порядку ключей (этап 208, Пр1): каждый круг по
+  // архимагам тратит броски, и пока круг шёл словарём, кому какой бросок
+  // достанется, решал порядок записи, а не правила мира.
+  const crowns = Object.keys(archmages).sort()
   let wars = [...politics.wars]
   let places = settlements
 
   // Архимаг берётся за дело, кончает его и берётся за следующее (этап 60, А1).
   // «Занят» больше не бросок кубика: у занятости есть имя и есть последствия.
-  for (const kingdomId of Object.keys(archmages)) {
+  for (const kingdomId of crowns) {
     const current = archmages[kingdomId]
     if (!current || politics.lastDay + days < current.untilDay) continue
     const [roll, afterRoll] = nextFloat(generator)
     generator = afterRoll
-    // Мор зовёт сильнее прочего: где умирают, туда он и идёт.
-    const sick = Object.values(places).find(
-      (one) =>
-        one.population > 0 &&
-        kingdomOf(world, one.locationId)?.id === kingdomId &&
-        one.strain > 0.6,
-    )
+    // Мор зовёт сильнее прочего: где умирают, туда он и идёт — и идёт туда,
+    // где умирают сильнее всего, а не туда, что первым попалось в словаре
+    // (этап 208, Пр1).
+    const sick = Object.values(places)
+      .filter(
+        (one) =>
+          one.population > 0 &&
+          kingdomOf(world, one.locationId)?.id === kingdomId &&
+          one.strain > 0.6,
+      )
+      .sort((a, b) => b.strain - a.strain || (a.locationId < b.locationId ? -1 : 1))[0]
     // Доли те же, что были до этапа 60: при дворе 55 из ста, занят 35, в
     // затворе 10. Архимаг при дворе — то, что держит вассалов от мятежа, и
     // менять это число значило бы менять политику мира, а не магию в нём.
@@ -823,7 +831,7 @@ function tickLords(
   // Корона, у которой земли много, а вассалов мало, сажает нового человека.
   // Иначе после большой войны королевство остаётся доменом без знати — землю
   // держать некому, дружин нет, и мир замирает во второй раз.
-  for (const kingdomId of Object.keys(archmages)) {
+  for (const kingdomId of crowns) {
     const crown = `crown:${kingdomId}`
     const vassals = lords.filter((lord) => lord.kingdomId === kingdomId).length
     const demesne = (ownedBy.get(crown) ?? []).filter((id) => (places[id]?.population ?? 0) > 0)

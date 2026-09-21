@@ -457,11 +457,17 @@ export function marketTowns(
   world: World,
   settlements: Readonly<Record<string, Settlement>>,
 ): readonly string[] {
-  const out: string[] = []
+  const out: { id: string; people: number }[] = []
   for (const [id, settlement] of Object.entries(settlements)) {
-    if (settlement.population >= MERCHANT_POPULATION && world.locations[id]) out.push(id)
+    if (settlement.population >= MERCHANT_POPULATION && world.locations[id]) {
+      out.push({ id, people: settlement.population })
+    }
   }
-  return out
+  // Порядок явный, но без чина (этап 208, Пр1): по имени. Пока он брался из
+  // словаря, излишек доставался тому, кто раньше записался в сейв. Сортировать
+  // по числу людей нельзя: большой торг, идущий первым, выгребает округу под
+  // себя — на двадцати годах города теряли треть вместо того, чтобы расти.
+  return out.sort((a, b) => (a.id < b.id ? -1 : 1)).map((one) => one.id)
 }
 
 /**

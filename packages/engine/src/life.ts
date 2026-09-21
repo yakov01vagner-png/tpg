@@ -454,7 +454,10 @@ export function tickDays(
   const byProvince = groupByProvince(world, settlements)
   const byRegion = groupByRegion(world, settlements)
   const byKingdom = groupByKingdom(world, settlements)
-  const everywhere = [Object.keys(settlements)]
+  // По именам, а не по порядку ключей (этап 208, Пр1): дальняя хлебная
+  // торговля складывает излишки всего мира, а сложение чисел с точкой от
+  // порядка зависит — и мир расходился в последнем знаке.
+  const everywhere = [Object.keys(settlements).sort()]
 
   let current: Record<string, Settlement> = { ...settlements }
   const events: LifeEvent[] = []
@@ -741,6 +744,12 @@ const GRANARY_KINDS: readonly LocationArchetype[] = [
 /** Какую долю недостачи амбар закрывает за сутки. */
 const GRANARY_RATE = 0.12
 
+/** Сколько хлеба у места сверх месячной прокормки: с этого и берут подать. */
+function spareGrain(one: Settlement | undefined, config: LifeConfig): number {
+  if (!one || one.population <= 0) return 0
+  return Math.max(0, one.stock.grain - one.population * config.foodPerPerson * 30)
+}
+
 function fillGranaries(
   world: World,
   settlements: Record<string, Settlement>,
@@ -771,6 +780,9 @@ function fillGranaries(
     // Корона наполняет по чину: сперва престол, потом города, потом крепости и
     // городки. Пока очередь была случайной, престол оставался без хлеба, если
     // до него добрались последним.
+    // Сортировка полная (этап 208, Пр2): чин, потом число рта, потом имя. Пока
+    // равных разводил порядок ключей в словаре, очередь за хлебом зависела от
+    // того, в каком порядке поселения когда-то записались, — то есть ни от чего.
     const queue = [...hungry].sort((a, b) => {
       const kindA = world.locations[a]?.archetype
       const kindB = world.locations[b]?.archetype
@@ -778,7 +790,17 @@ function fillGranaries(
         kindA && isSettlement(kindA) ? (IMPORT_PULL[kindA as LocationArchetype] ?? 1) : 1
       const pullB =
         kindB && isSettlement(kindB) ? (IMPORT_PULL[kindB as LocationArchetype] ?? 1) : 1
-      return pullB - pullA
+      return (
+        pullB - pullA || (next[b]?.population ?? 0) - (next[a]?.population ?? 0) || (a < b ? -1 : 1)
+      )
+    })
+
+    // Подать берут с того, у кого излишка больше, а не с того, кто первым
+    // попался в словаре: и правило понятнее, и от порядка ключей не зависит.
+    const donors = [...ids].sort((a, b) => {
+      const spareA = spareGrain(next[a], config)
+      const spareB = spareGrain(next[b], config)
+      return spareB - spareA || (a < b ? -1 : 1)
     })
 
     for (const id of queue) {
@@ -787,15 +809,14 @@ function fillGranaries(
       const wanted = receiver.population * config.foodPerPerson * keepDays(receiver, config, day)
       let need = (wanted - foodStock(receiver)) * GRANARY_RATE
       if (need <= 0) continue
-      for (const donorId of ids) {
+      for (const donorId of donors) {
         if (need <= 0) break
         if (donorId === id) continue
         const donor = next[donorId]
         if (!donor || donor.population <= 0) continue
         // Подать берут с излишка, а не с последнего: голодная деревня податей
         // не платит.
-        const eats = donor.population * config.foodPerPerson
-        const spare = Math.max(0, donor.stock.grain - eats * 30)
+        const spare = spareGrain(donor, config)
         if (spare <= 0) continue
         // По разбойной дороге подать не доезжает — как и всякий обоз.
         const safety = (1 - donor.banditry * 0.5) * (1 - (receiver.banditry ?? 0) * 0.5)
